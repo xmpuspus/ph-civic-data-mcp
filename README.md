@@ -2,7 +2,7 @@
 
 <!-- mcp-name: io.github.xmpuspus/ph-civic-data-mcp -->
 
-> The first MCP server for Philippine government data: earthquakes, weather, typhoons, procurement, population, and poverty, in your AI agent.
+> The first multi-source MCP server for Philippine civic data: earthquakes, weather, typhoons, procurement, population, and poverty, in your AI agent.
 
 [![PyPI](https://img.shields.io/pypi/v/ph-civic-data-mcp.svg)](https://pypi.org/project/ph-civic-data-mcp/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
@@ -36,7 +36,7 @@ Per-source walkthroughs below. To reproduce any of them locally: `uv run python 
 
 Philippine civic-data portals publish open data, but each in its own schema — scraped HTML tables, PXWeb JSON, undocumented APIs. Nothing ties them together for an AI agent. This server does.
 
-Zero prior art on GitHub or PyPI as of April 2026. Closest: [`panukatan/lindol`](https://github.com/panukatan/lindol) (R, PHIVOLCS only), [`pagasa-parser`](https://github.com/pagasa-parser) (JS, PAGASA only).
+A handful of other Philippine civic-data MCP servers exist (PSGC administrative geography, holidays, DHSUD license-to-sell, DepEd schools), each covering one dataset. None expose hazard feeds, weather, procurement, or statistical data, and none combine sources. This server does both. See the Prior art section below for the full list.
 
 ## Install
 
@@ -207,10 +207,20 @@ uv run twine check dist/*
 
 ## Prior art
 
+Other Philippine civic-data MCP servers, each single-dataset:
+
+- [GodModeArch/psgc-mcp](https://glama.ai/mcp/servers/@GodModeArch/psgc-mcp) — PSA Philippine Standard Geographic Code (administrative hierarchy)
+- [GodModeArch/ph-holidays-mcp](https://glama.ai/mcp/servers/GodModeArch/ph-holidays-mcp) — Philippine national holidays from the Official Gazette
+- [GodModeArch/lts-mcp](https://glama.ai/mcp/servers/GodModeArch/lts-mcp) — DHSUD License to Sell registry
+- [xiaobenyang-com/Philippine-Geocoding](https://glama.ai/mcp/servers/@xiaobenyang-com/Philippine-Geocoding) — PSGC geocoding
+- [darwinphi/ph-schools-mcp-server](https://github.com/darwinphi/ph-schools-mcp-server) — DepEd schools masterlist
+
+Non-MCP libraries that inspired this project:
+
 - [panukatan/lindol](https://github.com/panukatan/lindol) — R package for PHIVOLCS earthquakes
 - [pagasa-parser](https://github.com/pagasa-parser) — JS org for PAGASA data parsing
 
-Neither is Python, multi-source, or MCP. This project credits both.
+`ph-civic-data-mcp` is the first MCP that unifies multiple Philippine civic-data sources (PHIVOLCS, PAGASA, PhilGEPS, PSA) behind one interface, and the first to expose hazards, weather, procurement, and statistical data as MCP tools. Credit to all of the above.
 
 ## License
 

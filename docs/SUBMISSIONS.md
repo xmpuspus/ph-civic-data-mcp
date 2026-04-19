@@ -9,7 +9,7 @@ Reference for manual submissions to MCP directories. Copy/paste the content into
 **Name:** ph-civic-data-mcp
 
 **Short description (one line):**
-> The first MCP server for Philippine government data: earthquakes, weather, typhoons, procurement, population, poverty.
+> The first multi-source MCP server for Philippine civic data: earthquakes, weather, typhoons, procurement, population, poverty.
 
 **Long description:**
 > ph-civic-data-mcp is a zero-cost stdio MCP server that exposes live data from PHIVOLCS (earthquakes, volcano alert levels), PAGASA (weather forecast with Open-Meteo fallback, typhoons, alerts), PhilGEPS (government procurement notices), and PSA OpenSTAT (2020 Census population, 2023 Full-Year poverty) as agent-callable tools. It includes a cross-source multi-hazard risk profiler that makes parallel calls across sources.
@@ -62,7 +62,7 @@ Glama auto-indexes from PyPI within 48h — no manual submission required. After
 
 **Data Engineering Pilipinas** (FB group, ~38k members)
 
-> Just shipped `ph-civic-data-mcp`: the first MCP server that exposes Philippine government data (PHIVOLCS earthquakes, PAGASA weather + typhoons, PhilGEPS procurement, PSA population + poverty) as tools any AI agent can call directly.
+> Just shipped `ph-civic-data-mcp`: the first multi-source MCP that unifies Philippine civic data (PHIVOLCS earthquakes, PAGASA weather + typhoons, PhilGEPS procurement, PSA population + poverty) as tools any AI agent can call directly.
 >
 > Install: `uvx ph-civic-data-mcp`
 > Source: https://github.com/xmpuspus/ph-civic-data-mcp
@@ -73,7 +73,7 @@ Glama auto-indexes from PyPI within 48h — no manual submission required. After
 
 **LinkedIn**
 
-> Spent the weekend building `ph-civic-data-mcp` — the first MCP server for Philippine government data.
+> Spent the weekend building `ph-civic-data-mcp`, the first multi-source MCP server for Philippine civic data.
 >
 > It gives Claude, Cursor, and any MCP client direct access to PHIVOLCS earthquake feeds, PAGASA weather and typhoon tracking, PhilGEPS procurement, and PSA census and poverty stats as agent-callable tools. Zero prior art on GitHub or PyPI.
 >
