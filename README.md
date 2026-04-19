@@ -1,5 +1,7 @@
 # ph-civic-data-mcp
 
+<!-- mcp-name: io.github.xmpuspus/ph-civic-data-mcp -->
+
 > The first MCP server for Philippine government data — earthquakes, weather, typhoons, procurement, population, and air quality — in your AI agent.
 
 [![PyPI](https://img.shields.io/pypi/v/ph-civic-data-mcp.svg)](https://pypi.org/project/ph-civic-data-mcp/)

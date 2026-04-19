@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Edit(~/.claude/skills/terminal-gif/**)"
+      "Edit(~/.claude/skills/terminal-gif/**)",
+      "Bash(mcp-publisher --help)"
     ]
   }
 }
