@@ -43,8 +43,13 @@ async def _post_json(url: str, query: dict) -> dict | None:
         return None
 
 
+_DISCOVERY_CACHE: dict[str, tuple[str, dict]] = {}
+
+
 async def _discover_population_table() -> tuple[str, dict] | None:
     """Return (table_url, metadata) for the total-population table."""
+    if "population" in _DISCOVERY_CACHE:
+        return _DISCOVERY_CACHE["population"]
     tables = await _get_json(f"{PSA_API_BASE}/DB/1A/PO/")
     if not isinstance(tables, list):
         return None
@@ -55,32 +60,42 @@ async def _discover_population_table() -> tuple[str, dict] | None:
             table_url = f"{PSA_API_BASE}/DB/1A/PO/{table_id}"
             meta = await _get_json(table_url)
             if isinstance(meta, dict):
+                _DISCOVERY_CACHE["population"] = (table_url, meta)
                 return table_url, meta
     return None
 
 
-async def _discover_poverty_table() -> tuple[str, dict] | None:
-    """Return (table_url, metadata) for the Full-Year Poverty Incidence table."""
+async def _discover_fy_poverty_entries() -> list[dict]:
+    """Single browse of 1E/FY cached and reused for poverty + subsistence discovery."""
+    if "fy_entries" in _DISCOVERY_CACHE:
+        return _DISCOVERY_CACHE["fy_entries"][1]  # type: ignore[return-value]
     tables = await _get_json(f"{PSA_API_BASE}/DB/1E/FY/")
     if not isinstance(tables, list):
-        return None
+        return []
+    _DISCOVERY_CACHE["fy_entries"] = ("1E/FY", tables)  # type: ignore[assignment]
+    return tables
+
+
+async def _discover_poverty_table() -> tuple[str, dict] | None:
+    if "poverty" in _DISCOVERY_CACHE:
+        return _DISCOVERY_CACHE["poverty"]
+    tables = await _discover_fy_poverty_entries()
     for entry in tables:
         text = entry.get("text", "").lower()
-        # "Table 1" = Poverty Incidence Among Families
         if text.startswith("table 1.") and "poverty incidence" in text and "families" in text:
             table_id = entry.get("id")
             table_url = f"{PSA_API_BASE}/DB/1E/FY/{table_id}"
             meta = await _get_json(table_url)
             if isinstance(meta, dict):
+                _DISCOVERY_CACHE["poverty"] = (table_url, meta)
                 return table_url, meta
     return None
 
 
 async def _discover_subsistence_table() -> tuple[str, dict] | None:
-    """Return (table_url, metadata) for the Full-Year Subsistence Incidence table."""
-    tables = await _get_json(f"{PSA_API_BASE}/DB/1E/FY/")
-    if not isinstance(tables, list):
-        return None
+    if "subsistence" in _DISCOVERY_CACHE:
+        return _DISCOVERY_CACHE["subsistence"]
+    tables = await _discover_fy_poverty_entries()
     for entry in tables:
         text = entry.get("text", "").lower()
         if text.startswith("table 3.") and "subsistence incidence" in text and "families" in text:
@@ -88,6 +103,7 @@ async def _discover_subsistence_table() -> tuple[str, dict] | None:
             table_url = f"{PSA_API_BASE}/DB/1E/FY/{table_id}"
             meta = await _get_json(table_url)
             if isinstance(meta, dict):
+                _DISCOVERY_CACHE["subsistence"] = (table_url, meta)
                 return table_url, meta
     return None
 
