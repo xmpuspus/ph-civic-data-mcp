@@ -38,4 +38,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # When run as `python -m ph_civic_data_mcp.server`, Python loads this file twice
+    # (once as __main__, once as ph_civic_data_mcp.server) which creates two FastMCP
+    # instances. Tool decorators register against the ph_civic_data_mcp.server instance
+    # while __main__ runs its own empty instance. Re-route through the proper module
+    # so the console script path and `-m` invocation both register tools correctly.
+    from ph_civic_data_mcp.server import main as _main
+    _main()
