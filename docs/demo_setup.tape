@@ -1,11 +1,14 @@
-# Records docs/demo_setup.gif — conversational 4-turn demo across all 4 PH data sources.
-# Every turn is a real `claude -p` call hitting live APIs through ph-civic-data-mcp on PyPI.
+# Records docs/demo_setup.gif — tight 3-turn demo across 3 PH data sources.
+# Each turn is a real `claude -p` call hitting live APIs through ph-civic-data-mcp.
 #
 # Turns:
 #   1. weather      → PAGASA / Open-Meteo
 #   2. earthquakes  → PHIVOLCS
-#   3. procurement  → PhilGEPS
-#   4. population   → PSA OpenSTAT
+#   3. population   → PSA OpenSTAT
+#
+# Pre-requisite (run before vhs):
+#   cd /tmp && echo '{"mcpServers":{"ph-civic":{"command":"uvx","args":["ph-civic-data-mcp"]}}}' > ph-mcp.json
+#   uvx ph-civic-data-mcp --help >/dev/null 2>&1  # warm uvx cache
 #
 # Usage:  vhs docs/demo_setup.tape
 
@@ -17,55 +20,41 @@ Require claude
 Set Shell "zsh"
 Set FontSize 13
 Set Width 1400
-Set Height 760
+Set Height 620
 Set Padding 18
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 22ms
+Set TypingSpeed 18ms
+Set PlaybackSpeed 1.0
 
 Hide
 Type "cd /tmp && clear"
 Enter
-Sleep 200ms
-Type "cat > ph-mcp.json <<'EOF'"
-Enter
-Type '{"mcpServers":{"ph-civic":{"command":"uvx","args":["ph-civic-data-mcp"]}}}'
-Enter
-Type "EOF"
-Enter
-Type "clear"
-Enter
-Sleep 200ms
+Sleep 500ms
 Show
 
 # Scene 1 — the entire MCP config (shows setup simplicity)
 Type "cat ph-mcp.json | python3 -m json.tool"
-Sleep 250ms
+Sleep 150ms
 Enter
-Sleep 1500ms
+Sleep 900ms
 
 # Scene 2 — weather (PAGASA / Open-Meteo)
-Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "How hot will Metro Manila be this weekend? Use ph-civic MCP. Under 35 words."`
-Sleep 200ms
+Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "How hot is Metro Manila this week? Use ph-civic MCP. Under 25 words."`
+Sleep 150ms
 Enter
-Sleep 18s
+Sleep 10s
 
 # Scene 3 — earthquakes (PHIVOLCS)
-Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "Any earthquakes in Luzon in the last 12 hours? Use ph-civic MCP. Under 35 words."`
-Sleep 200ms
+Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "Any earthquakes in Luzon today? Use ph-civic MCP. Under 25 words."`
+Sleep 150ms
 Enter
-Sleep 16s
+Sleep 9s
 
-# Scene 4 — procurement (PhilGEPS)
-Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "Search PhilGEPS for flood control contracts via ph-civic MCP. List 3 with agency. Under 50 words."`
-Sleep 200ms
+# Scene 4 — population (PSA)
+Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "NCR population per latest PSA census? Use ph-civic MCP. Under 15 words."`
+Sleep 150ms
 Enter
-Sleep 22s
+Sleep 12s
 
-# Scene 5 — population (PSA)
-Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "What is NCR's population per the latest PSA census? Use ph-civic MCP. Under 25 words."`
-Sleep 200ms
-Enter
-Sleep 14s
-
-# Tail — let the final answer settle before cut
-Sleep 1500ms
+# Tail
+Sleep 800ms
