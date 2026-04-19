@@ -8,8 +8,7 @@ from datetime import datetime, timedelta, timezone
 from dateutil import parser as date_parser
 
 from ph_civic_data_mcp.server import mcp
-from ph_civic_data_mcp.sources.emb import get_air_quality
-from ph_civic_data_mcp.sources.pagasa import get_active_typhoons
+from ph_civic_data_mcp.sources.pagasa import get_active_typhoons, get_weather_alerts
 from ph_civic_data_mcp.sources.phivolcs import get_latest_earthquakes
 
 
@@ -29,17 +28,18 @@ def _risk_from_activity(count: int, max_magnitude: float) -> str:
 
 @mcp.tool()
 async def assess_area_risk(location: str) -> dict:
-    """Multi-hazard risk assessment combining PHIVOLCS + PAGASA + AQICN.
+    """Multi-hazard risk assessment combining PHIVOLCS + PAGASA.
 
-    Makes 3 parallel upstream calls. Expect 5-10 second response time.
+    Makes parallel upstream calls to PHIVOLCS (earthquakes) and PAGASA
+    (active typhoons, weather alerts). Expect 3-6 second response time.
 
     Args:
         location: Municipality, city, or province name.
 
     Returns:
         earthquake_risk_level derived from recent 30-day seismic activity (not an
-        official PHIVOLCS assessment), typhoon signal status, air quality snapshot,
-        and caveats describing any failed sub-calls.
+        official PHIVOLCS assessment), typhoon signal status, active alerts, and
+        caveats describing any failed sub-calls.
     """
     retrieved_at = _now()
     caveats: list[str] = []
@@ -48,18 +48,17 @@ async def assess_area_risk(location: str) -> dict:
         get_latest_earthquakes(min_magnitude=1.0, limit=100, region=location)
     )
     typhoons_task = asyncio.create_task(get_active_typhoons())
-    air_task = asyncio.create_task(get_air_quality(location))
+    alerts_task = asyncio.create_task(get_weather_alerts(region=location))
 
     results = await asyncio.gather(
-        earthquakes_task, typhoons_task, air_task, return_exceptions=True
+        earthquakes_task, typhoons_task, alerts_task, return_exceptions=True
     )
-    earthquakes_result, typhoons_result, air_result = results
+    earthquakes_result, typhoons_result, alerts_result = results
 
     recent_earthquakes_30d = 0
     max_magnitude_30d = 0.0
     if isinstance(earthquakes_result, BaseException):
         caveats.append(f"PHIVOLCS query failed: {type(earthquakes_result).__name__}")
-        earthquakes = []
     else:
         earthquakes = earthquakes_result or []
         cutoff = retrieved_at - timedelta(days=30)
@@ -91,17 +90,11 @@ async def assess_area_risk(location: str) -> dict:
         if typhoons and not active_typhoon_name:
             active_typhoon_name = typhoons[0].get("local_name")
 
-    air_quality_aqi: int | None = None
-    air_quality_category: str | None = None
-    if isinstance(air_result, BaseException):
-        caveats.append(f"AQICN query failed: {type(air_result).__name__}")
+    active_alerts: list[dict] = []
+    if isinstance(alerts_result, BaseException):
+        caveats.append(f"PAGASA alerts query failed: {type(alerts_result).__name__}")
     else:
-        air = air_result or {}
-        if "caveats" in air:
-            caveats.extend(air["caveats"])
-        else:
-            air_quality_aqi = air.get("aqi")
-            air_quality_category = air.get("aqi_category")
+        active_alerts = alerts_result or []
 
     risk_level = _risk_from_activity(recent_earthquakes_30d, max_magnitude_30d)
 
@@ -112,8 +105,7 @@ async def assess_area_risk(location: str) -> dict:
         "max_magnitude_30d": max_magnitude_30d,
         "typhoon_signal_active": typhoon_signal_active,
         "active_typhoon_name": active_typhoon_name,
-        "air_quality_aqi": air_quality_aqi,
-        "air_quality_category": air_quality_category,
+        "active_alerts": active_alerts,
         "assessment_datetime": retrieved_at.isoformat(),
         "caveats": caveats,
         "note": (
@@ -121,5 +113,5 @@ async def assess_area_risk(location: str) -> dict:
             "not an official PHIVOLCS hazard assessment. For emergencies refer "
             "to ndrrmc.gov.ph and official PHIVOLCS/PAGASA channels."
         ),
-        "source": "PHIVOLCS + PAGASA + AQICN",
+        "source": "PHIVOLCS + PAGASA",
     }

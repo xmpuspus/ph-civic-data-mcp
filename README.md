@@ -2,7 +2,7 @@
 
 <!-- mcp-name: io.github.xmpuspus/ph-civic-data-mcp -->
 
-> The first MCP server for Philippine government data — earthquakes, weather, typhoons, procurement, population, and air quality — in your AI agent.
+> The first MCP server for Philippine government data: earthquakes, weather, typhoons, procurement, population, and poverty, in your AI agent.
 
 [![PyPI](https://img.shields.io/pypi/v/ph-civic-data-mcp.svg)](https://pypi.org/project/ph-civic-data-mcp/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
@@ -10,25 +10,25 @@
 [![Glama AAA](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp/badges/score.svg)](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.xmpuspus%2Fph--civic--data--mcp-blue)](https://registry.modelcontextprotocol.io/v0.1/servers?search=ph-civic-data-mcp)
 
-`ph-civic-data-mcp` is a zero-cost, `stdio`-transport MCP server that exposes live data from **PHIVOLCS**, **PAGASA**, **PhilGEPS**, **PSA**, and **AQICN/EMB** as tools that Claude Desktop, Claude Code, Cursor, or any MCP-compatible client can call directly.
+`ph-civic-data-mcp` is a zero-cost, `stdio`-transport MCP server that exposes live data from **PHIVOLCS**, **PAGASA**, **PhilGEPS**, and **PSA** as tools that Claude Desktop, Claude Code, Cursor, or any MCP-compatible client can call directly.
 
 ## This is how easy it is to set up
 
-One JSON file. One `claude` command. Your agent just answered a question about Philippine government data.
+One JSON file. One `claude` command. Your agent just correlated live Philippine weather with 2020 Census population data in a single turn.
 
 ![setup](docs/demo_setup.gif)
 
-The recording above isn't scripted — it's `vhs docs/demo_setup.tape`, which spawns Claude Code with `--mcp-config` pointing at this server, and Claude makes real calls to `get_latest_earthquakes` and `get_volcano_status`. The answer it streams back (M1.8 off Zambales at 15:00 PST, Mayon Alert Level 3 intensified unrest) is what PHIVOLCS and WOVODAT returned at the moment of the recording.
+The recording above isn't scripted. It's `vhs docs/demo_setup.tape`, which spawns Claude Code with `--mcp-config` pointing at this server, and Claude fans out in parallel to `get_weather_forecast` (Open-Meteo) and `get_population_stats` (PSA PXWeb), then correlates them. The temperatures (30.4 / 30.9 / 31.0 °C max over Apr 19-21) and NCR population (13,484,462) in the streamed answer are what the live sources returned at the moment of the recording.
 
 Works the same way in Claude Desktop, Cursor, Zed, VS Code, or any MCP-compatible client. One `"command": "uvx"`, one `"args": ["ph-civic-data-mcp"]`, done.
 
 ## Demo
 
-Every GIF below is a real VHS recording of `docs/live_demo.py` — it spawns `uvx ph-civic-data-mcp` from this PyPI release and calls each tool over the real MCP stdio protocol. The panels you see contain the actual JSON returned by the server. Nothing is staged.
+Every GIF below is a real VHS recording of `docs/live_demo.py`. It spawns `uvx ph-civic-data-mcp` from this PyPI release and calls each tool over the real MCP stdio protocol. The panels you see contain the actual JSON returned by the server. Nothing is staged.
 
-A grand tour hitting 8 tools across all 5 sources in one session:
+A grand tour hitting 7 tools across all 4 sources in one session:
 
-![grand tour](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo.gif)
+![grand tour](docs/demo.gif)
 
 Per-source walkthroughs below. To reproduce any of them locally: `uv run python docs/live_demo_single.py <suite>`.
 
@@ -61,11 +61,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "ph-civic-data": {
       "command": "uvx",
-      "args": ["ph-civic-data-mcp"],
-      "env": {
-        "AQICN_TOKEN": "your_free_token_from_aqicn.org",
-        "PAGASA_API_TOKEN": "optional_pagasa_token"
-      }
+      "args": ["ph-civic-data-mcp"]
     }
   }
 }
@@ -80,10 +76,7 @@ Add to `.claude/settings.json`:
   "mcpServers": {
     "ph-civic-data": {
       "command": "uvx",
-      "args": ["ph-civic-data-mcp"],
-      "env": {
-        "AQICN_TOKEN": "your_token"
-      }
+      "args": ["ph-civic-data-mcp"]
     }
   }
 }
@@ -97,12 +90,13 @@ claude mcp add ph-civic-data -- uvx ph-civic-data-mcp
 
 ### Cursor, Zed, other MCP clients
 
-Any client that supports the stdio MCP transport works. Point the command at `uvx ph-civic-data-mcp` and pass `AQICN_TOKEN` as env.
+Any client that supports the stdio MCP transport works. Point the command at `uvx ph-civic-data-mcp`. No API keys required for the default configuration.
 
 ## What you can ask
 
 After setup, ask your agent:
 
+- _"How hot is Metro Manila this week and how many people are affected?"_
 - _"What earthquakes happened in the Philippines in the last 24 hours?"_
 - _"Is Taal volcano active right now?"_
 - _"What's the 3-day weather forecast for Quezon City?"_
@@ -110,32 +104,28 @@ After setup, ask your agent:
 - _"Search PhilGEPS for flood control contracts."_
 - _"What is the population of Region VII based on the PSA?"_
 - _"What is the poverty incidence in the Bicol Region?"_
-- _"What is the air quality in Manila right now?"_
 - _"Give me a multi-hazard risk profile for Leyte."_
 
 ## Per-source demos
 
 ### PHIVOLCS — earthquakes + volcano alert levels
-![phivolcs](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_phivolcs.gif)
+![phivolcs](docs/demo_phivolcs.gif)
 
 ### PAGASA — weather forecast + typhoon tracking
-![pagasa](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_pagasa.gif)
+![pagasa](docs/demo_pagasa.gif)
 
 ### PhilGEPS — procurement search + aggregation
-![philgeps](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_philgeps.gif)
+![philgeps](docs/demo_philgeps.gif)
 
 ### PSA — population (2020 Census) + poverty (2023 Full-Year)
-![psa](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_psa.gif)
-
-### AQICN — real-time air quality
-![aqicn](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_aqicn.gif)
+![psa](docs/demo_psa.gif)
 
 ### Cross-source — parallel multi-hazard risk profile
-![cross-source](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_combined.gif)
+![cross-source](docs/demo_combined.gif)
 
 ### How the demos are produced
 
-`docs/live_demo.py` + `docs/live_demo_single.py` open an MCP `StdioTransport` pointing at `uvx ph-civic-data-mcp` (which resolves to this PyPI release), call the tools, and render the responses with [Rich](https://github.com/Textualize/rich) (panels, tables, syntax-highlighted JSON, live spinners). [`vhs`](https://github.com/charmbracelet/vhs) drives a real terminal and records the session. Tapes are committed under `docs/*.tape`.
+`docs/live_demo.py` and `docs/live_demo_single.py` open an MCP `StdioTransport` pointing at `uvx ph-civic-data-mcp` (which resolves to this PyPI release), call the tools, and render the responses with [Rich](https://github.com/Textualize/rich) (panels, tables, syntax-highlighted JSON, live spinners). [`vhs`](https://github.com/charmbracelet/vhs) drives a real terminal and records the session. Tapes are committed under `docs/*.tape`.
 
 ## Data sources
 
@@ -146,7 +136,6 @@ After setup, ask your agent:
 | Open-Meteo | Weather fallback when PAGASA token absent | Hourly | None |
 | PhilGEPS | Government procurement notices (latest ~100) | 6 h (cached) | None |
 | PSA OpenSTAT | Population (2020 Census), poverty (2023) | Periodic | None |
-| AQICN | Real-time air quality for PH cities | 15 min | **Required** `AQICN_TOKEN` (free) |
 
 ## All tools
 
@@ -162,17 +151,15 @@ After setup, ask your agent:
 | `get_procurement_summary` | Aggregate procurement stats | `agency`, `region`, `year` |
 | `get_population_stats` | 2020 Census population | `region` |
 | `get_poverty_stats` | 2023 Full-Year poverty incidence | `region` |
-| `get_air_quality` | Real-time AQI + pollutants | `city` |
-| `assess_area_risk` | Multi-hazard profile (parallel PHIVOLCS + PAGASA + AQICN) | `location` |
+| `assess_area_risk` | Multi-hazard profile (parallel PHIVOLCS + PAGASA) | `location` |
 
 ## Environment variables
 
 | Variable | Required | Notes |
 |---|---|---|
-| `AQICN_TOKEN` | **Yes** for `get_air_quality` | Free: https://aqicn.org/data-platform/token/ (1,000 req/min, instant) |
 | `PAGASA_API_TOKEN` | Optional | Requires formal PAGASA request. Without it, weather auto-falls-back to Open-Meteo. |
 
-Note: the AQICN `demo` token **only returns data for Shanghai** and will not work for Philippine cities. You must register for a real token (free, <1 minute).
+No mandatory API keys. The server boots and all 11 tools work without any token.
 
 ## Data freshness warnings
 
@@ -210,7 +197,6 @@ uv run twine check dist/*
 ## Limitations
 
 - **PAGASA token is gated.** Non-government users may be denied. Open-Meteo fallback removes this as a hard dependency.
-- **AQICN token is required.** Free but must be requested.
 - **PhilGEPS is not real-time.** Public portal exposes no filterable API; this server operates on the latest ~100 notices with client-side filtering.
 - **Emergencies:** direct users to official channels; this is a research tool.
 
@@ -228,7 +214,7 @@ Neither is Python, multi-source, or MCP. This project credits both.
 
 ## License
 
-MIT. Xavier Puspus. Not affiliated with PHIVOLCS, PAGASA, PhilGEPS, PSA, or EMB.
+MIT. Xavier Puspus. Not affiliated with PHIVOLCS, PAGASA, PhilGEPS, or PSA.
 
 ## Contributing
 

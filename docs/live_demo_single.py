@@ -45,10 +45,6 @@ SUITES: dict[str, list[tuple[str, str, dict, str]]] = {
          {"region": "NCR"}, "population"),
         ("poverty · national (2023)", "get_poverty_stats", {}, "poverty"),
     ],
-    "aqicn": [
-        ("air quality · Manila", "get_air_quality",
-         {"city": "Manila"}, "air_quality"),
-    ],
     "combined": [
         ("multi-hazard risk · Manila", "assess_area_risk",
          {"location": "Manila"}, "risk"),

@@ -1,8 +1,8 @@
-# Records docs/demo_setup.gif — the "15-second setup to first answer" demo.
-# Every line below runs real services:
+# Records docs/demo_setup.gif — "one JSON file, one command, Claude correlates live PH data".
+# Everything below runs live:
 #   - `uvx ph-civic-data-mcp` boots from PyPI
-#   - `claude` is Claude Code CLI, which actually calls the MCP over stdio
-#   - the earthquake + Mayon answer is what Claude returns after calling the tools
+#   - `claude` is Claude Code CLI
+#   - Claude fans out to Open-Meteo (weather) and PSA OpenSTAT (census) in one turn
 #
 # Usage:  vhs docs/demo_setup.tape
 
@@ -12,18 +12,18 @@ Require uv
 Require claude
 
 Set Shell "zsh"
-Set FontSize 15
+Set FontSize 14
 Set Width 1280
-Set Height 560
+Set Height 620
 Set Padding 20
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 45ms
+Set TypingSpeed 40ms
 
 Hide
 Type "cd /tmp && clear"
 Enter
 Sleep 300ms
-Type "cat > ph-mcp.json <<EOF"
+Type "cat > ph-mcp.json <<'EOF'"
 Enter
 Type '{"mcpServers":{"ph-civic":{"command":"uvx","args":["ph-civic-data-mcp"]}}}'
 Enter
@@ -31,20 +31,19 @@ Type "EOF"
 Enter
 Type "clear"
 Enter
-Sleep 300ms
+Sleep 200ms
 Show
 
-# Scene 1 — the whole MCP config (one line of JSON)
-Type "cat ph-mcp.json"
+# Scene 1 — the entire MCP config
+Type "cat ph-mcp.json | python3 -m json.tool"
 Sleep 300ms
 Enter
-Sleep 1800ms
+Sleep 1600ms
 
-# Scene 2 — point Claude Code at that config and ask a natural-language question
-Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "what's the latest PH earthquake and Mayon's current alert level?"`
+# Scene 2 — one natural-language question, Claude fans out to weather + census
+Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "How hot is Metro Manila this week and how many people are affected? Use only the ph-civic MCP tools, under 80 words."`
 Sleep 400ms
 Enter
 
-# Claude Code: spawns uvx ph-civic-data-mcp, calls tools over MCP, streams the answer.
-# End-to-end cold start is ~8-12s. Give it enough runway.
-Sleep 25s
+# Multi-tool fan-out: Open-Meteo + PSA PXWeb in parallel, ~12-18s total
+Sleep 26s

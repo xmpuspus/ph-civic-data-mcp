@@ -139,21 +139,6 @@ CITY_COORDS: dict[str, tuple[float, float]] = {
 }
 
 
-AQICN_CITY_SLUGS: dict[str, str] = {
-    "manila": "manila",
-    "quezon city": "quezon-city",
-    "cebu city": "cebu-city",
-    "cebu": "cebu-city",
-    "davao city": "davao-city",
-    "davao": "davao-city",
-    "makati": "makati",
-    "taguig": "taguig",
-    "pasig": "pasig",
-    "marikina": "marikina",
-    "mandaluyong": "mandaluyong",
-}
-
-
 def normalize_region(name: str | None) -> str | None:
     if not name:
         return None
@@ -174,9 +159,3 @@ def city_to_coords(city: str) -> tuple[float, float] | None:
     if city.strip().lower() in CITY_COORDS:
         return CITY_COORDS[city.strip().lower()]
     return None
-
-
-def city_to_aqicn_slug(city: str) -> str | None:
-    if not city:
-        return None
-    return AQICN_CITY_SLUGS.get(city.strip().lower())

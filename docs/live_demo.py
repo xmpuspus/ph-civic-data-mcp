@@ -80,6 +80,7 @@ SCRIPT: list[tuple[str, str, dict, str]] = [
         "risk",
     ),
 ]
+# NB: get_air_quality tool was removed from the server (PH AQICN stations went dark).
 
 
 def _unwrap(result):
@@ -241,9 +242,9 @@ def render_risk(data) -> Panel:
              else "No active signal", "bold green"),
         ),
         Text.assemble(
-            ("air quality    ", "dim"),
-            (str(data.get("air_quality_aqi") or "n/a"), "bold yellow"),
-            (f"  ({data.get('air_quality_category') or '—'})", "dim"),
+            ("active alerts  ", "dim"),
+            (str(len(data.get("active_alerts") or [])), "bold yellow"),
+            ("  PAGASA advisories", "dim"),
         ),
     ]
     caveats = data.get("caveats") or []
@@ -253,51 +254,9 @@ def render_risk(data) -> Panel:
             rows.append(Text.assemble(("  ⚠ ", "yellow"), (c, "dim")))
     return Panel(
         Group(*rows),
-        title="[b]Multi-hazard risk · parallel PHIVOLCS + PAGASA + AQICN[/b]",
+        title="[b]Multi-hazard risk · parallel PHIVOLCS + PAGASA[/b]",
         border_style="magenta",
     )
-
-
-def render_air_quality(data) -> Panel:
-    if "caveats" in data:
-        body = Group(
-            Text.assemble(("city       ", "dim"), (f"{data.get('city','?')}", "bold")),
-            Text(""),
-            *[Text.assemble(("  ⚠ ", "yellow"), (c, "italic")) for c in data["caveats"]],
-        )
-        return Panel(body, title="[b]AQICN air quality[/b]", border_style="yellow")
-    aqi = data.get("aqi")
-    cat = data.get("aqi_category", "?")
-    aqi_color = {
-        "Good": "green", "Fair": "yellow",
-        "Unhealthy for Sensitive Groups": "orange1",
-        "Unhealthy": "red", "Very Unhealthy": "red", "Hazardous": "red",
-    }.get(cat, "white")
-    body = Group(
-        Text.assemble(
-            ("city        ", "dim"), (f"{data.get('city','?')}", "bold"),
-            ("   station ", "dim"), (data.get("station_name") or "—", "italic"),
-        ),
-        Text.assemble(
-            ("AQI         ", "dim"),
-            (f"{aqi}  ", f"bold {aqi_color}"),
-            (f"({cat})", aqi_color),
-        ),
-        Text.assemble(
-            ("dominant    ", "dim"),
-            (str(data.get("dominant_pollutant") or "—"), "bold"),
-        ),
-        Text.assemble(
-            ("PM2.5/PM10  ", "dim"),
-            (f"{data.get('pm25') or '—'} / {data.get('pm10') or '—'} µg/m³", "yellow"),
-        ),
-        Text.assemble(
-            ("NO₂/SO₂/O₃  ", "dim"),
-            (f"{data.get('no2') or '—'} / {data.get('so2') or '—'} / "
-             f"{data.get('o3') or '—'} µg/m³", "yellow"),
-        ),
-    )
-    return Panel(body, title="[b]AQICN air quality[/b]", border_style="cyan")
 
 
 RENDERERS = {
@@ -308,7 +267,6 @@ RENDERERS = {
     "procurement": render_procurement,
     "population": render_population,
     "poverty": render_poverty,
-    "air_quality": render_air_quality,
     "risk": render_risk,
 }
 

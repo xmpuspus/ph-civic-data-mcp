@@ -9,10 +9,10 @@ Reference for manual submissions to MCP directories. Copy/paste the content into
 **Name:** ph-civic-data-mcp
 
 **Short description (one line):**
-> The first MCP server for Philippine government data — earthquakes, weather, typhoons, procurement, population, air quality.
+> The first MCP server for Philippine government data: earthquakes, weather, typhoons, procurement, population, poverty.
 
 **Long description:**
-> ph-civic-data-mcp is a zero-cost stdio MCP server that exposes live data from PHIVOLCS (earthquakes, volcano alert levels), PAGASA (weather forecast with Open-Meteo fallback, typhoons, alerts), PhilGEPS (government procurement notices), PSA OpenSTAT (2020 Census population, 2023 Full-Year poverty), and AQICN/EMB (real-time air quality for PH cities) as agent-callable tools. It includes a cross-source multi-hazard risk profiler that makes parallel calls across sources.
+> ph-civic-data-mcp is a zero-cost stdio MCP server that exposes live data from PHIVOLCS (earthquakes, volcano alert levels), PAGASA (weather forecast with Open-Meteo fallback, typhoons, alerts), PhilGEPS (government procurement notices), and PSA OpenSTAT (2020 Census population, 2023 Full-Year poverty) as agent-callable tools. It includes a cross-source multi-hazard risk profiler that makes parallel calls across sources.
 >
 > Install: `uvx ph-civic-data-mcp`
 
@@ -30,7 +30,7 @@ Reference for manual submissions to MCP directories. Copy/paste the content into
 
 > https://smithery.ai/new
 
-The `smithery.yaml` at the repo root declares the stdio startCommand and config schema (aqicnToken, pagasaApiToken).
+The `smithery.yaml` at the repo root declares the stdio startCommand and config schema (optional pagasaApiToken).
 
 After importing the repo on Smithery, set:
 - Display name: `ph-civic-data-mcp`
@@ -62,7 +62,7 @@ Glama auto-indexes from PyPI within 48h — no manual submission required. After
 
 **Data Engineering Pilipinas** (FB group, ~38k members)
 
-> Just shipped `ph-civic-data-mcp` — the first MCP server that exposes Philippine government data (PHIVOLCS earthquakes, PAGASA weather + typhoons, PhilGEPS procurement, PSA population + poverty, AQICN air quality) as tools any AI agent can call directly.
+> Just shipped `ph-civic-data-mcp`: the first MCP server that exposes Philippine government data (PHIVOLCS earthquakes, PAGASA weather + typhoons, PhilGEPS procurement, PSA population + poverty) as tools any AI agent can call directly.
 >
 > Install: `uvx ph-civic-data-mcp`
 > Source: https://github.com/xmpuspus/ph-civic-data-mcp
@@ -75,7 +75,7 @@ Glama auto-indexes from PyPI within 48h — no manual submission required. After
 
 > Spent the weekend building `ph-civic-data-mcp` — the first MCP server for Philippine government data.
 >
-> It gives Claude, Cursor, and any MCP client direct access to PHIVOLCS earthquake feeds, PAGASA weather and typhoon tracking, PhilGEPS procurement, PSA census and poverty stats, and AQICN air quality — as agent-callable tools. Zero prior art on GitHub or PyPI.
+> It gives Claude, Cursor, and any MCP client direct access to PHIVOLCS earthquake feeds, PAGASA weather and typhoon tracking, PhilGEPS procurement, and PSA census and poverty stats as agent-callable tools. Zero prior art on GitHub or PyPI.
 >
 > 12 tools. Async httpx. Open-Meteo fallback when PAGASA's token-gated API is unavailable. Parallel cross-source risk profiler via asyncio.gather. MIT licensed.
 >

@@ -14,7 +14,6 @@ mcp = FastMCP(
     - PAGASA: 10-day weather forecast and active typhoon tracking
     - PhilGEPS: Government procurement contracts (cached 6h, not real-time)
     - PSA: Population (2020 Census) and poverty statistics (2023)
-    - AQICN/EMB: Air quality for major Philippine cities (15-min updates)
 
     Always cite the data source and note freshness in responses.
     For emergencies: direct users to ndrrmc.gov.ph and official PHIVOLCS/PAGASA channels.
@@ -28,7 +27,6 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import pagasa  # noqa: F401
     from ph_civic_data_mcp.sources import philgeps  # noqa: F401
     from ph_civic_data_mcp.sources import psa  # noqa: F401
-    from ph_civic_data_mcp.sources import emb  # noqa: F401
     from ph_civic_data_mcp.sources import cross_source  # noqa: F401
 
 
