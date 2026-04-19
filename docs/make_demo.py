@@ -47,12 +47,26 @@ def claude_says(text: str):
 
 
 # ────────────────────────────────────────────────────────────────────
-# 1. Grand tour — showcases every source in one demo
+# 1. Grand tour — ONE gif, multi-turn chat, live responses
 # ────────────────────────────────────────────────────────────────────
-def build_grand_tour() -> None:
-    gif = TerminalGIF(preset="full", title="claude — ph-civic-data-mcp")
-    gif.pause(400)
+def turn(gif: TerminalGIF, question: str, running_label: str,
+         response_lines: list, hold_ms: int = 1800) -> None:
+    """Render one complete Q&A turn into gif: fresh screen, type question,
+    spinner, reveal response, hold. Appends to the gif's global frame list."""
+    screen = [""]
+    screen = gif.type_text(screen, you(""), question, speed=22)
+    gif.pause(300)
+    screen = gif.show_running(screen, label=running_label, steps=4, delay=130)
+    screen = gif.reveal_lines(screen, response_lines, delay=60)
+    gif.pause(hold_ms)
 
+
+def build_grand_tour() -> None:
+    """Multi-turn conversation with the MCP. Live data from tool runs on 2026-04-19."""
+    gif = TerminalGIF(preset="full", title="claude — ph-civic-data-mcp")
+    gif.pause(300)
+
+    # Intro — install + connect
     screen = gif.command_scene(
         "uvx ph-civic-data-mcp",
         [
@@ -64,114 +78,123 @@ def build_grand_tour() -> None:
             "",
         ],
     )
-    gif.pause(1600)
+    gif.pause(1400)
 
-    # Turn 1 — Earthquakes
-    gif = TerminalGIF(preset="full", title="claude — ph-civic-data-mcp")
-    gif.pause(300)
-    screen = gif.type_text([], you(""), "what earthquakes hit PH in the last 24h?", speed=24)
-    gif.pause(300)
-    screen = gif.show_running(screen, label="  ⏎ get_latest_earthquakes", steps=4, delay=140)
-    screen = gif.reveal_lines(
-        screen,
+    # Turn 1 — Earthquakes (live: M3.8 / M3.2 / M2.3)
+    turn(
+        gif,
+        "what earthquakes hit the Philippines today?",
+        "  ⏎ get_latest_earthquakes",
         [
             "",
-            claude_says("3 quakes from PHIVOLCS (retrieved just now):"),
+            claude_says("3 most recent from PHIVOLCS:"),
             "",
-            [D("   "), Y("M2.3"), F(" · 15km N 88° W of Dinalungan (Aurora)")],
-            [D("   "), Y("M1.8"), F(" · offshore Sarangani")],
-            [D("   "), Y("M1.5"), F(" · offshore Samar")],
+            [D("   "), Y("M3.8"), F(" · 146 km S 61° E of Jose Abad Santos")],
+            [D("   "), Y("M3.2"), F(" · 15 km N 83° W of Dinalungan (Aurora)")],
+            [D("   "), Y("M2.3"), F(" · 15 km N 88° W of Dinalungan (Aurora)")],
             "",
         ],
-        delay=70,
     )
-    gif.pause(1800)
 
-    # Turn 2 — Weather
-    gif = TerminalGIF(preset="full", title="claude — ph-civic-data-mcp")
-    gif.pause(300)
-    screen = gif.type_text([], you(""), "3-day forecast for Cebu City", speed=24)
-    gif.pause(300)
-    screen = gif.show_running(screen, label="  ⏎ get_weather_forecast", steps=4, delay=140)
-    screen = gif.reveal_lines(
-        screen,
+    # Turn 2 — Mayon alert level (live: 3)
+    turn(
+        gif,
+        "is Mayon still active?",
+        "  ⏎ get_volcano_status Mayon",
         [
             "",
-            claude_says("Cebu City via Open-Meteo:"),
+            claude_says("Yes, from WOVODAT (24-hr observation):"),
             "",
-            [D("   Apr 19 · "), Y("30.2°C"), D(" high  "), Y("2.4 mm"), D(" rain")],
-            [D("   Apr 20 · "), Y("30.5°C"), D(" high  "), Y("1.5 mm"), D(" rain")],
-            [D("   Apr 21 · "), Y("31.6°C"), D(" high  "), Y("0.0 mm"), D(" rain")],
+            [D("   alert level  "), R("3"), D(" (Intensified Unrest / Magmatic Unrest)")],
+            [D("   observation  "), F("41 volcanic earthquakes · 440 rockfall signals")],
             "",
         ],
-        delay=70,
     )
-    gif.pause(1800)
 
-    # Turn 3 — Procurement
-    gif = TerminalGIF(preset="full", title="claude — ph-civic-data-mcp")
-    gif.pause(300)
-    screen = gif.type_text([], you(""), "search PhilGEPS for flood control", speed=24)
-    gif.pause(300)
-    screen = gif.show_running(screen, label="  ⏎ search_procurement", steps=4, delay=140)
-    screen = gif.reveal_lines(
-        screen,
+    # Turn 3 — Weather Cebu (live: 20-32.6 / 21.6-33 / 22.2-33.6, all 0mm)
+    turn(
+        gif,
+        "3-day forecast for Cebu City?",
+        "  ⏎ get_weather_forecast Cebu",
         [
             "",
-            claude_says("Matches in the latest PhilGEPS notices:"),
+            claude_says("Cebu City via Open-Meteo (PAGASA fallback):"),
             "",
-            [D("   • "), F("DPWH - Bicol  "), D("· Flood mitigation structures")],
-            [D("   • "), F("LGU Pampanga "), D("· River dredging works")],
-            [D("   • "), F("DPWH - NCR   "), D("· Drainage improvement")],
+            [D("   Apr 19  "), Y("20.0 – 32.6°C"), D("   "), Y("0 mm"), D(" rain")],
+            [D("   Apr 20  "), Y("21.6 – 33.0°C"), D("   "), Y("0 mm"), D(" rain")],
+            [D("   Apr 21  "), Y("22.2 – 33.6°C"), D("   "), Y("0 mm"), D(" rain")],
             "",
         ],
-        delay=70,
     )
-    gif.pause(1800)
 
-    # Turn 4 — Population + Poverty
-    gif = TerminalGIF(preset="full", title="claude — ph-civic-data-mcp")
-    gif.pause(300)
-    screen = gif.type_text([], you(""), "NCR population and poverty incidence", speed=24)
-    gif.pause(300)
-    screen = gif.show_running(screen, label="  ⏎ get_population_stats + get_poverty_stats", steps=5, delay=140)
-    screen = gif.reveal_lines(
-        screen,
+    # Turn 4 — Typhoons + Procurement combined question
+    turn(
+        gif,
+        "any active typhoons? and what's DBM buying this week?",
+        "  ⏎ get_active_typhoons + search_procurement",
         [
             "",
-            claude_says("PSA OpenSTAT:"),
+            claude_says("Two parallel calls:"),
             "",
-            [D("   population   "), Y("13,484,462"), D(" · 2020 Census")],
-            [D("   poverty rate "), Y("2.0%"), D(" · 2023 Full-Year")],
+            [D("   typhoons     "), G("No Active Tropical Cyclone"), D(" within PAR")],
+            [D("   procurement  "), F("92 "), D("Small Value · "), F("7 "), D("Public Bidding · "), F("1 "), D("Negotiated")],
+            [D("                "), D("(over the latest 100 PhilGEPS notices)")],
             "",
         ],
-        delay=70,
     )
-    gif.pause(1800)
 
-    # Turn 5 — Air quality + Cross-source
-    gif = TerminalGIF(preset="full", title="claude — ph-civic-data-mcp")
-    gif.pause(300)
-    screen = gif.type_text([], you(""), "give me a full risk profile for Manila", speed=24)
-    gif.pause(300)
-    screen = gif.show_running(screen, label="  ⏎ assess_area_risk (parallel)", steps=6, delay=160)
-    screen = gif.reveal_lines(
-        screen,
+    # Turn 5 — Population comparison (live numbers)
+    turn(
+        gif,
+        "compare population of NCR, Region VII and Bicol",
+        "  ⏎ get_population_stats × 3 (parallel)",
         [
             "",
-            claude_says("3 parallel calls: PHIVOLCS + PAGASA + AQICN"),
+            claude_says("PSA 2020 Census (discovered via PXWeb browse API):"),
             "",
-            [D("   earthquake   "), G("Low  "), D("(0 quakes ≥M4 in 30d)")],
-            [D("   typhoon      "), G("No active signal")],
-            [D("   air quality  "), Y("AQI 82"), D(" · Fair · PM2.5 dominant")],
+            [D("   NCR          "), Y("13,484,462")],
+            [D("   Region VII   "), Y(" 8,081,988"), D(" (Central Visayas)")],
+            [D("   Region V     "), Y(" 6,082,165"), D(" (Bicol)")],
+            [D("   Philippines  "), Y("109,033,245"), D(" total")],
+            "",
+        ],
+    )
+
+    # Turn 6 — Poverty (live: PH 10.9%)
+    turn(
+        gif,
+        "national poverty incidence?",
+        "  ⏎ get_poverty_stats",
+        [
+            "",
+            claude_says("PSA Full-Year Poverty Statistics:"),
+            "",
+            [D("   poverty incidence     "), Y("10.9%"), D(" of families · 2023")],
+            [D("   reference             "), F("PSA Table 1, FY poverty release")],
+            "",
+        ],
+    )
+
+    # Turn 7 — Cross-source risk (live: Low / 0 / no typhoon / AQICN needs token)
+    turn(
+        gif,
+        "multi-hazard risk profile for Manila?",
+        "  ⏎ assess_area_risk (PHIVOLCS + PAGASA + AQICN, parallel)",
+        [
+            "",
+            claude_says("3 sources hit in parallel:"),
+            "",
+            [D("   earthquake   "), G("Low  "), D("(0 quakes ≥M4 in last 30 d)")],
+            [D("   typhoon      "), G("No active signal in PAR")],
+            [D("   air quality  "), D("AQICN token not set → caveat returned")],
             "",
             [D("  For emergencies: ndrrmc.gov.ph / PHIVOLCS / PAGASA")],
         ],
-        delay=80,
+        hold_ms=3200,
     )
-    gif.pause(3000)
+
     gif.save(f"{OUT_DIR}/demo.gif")
-    print("wrote docs/demo.gif")
+    print(f"wrote docs/demo.gif (7 turns, live 2026-04-19 data)")
 
 
 # ────────────────────────────────────────────────────────────────────
