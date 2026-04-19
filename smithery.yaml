@@ -1,0 +1,21 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      aqicnToken:
+        type: string
+        description: "AQICN air quality API token. Required for get_air_quality. Free at aqicn.org/api/."
+      pagasaApiToken:
+        type: string
+        description: "PAGASA TenDay API token (optional). Without this, weather uses Open-Meteo."
+    required: []
+  commandFunction: |-
+    (config) => ({
+      command: "uvx",
+      args: ["ph-civic-data-mcp"],
+      env: {
+        ...(config.aqicnToken && { AQICN_TOKEN: config.aqicnToken }),
+        ...(config.pagasaApiToken && { PAGASA_API_TOKEN: config.pagasaApiToken }),
+      }
+    })
