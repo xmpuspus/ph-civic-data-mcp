@@ -10,11 +10,13 @@
 
 ## Demo
 
-A grand tour showing every source in one session:
+Every GIF below is a real VHS recording of `docs/live_demo.py` — it spawns `uvx ph-civic-data-mcp` from this PyPI release and calls each tool over the real MCP stdio protocol. The panels you see contain the actual JSON returned by the server. Nothing is staged.
+
+A grand tour hitting 8 tools across all 5 sources in one session:
 
 ![grand tour](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo.gif)
 
-Per-source walkthroughs and one cross-source chain are below under [Per-source demos](#per-source-demos).
+Per-source walkthroughs below. To reproduce any of them locally: `uv run python docs/live_demo_single.py <suite>`.
 
 ## Why this exists
 
@@ -114,8 +116,12 @@ After setup, ask your agent:
 ### AQICN — real-time air quality
 ![aqicn](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_aqicn.gif)
 
-### Mix-and-match — chain sources into a single brief
+### Cross-source — parallel multi-hazard risk profile
 ![cross-source](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_combined.gif)
+
+### How the demos are produced
+
+`docs/live_demo.py` + `docs/live_demo_single.py` open an MCP `StdioTransport` pointing at `uvx ph-civic-data-mcp` (which resolves to this PyPI release), call the tools, and render the responses with [Rich](https://github.com/Textualize/rich) (panels, tables, syntax-highlighted JSON, live spinners). [`vhs`](https://github.com/charmbracelet/vhs) drives a real terminal and records the session. Tapes are committed under `docs/*.tape`.
 
 ## Data sources
 
