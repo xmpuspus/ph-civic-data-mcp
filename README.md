@@ -8,7 +8,13 @@
 
 `ph-civic-data-mcp` is a zero-cost, `stdio`-transport MCP server that exposes live data from **PHIVOLCS**, **PAGASA**, **PhilGEPS**, **PSA**, and **AQICN/EMB** as tools that Claude Desktop, Claude Code, Cursor, or any MCP-compatible client can call directly.
 
-![demo](docs/demo.gif)
+## Demo
+
+A grand tour showing every source in one session:
+
+![grand tour](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo.gif)
+
+Per-source walkthroughs and one cross-source chain are below under [Per-source demos](#per-source-demos).
 
 ## Why this exists
 
@@ -90,6 +96,26 @@ After setup, ask your agent:
 - _"What is the poverty incidence in the Bicol Region?"_
 - _"What is the air quality in Manila right now?"_
 - _"Give me a multi-hazard risk profile for Leyte."_
+
+## Per-source demos
+
+### PHIVOLCS — earthquakes + volcano alert levels
+![phivolcs](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_phivolcs.gif)
+
+### PAGASA — weather forecast + typhoon tracking
+![pagasa](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_pagasa.gif)
+
+### PhilGEPS — procurement search + aggregation
+![philgeps](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_philgeps.gif)
+
+### PSA — population (2020 Census) + poverty (2023 Full-Year)
+![psa](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_psa.gif)
+
+### AQICN — real-time air quality
+![aqicn](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_aqicn.gif)
+
+### Mix-and-match — chain sources into a single brief
+![cross-source](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_combined.gif)
 
 ## Data sources
 
