@@ -16,7 +16,7 @@
 
 One JSON file. One `claude` command. Your agent just answered a question about Philippine government data.
 
-![setup](https://raw.githubusercontent.com/xmpuspus/ph-civic-data-mcp/main/docs/demo_setup.gif)
+![setup](docs/demo_setup.gif)
 
 The recording above isn't scripted — it's `vhs docs/demo_setup.tape`, which spawns Claude Code with `--mcp-config` pointing at this server, and Claude makes real calls to `get_latest_earthquakes` and `get_volcano_status`. The answer it streams back (M1.8 off Zambales at 15:00 PST, Mayon Alert Level 3 intensified unrest) is what PHIVOLCS and WOVODAT returned at the moment of the recording.
 
