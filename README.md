@@ -220,7 +220,15 @@ uv run twine check dist/*
 
 ## What's new in v0.2.0 — six new no-auth sources
 
-Every JSON block below is the **actual** response from each tool, captured by running `uv run python /tmp/live_probe.py` (script at `docs/live_probe_v020.py`) against live public APIs on the release date. No placeholders, no truncation tricks — lists were clipped to fit.
+### Correlation demo: "Why is Metro Manila so hot right now?"
+
+![correlation demo](docs/demo_correlation.gif)
+
+One unscripted `claude -p --mcp-config` call, real MCP stdio transport, live upstream APIs. Claude picks three sources out of the 17 tools — **PAGASA/Open-Meteo 7-day forecast** (v0.1.x), **NASA POWER solar irradiance** (v0.2.0, new), and **Open-Meteo Air Quality** (v0.2.0, new) — then correlates them into a three-sentence answer. The numbers in the response (6.8–7.3 kWh/m²/day irradiance, 30.3–31.8°C daytime temps, PM2.5 24.8 µg/m³, US AQI 91) are exactly what the live endpoints returned at the moment of recording. Tape: `docs/demo_correlation.tape`.
+
+### Per-tool live outputs
+
+Every JSON block below is the **actual** response from each tool, captured by running `uv run python docs/live_probe_v020.py` against live public APIs on the release date. No placeholders, no truncation tricks — lists were clipped to fit.
 
 ### `get_solar_and_climate` — NASA POWER
 
