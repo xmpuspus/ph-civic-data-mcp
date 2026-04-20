@@ -1,12 +1,12 @@
 [project]
 name = "ph-civic-data-mcp"
-version = "0.1.9"
-description = "MCP server for Philippine government data: earthquakes, weather, typhoons, procurement, population, poverty"
+version = "0.2.0"
+description = "MCP server for Philippine civic data: earthquakes (PHIVOLCS+USGS), weather, typhoons (live+historical), procurement, population, poverty, solar/climate (NASA POWER), air quality, MODIS NDVI, World Bank indicators"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Xavier Puspus" }]
-keywords = ["mcp", "philippines", "phivolcs", "pagasa", "philgeps", "psa", "civic-tech"]
+keywords = ["mcp", "philippines", "phivolcs", "pagasa", "philgeps", "psa", "nasa", "modis", "usgs", "ibtracs", "world-bank", "civic-tech"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

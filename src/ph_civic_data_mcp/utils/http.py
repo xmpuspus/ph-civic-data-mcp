@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-USER_AGENT = "ph-civic-data-mcp/0.1.8 (+https://github.com/xmpuspus/ph-civic-data-mcp; civic data research)"
+USER_AGENT = "ph-civic-data-mcp/0.2.0 (+https://github.com/xmpuspus/ph-civic-data-mcp; civic data research)"
 
 MAX_RETRIES = 3
 RETRY_STATUSES = {429, 503, 504}

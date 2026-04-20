@@ -18,6 +18,12 @@ CACHES: dict[str, TTLCache[str, Any]] = {
     "philgeps_data": TTLCache(maxsize=50, ttl=21600),
     "psa_population": TTLCache(maxsize=50, ttl=86400),
     "psa_poverty": TTLCache(maxsize=50, ttl=86400),
+    "nasa_power": TTLCache(maxsize=100, ttl=86400),
+    "open_meteo_aq": TTLCache(maxsize=50, ttl=900),
+    "modis_ndvi": TTLCache(maxsize=50, ttl=86400),
+    "usgs_events": TTLCache(maxsize=20, ttl=600),
+    "ibtracs_tracks": TTLCache(maxsize=20, ttl=86400),
+    "world_bank": TTLCache(maxsize=50, ttl=86400),
 }
 
 
