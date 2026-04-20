@@ -17,10 +17,10 @@ Require uv
 Require claude
 
 Set Shell "zsh"
-Set FontSize 13
-Set Width 1400
-Set Height 720
-Set Padding 18
+Set FontSize 18
+Set Width 1600
+Set Height 900
+Set Padding 22
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 18ms
 Set PlaybackSpeed 1.0
