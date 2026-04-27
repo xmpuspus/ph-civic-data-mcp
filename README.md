@@ -238,6 +238,12 @@ uv run twine check dist/*
 
 ## What's new in v0.3.0 — PH Accountability layer
 
+### Accountability demo: "Audit current PH government infra spending."
+
+![accountability demo](docs/demo_accountability.gif)
+
+One unscripted `claude -p --mcp-config` call exercising four new tools in a single turn against `uvx ph-civic-data-mcp@0.3.0` (live PyPI). Claude resolved Pampanga to canonical PSGC `035400000` (Luzon, Region III), pulled 10 open PhilGEPS construction notices published in the last 24 hours, summarised the cached infra window into 15 projects (7 road/highway, 6 civil works, 1 bridge, 1 school building), and ran `flag_infra_anomalies` against 29 recent PHIVOLCS earthquakes plus PAGASA typhoons — surfacing 4 `hazard_overlap` flags. The agent also caveats those flags honestly ("triggered by weak keyword matches like 'city' rather than substantive hazard correlation") and finishes with the mandatory disclaimer. Tape: `docs/demo_accountability.tape`.
+
 This release adds three tightly-scoped capabilities for civic accountability work, plus one polish tool.
 
 1. **PSGC backbone** (`resolve_ph_location` / `list_admin_units` / `get_location_hierarchy`) — fuzzy free-text place name resolution to the canonical Philippine Standard Geographic Code, full hierarchy walks, and admin-unit browsing. Sourced from the community-mirrored PSA dataset at [psgc.gitlab.io](https://psgc.gitlab.io/api/).

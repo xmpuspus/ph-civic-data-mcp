@@ -17,10 +17,10 @@ Require uv
 Require claude
 
 Set Shell "zsh"
-Set FontSize 18
-Set Width 1600
-Set Height 900
-Set Padding 22
+Set FontSize 22
+Set Width 1920
+Set Height 1080
+Set Padding 28
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 18ms
 Set PlaybackSpeed 1.0
@@ -35,7 +35,8 @@ Show
 Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "Why is Metro Manila so hot right now? Use ph-civic MCP to pull the 7-day forecast for Manila, NASA POWER solar irradiance at lat 14.60 lng 121.00 for the last 14 days, and current air quality. Correlate the three sources in 3 sentences."`
 Sleep 300ms
 Enter
-Sleep 32s
+# Wait for the full Claude response (~30-40s) plus generous read time
+Sleep 50s
 
-# Tail
-Sleep 800ms
+# Hold the final frame so the answer stays on screen
+Sleep 6s

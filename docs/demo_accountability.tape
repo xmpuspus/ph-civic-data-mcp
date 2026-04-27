@@ -18,10 +18,10 @@ Require uv
 Require claude
 
 Set Shell "zsh"
-Set FontSize 18
-Set Width 1600
-Set Height 900
-Set Padding 22
+Set FontSize 22
+Set Width 1920
+Set Height 1080
+Set Padding 28
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 18ms
 Set PlaybackSpeed 1.0
@@ -33,10 +33,12 @@ Sleep 500ms
 Show
 
 # Scene — one civic-accountability question across three new tools
-Type `claude -p --mcp-config ph-mcp-v030.json --strict-mcp-config --permission-mode bypassPermissions "Find DPWH flood-control or construction projects in Pampanga over P50M with no progress data. Use ph-civic MCP: resolve_ph_location for Pampanga, then search_infra_projects, then flag_infra_anomalies. Report the top 3 flagged projects in 4 sentences. No em-dashes."`
+Type `claude -p --mcp-config ph-mcp-v030.json --strict-mcp-config --permission-mode bypassPermissions "Audit current PH government infra spending. Use ph-civic MCP: resolve_ph_location for Pampanga, search_infra_projects (keyword=construction, limit=10), summarize_infra_spending, then flag_infra_anomalies. Report what each tool returned in 4 plain sentences with citations and the disclaimer. No em-dashes."`
 Sleep 300ms
 Enter
-Sleep 38s
+# Wait for the full Claude response (~40s) plus generous read time so the
+# viewer can finish reading before the GIF loops.
+Sleep 60s
 
-# Tail
-Sleep 800ms
+# Hold the final frame so the answer stays on screen
+Sleep 6s
