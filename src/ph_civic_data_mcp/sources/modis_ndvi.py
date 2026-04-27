@@ -33,7 +33,9 @@ def _modis_to_date(s: str) -> str:
     return s
 
 
-async def _fetch_subset(latitude: float, longitude: float, start: str, end: str, band: str) -> dict | None:
+async def _fetch_subset(
+    latitude: float, longitude: float, start: str, end: str, band: str
+) -> dict | None:
     url = f"{ORNL_BASE}/{PRODUCT}/subset"
     params = {
         "latitude": latitude,
@@ -88,7 +90,13 @@ async def get_vegetation_index(
         sd, ed = ed, sd
 
     ckey = cache_key(
-        {"tool": "modis", "lat": latitude, "lng": longitude, "sd": sd.isoformat(), "ed": ed.isoformat()}
+        {
+            "tool": "modis",
+            "lat": latitude,
+            "lng": longitude,
+            "sd": sd.isoformat(),
+            "ed": ed.isoformat(),
+        }
     )
     cache = CACHES["modis_ndvi"]
     if ckey in cache:
@@ -134,7 +142,7 @@ async def get_vegetation_index(
         latitude=latitude,
         longitude=longitude,
         product=PRODUCT,
-        band=f"NDVI+EVI (250m, 16-day composite)",
+        band="NDVI+EVI (250m, 16-day composite)",
         samples=ordered,
         data_retrieved_at=_now(),
     ).model_dump(mode="json")

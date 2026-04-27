@@ -1,12 +1,12 @@
 [project]
 name = "ph-civic-data-mcp"
-version = "0.2.0"
-description = "MCP server for Philippine civic data: earthquakes (PHIVOLCS+USGS), weather, typhoons (live+historical), procurement, population, poverty, solar/climate (NASA POWER), air quality, MODIS NDVI, World Bank indicators"
+version = "0.3.0"
+description = "MCP server for Philippine civic data: PSGC, infra spending accountability, earthquakes, weather, typhoons, procurement, population, poverty, solar/climate, air quality, vegetation"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Xavier Puspus" }]
-keywords = ["mcp", "philippines", "phivolcs", "pagasa", "philgeps", "psa", "nasa", "modis", "usgs", "ibtracs", "world-bank", "civic-tech"]
+keywords = ["mcp", "philippines", "phivolcs", "pagasa", "philgeps", "psa", "psgc", "nasa", "modis", "usgs", "ibtracs", "world-bank", "civic-tech", "accountability"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -54,7 +54,17 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
+markers = [
+    "live: hits real upstream endpoints; opt-in via -m live",
+]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+
+[tool.ruff.lint.per-file-ignores]
+"docs/live_probe_v020.py" = ["E402"]
+"docs/live_probe_v030.py" = ["E402"]
+"docs/live_demo.py" = ["E402"]
+"docs/live_demo_single.py" = ["E402"]
+"docs/live_demo_v030.py" = ["E402"]

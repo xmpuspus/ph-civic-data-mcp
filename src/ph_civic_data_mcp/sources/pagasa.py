@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 from ph_civic_data_mcp.models.weather import DailyForecast, Typhoon, WeatherForecast
 from ph_civic_data_mcp.server import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.geo import city_to_coords, normalize_region
+from ph_civic_data_mcp.utils.geo import city_to_coords, normalize_region, resolve_to_coords
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 PAGASA_API_BASE = "https://tenday.pagasa.dost.gov.ph/api/v1"
@@ -37,8 +37,24 @@ def _now() -> datetime:
 def _wind_direction(degrees: float | None) -> str | None:
     if degrees is None:
         return None
-    dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    dirs = [
+        "N",
+        "NNE",
+        "NE",
+        "ENE",
+        "E",
+        "ESE",
+        "SE",
+        "SSE",
+        "S",
+        "SSW",
+        "SW",
+        "WSW",
+        "W",
+        "WNW",
+        "NW",
+        "NNW",
+    ]
     idx = int((degrees + 11.25) // 22.5) % 16
     return dirs[idx]
 
@@ -72,7 +88,11 @@ async def _open_meteo_forecast(location: str, lat: float, lng: float, days: int)
             iso_date = date_cls.fromisoformat(d)
         except ValueError:
             continue
-        wind_deg = daily.get("winddirection_10m_dominant", [None])[i] if i < len(daily.get("winddirection_10m_dominant", [])) else None
+        wind_deg = (
+            daily.get("winddirection_10m_dominant", [None])[i]
+            if i < len(daily.get("winddirection_10m_dominant", []))
+            else None
+        )
         daily_forecasts.append(
             DailyForecast(
                 date=iso_date,
@@ -81,9 +101,7 @@ async def _open_meteo_forecast(location: str, lat: float, lng: float, days: int)
                 rainfall_mm=_safe_get(daily, "precipitation_sum", i),
                 wind_speed_kph=_safe_get(daily, "windspeed_10m_max", i),
                 wind_direction=_wind_direction(wind_deg),
-                weather_description=_weather_code_description(
-                    _safe_get(daily, "weathercode", i)
-                ),
+                weather_description=_weather_code_description(_safe_get(daily, "weathercode", i)),
             )
         )
 
@@ -223,7 +241,9 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
             cache[key] = result
             return result
 
-    coords = city_to_coords(location)
+    coords = await resolve_to_coords(location)
+    if coords is None:
+        coords = city_to_coords(location)
     if coords is None:
         return {
             "location": location,
@@ -234,6 +254,8 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
             "data_source": "open_meteo",
             "data_retrieved_at": _now().isoformat(),
             "source": "Open-Meteo",
+            "source_url": "https://api.open-meteo.com/v1/forecast",
+            "license": "Open-Meteo CC-BY 4.0",
         }
 
     lat, lng = coords
@@ -275,9 +297,7 @@ async def get_active_typhoons() -> list[dict]:
     text = soup.get_text(" ", strip=True)
     text_norm = re.sub(r"\s+", " ", text)
 
-    if re.search(
-        r"No\s+Active\s+Tropical\s+Cyclone", text_norm, re.IGNORECASE
-    ):
+    if re.search(r"No\s+Active\s+Tropical\s+Cyclone", text_norm, re.IGNORECASE):
         cache[key] = []
         return []
 

@@ -319,9 +319,7 @@ async def _fetch_volcano_alert(bulletin_url: str) -> tuple[int | None, str | Non
     alert_level = int(match.group(1)) if match else None
 
     status = None
-    status_match = re.search(
-        r"ALERT\s*LEVEL[^(]*\(([^)]+)\)", text, re.IGNORECASE
-    )
+    status_match = re.search(r"ALERT\s*LEVEL[^(]*\(([^)]+)\)", text, re.IGNORECASE)
     if status_match:
         status = status_match.group(1).strip()
 

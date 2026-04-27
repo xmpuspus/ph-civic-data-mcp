@@ -1,8 +1,13 @@
-"""Philippine geography helpers: region aliases + city coordinates.
+"""Philippine geography helpers: region aliases + city coordinates + PSGC bridge.
 
 Region normalization accepts common aliases used by PAGASA/PSA (e.g. "Metro Manila" → "NCR",
 "Cordillera" → "CAR"). City coordinate table covers the 50 largest PH cities for Open-Meteo
 lookup when PAGASA token is unavailable.
+
+In v0.3.0 the resolver consults the PSGC source first to canonicalise a free-text place
+name, then looks up coordinates from CITY_COORDS. PSGC does not currently publish lat/lng
+itself, so CITY_COORDS remains the authoritative coordinate table. When network access
+is unavailable (tests) the resolver falls back to the cheap CITY_COORDS-only path.
 """
 
 from __future__ import annotations
@@ -147,6 +152,7 @@ def normalize_region(name: str | None) -> str | None:
 
 
 def city_to_coords(city: str) -> tuple[float, float] | None:
+    """Direct CITY_COORDS lookup (sync, no network). Used as a fallback path."""
     if not city:
         return None
     key = city.strip().lower()
@@ -159,3 +165,33 @@ def city_to_coords(city: str) -> tuple[float, float] | None:
     if city.strip().lower() in CITY_COORDS:
         return CITY_COORDS[city.strip().lower()]
     return None
+
+
+async def resolve_to_coords(query: str) -> tuple[float, float] | None:
+    """Async resolver: try PSGC name canonicalisation, then CITY_COORDS.
+
+    PSGC does not expose coordinates, so this function normalises a query like
+    "Sta. Mesa, Manila" to its canonical PSGC name (e.g. "Manila") and then
+    looks up CITY_COORDS. Network failures degrade silently to the direct
+    CITY_COORDS path.
+    """
+    if not query:
+        return None
+
+    direct = city_to_coords(query)
+    if direct is not None:
+        return direct
+
+    try:
+        from ph_civic_data_mcp.sources.psgc import resolve_ph_location
+
+        resolved = await resolve_ph_location(query)
+    except Exception:
+        return None
+
+    if not isinstance(resolved, dict) or not resolved.get("matched", True):
+        return None
+    name = resolved.get("name")
+    if not name:
+        return None
+    return city_to_coords(name)

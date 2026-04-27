@@ -27,27 +27,32 @@ from live_demo import RENDERERS, _unwrap  # noqa: E402
 
 SUITES: dict[str, list[tuple[str, str, dict, str]]] = {
     "phivolcs": [
-        ("latest earthquakes", "get_latest_earthquakes",
-         {"min_magnitude": 2.0, "limit": 5}, "earthquakes"),
-        ("Mayon volcano status", "get_volcano_status",
-         {"volcano_name": "Mayon"}, "volcano"),
+        (
+            "latest earthquakes",
+            "get_latest_earthquakes",
+            {"min_magnitude": 2.0, "limit": 5},
+            "earthquakes",
+        ),
+        ("Mayon volcano status", "get_volcano_status", {"volcano_name": "Mayon"}, "volcano"),
     ],
     "pagasa": [
-        ("3-day forecast · Cebu City", "get_weather_forecast",
-         {"location": "Cebu City", "days": 3}, "weather"),
+        (
+            "3-day forecast · Cebu City",
+            "get_weather_forecast",
+            {"location": "Cebu City", "days": 3},
+            "weather",
+        ),
         ("active typhoons in PAR", "get_active_typhoons", {}, "typhoons"),
     ],
     "philgeps": [
         ("procurement summary", "get_procurement_summary", {}, "procurement"),
     ],
     "psa": [
-        ("population · NCR (2020 Census)", "get_population_stats",
-         {"region": "NCR"}, "population"),
+        ("population · NCR (2020 Census)", "get_population_stats", {"region": "NCR"}, "population"),
         ("poverty · national (2023)", "get_poverty_stats", {}, "poverty"),
     ],
     "combined": [
-        ("multi-hazard risk · Manila", "assess_area_risk",
-         {"location": "Manila"}, "risk"),
+        ("multi-hazard risk · Manila", "assess_area_risk", {"location": "Manila"}, "risk"),
     ],
 }
 
@@ -80,10 +85,12 @@ async def main(suite_key: str) -> None:
         console.print(f"[green]● connected[/green] · [bold]{len(tools)}[/bold] tools\n")
 
         for idx, (title, tool_name, args, key) in enumerate(suite, 1):
-            console.print(Text.assemble(
-                (f"  [{idx}/{len(suite)}] ", "dim"),
-                (title, "bold"),
-            ))
+            console.print(
+                Text.assemble(
+                    (f"  [{idx}/{len(suite)}] ", "dim"),
+                    (title, "bold"),
+                )
+            )
             with console.status(
                 f"[yellow]→ calling[/yellow] [bold]{tool_name}[/bold]({args})",
                 spinner="dots12",
@@ -93,12 +100,14 @@ async def main(suite_key: str) -> None:
                 elapsed = (time.perf_counter() - t0) * 1000
             data = _unwrap(result)
             console.print(RENDERERS[key](data))
-            console.print(Text.assemble(
-                ("  ● ", "green"),
-                (f"{tool_name}  ", "bold"),
-                (f"{elapsed:.0f} ms", "yellow"),
-                ("  · real MCP protocol · live PyPI", "dim"),
-            ))
+            console.print(
+                Text.assemble(
+                    ("  ● ", "green"),
+                    (f"{tool_name}  ", "bold"),
+                    (f"{elapsed:.0f} ms", "yellow"),
+                    ("  · real MCP protocol · live PyPI", "dim"),
+                )
+            )
             console.print()
             await asyncio.sleep(0.3)
 

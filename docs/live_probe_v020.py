@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from pathlib import Path
 
 from ph_civic_data_mcp.server import _register_tools
@@ -23,7 +22,9 @@ def trunc(obj: object, max_items: int = 5) -> object:
     """Trim large lists for README display."""
     if isinstance(obj, list):
         if len(obj) > max_items:
-            return [trunc(x, max_items) for x in obj[:max_items]] + [f"... ({len(obj) - max_items} more)"]
+            return [trunc(x, max_items) for x in obj[:max_items]] + [
+                f"... ({len(obj) - max_items} more)"
+            ]
         return [trunc(x, max_items) for x in obj]
     if isinstance(obj, dict):
         return {k: trunc(v, max_items) for k, v in obj.items()}
@@ -43,7 +44,9 @@ async def main() -> None:
     tasks = [
         run_one(
             "get_solar_and_climate (Manila, 7 days)",
-            get_solar_and_climate(14.5995, 120.9842, start_date="2026-04-01", end_date="2026-04-07"),
+            get_solar_and_climate(
+                14.5995, 120.9842, start_date="2026-04-01", end_date="2026-04-07"
+            ),
         ),
         run_one("get_air_quality (Manila)", get_air_quality("Manila")),
         run_one(

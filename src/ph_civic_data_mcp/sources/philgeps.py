@@ -11,7 +11,6 @@ Landmine (from validation log):
 
 from __future__ import annotations
 
-import re
 from collections import Counter, defaultdict
 from datetime import date as date_cls, datetime, timezone
 
@@ -21,7 +20,6 @@ from dateutil import parser as date_parser
 from ph_civic_data_mcp.models.procurement import ProcurementRecord
 from ph_civic_data_mcp.server import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.geo import normalize_region
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 PHILGEPS_INDEX_URL = "https://www.philgeps.gov.ph/Indexes/index"
@@ -183,7 +181,11 @@ async def get_procurement_summary(
     for r in records:
         if agency_lc and agency_lc not in r.agency.lower():
             continue
-        if region_lc and region_lc not in (r.region or "").lower() and region_lc not in r.agency.lower():
+        if (
+            region_lc
+            and region_lc not in (r.region or "").lower()
+            and region_lc not in r.agency.lower()
+        ):
             continue
         if year and r.date_published and r.date_published.year != year:
             continue

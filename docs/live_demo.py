@@ -20,11 +20,9 @@ import time
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 from rich import box
-from rich.columns import Columns
 from rich.console import Console, Group
 from rich.json import JSON
 from rich.panel import Panel
-from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
@@ -123,7 +121,13 @@ def render_volcano(data) -> Panel:
     for v in data:
         level = v.get("alert_level")
         lvl_color = {
-            0: "green", 1: "green", 2: "yellow", 3: "red", 4: "red", 5: "red", None: "dim"
+            0: "green",
+            1: "green",
+            2: "yellow",
+            3: "red",
+            4: "red",
+            5: "red",
+            None: "dim",
         }.get(level, "white")
         rows.append(
             Text.assemble(
@@ -146,14 +150,14 @@ def render_weather(data) -> Panel:
     for d in data.get("days", []):
         t.add_row(
             d["date"],
-            f"[yellow]{d.get('temp_min_c','?')} – {d.get('temp_max_c','?')}[/yellow]",
-            f"[green]{d.get('rainfall_mm','?')} mm[/green]",
+            f"[yellow]{d.get('temp_min_c', '?')} – {d.get('temp_max_c', '?')}[/yellow]",
+            f"[green]{d.get('rainfall_mm', '?')} mm[/green]",
             d.get("weather_description") or "",
         )
     source = data.get("data_source", "?")
     return Panel(
         t,
-        title=f"[b]PAGASA · {data.get('location','?')}[/b]  [dim](via {source})[/dim]",
+        title=f"[b]PAGASA · {data.get('location', '?')}[/b]  [dim](via {source})[/dim]",
         border_style="cyan",
     )
 
@@ -169,8 +173,8 @@ def render_typhoons(data) -> Panel:
         Text.assemble(
             ("● ", "bold red"),
             (f"{t['local_name']}  ", "bold"),
-            (f"[{t.get('category','?')}]  ", "yellow"),
-            (f"{t.get('max_winds_kph','?')} kph", "dim"),
+            (f"[{t.get('category', '?')}]  ", "yellow"),
+            (f"{t.get('max_winds_kph', '?')} kph", "dim"),
         )
         for t in data
     ]
@@ -201,12 +205,12 @@ def render_population(data) -> Panel:
     pop = data.get("population")
     fmt = f"{pop:,}" if isinstance(pop, int) else "n/a"
     body = Text.assemble(
-        (f"{data.get('region','?')}\n", "bold cyan"),
-        (f"  population  ", "dim"),
+        (f"{data.get('region', '?')}\n", "bold cyan"),
+        ("  population  ", "dim"),
         (fmt, "bold yellow"),
-        (f"\n  year        ", "dim"),
+        ("\n  year        ", "dim"),
         (str(data.get("year", "?")), "bold"),
-        (f"\n  source      ", "dim"),
+        ("\n  source      ", "dim"),
         ("PSA OpenSTAT · PXWeb (discovered via browse API)", "italic"),
     )
     return Panel(body, title="[b]PSA population[/b]", border_style="cyan")
@@ -215,10 +219,10 @@ def render_population(data) -> Panel:
 def render_poverty(data) -> Panel:
     pct = data.get("poverty_incidence_pct")
     body = Text.assemble(
-        (f"{data.get('region','?')}\n", "bold cyan"),
-        (f"  poverty incidence  ", "dim"),
+        (f"{data.get('region', '?')}\n", "bold cyan"),
+        ("  poverty incidence  ", "dim"),
         (f"{pct}%" if pct is not None else "n/a", "bold yellow"),
-        (f"\n  reference year     ", "dim"),
+        ("\n  reference year     ", "dim"),
         (str(data.get("reference_year", "?")), "bold"),
     )
     return Panel(body, title="[b]PSA poverty (Full-Year)[/b]", border_style="cyan")
@@ -228,18 +232,23 @@ def render_risk(data) -> Panel:
     rows = [
         Text.assemble(
             ("location       ", "dim"),
-            (f"{data.get('location','?')}", "bold"),
+            (f"{data.get('location', '?')}", "bold"),
         ),
         Text.assemble(
             ("earthquake     ", "dim"),
-            (f"{data.get('earthquake_risk_level','?')}", "bold green"),
-            (f"   ({data.get('recent_earthquakes_30d',0)} quakes in last 30 d · max "
-             f"M{data.get('max_magnitude_30d',0)})", "dim"),
+            (f"{data.get('earthquake_risk_level', '?')}", "bold green"),
+            (
+                f"   ({data.get('recent_earthquakes_30d', 0)} quakes in last 30 d · max "
+                f"M{data.get('max_magnitude_30d', 0)})",
+                "dim",
+            ),
         ),
         Text.assemble(
             ("typhoon        ", "dim"),
-            ("Active signal" if data.get("typhoon_signal_active")
-             else "No active signal", "bold green"),
+            (
+                "Active signal" if data.get("typhoon_signal_active") else "No active signal",
+                "bold green",
+            ),
         ),
         Text.assemble(
             ("active alerts  ", "dim"),
