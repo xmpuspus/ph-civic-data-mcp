@@ -24,6 +24,9 @@ CACHES: dict[str, TTLCache[str, Any]] = {
     "usgs_events": TTLCache(maxsize=20, ttl=600),
     "ibtracs_tracks": TTLCache(maxsize=20, ttl=86400),
     "world_bank": TTLCache(maxsize=50, ttl=86400),
+    "psgc_resolve": TTLCache(maxsize=200, ttl=86400),
+    "psgc_browse": TTLCache(maxsize=200, ttl=86400),
+    "infra_projects": TTLCache(maxsize=50, ttl=21600),
 }
 
 

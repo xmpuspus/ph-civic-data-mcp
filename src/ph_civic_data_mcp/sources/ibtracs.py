@@ -175,7 +175,10 @@ async def get_historical_typhoons_ph(year: int | None = None, limit: int = 30) -
 
     results: list[dict] = []
     par_storms = [s for s in storms.values() if s["passed_within_par"]]
-    par_storms.sort(key=lambda s: s.get("start_time_utc") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    par_storms.sort(
+        key=lambda s: s.get("start_time_utc") or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
     for entry in par_storms[:limit]:
         storm = HistoricalTyphoon(
             sid=entry["sid"],

@@ -74,7 +74,13 @@ async def get_solar_and_climate(
         sd, ed = ed, sd
 
     ckey = cache_key(
-        {"tool": "nasa_power", "lat": latitude, "lng": longitude, "sd": sd.isoformat(), "ed": ed.isoformat()}
+        {
+            "tool": "nasa_power",
+            "lat": latitude,
+            "lng": longitude,
+            "sd": sd.isoformat(),
+            "ed": ed.isoformat(),
+        }
     )
     cache = CACHES["nasa_power"]
     if ckey in cache:

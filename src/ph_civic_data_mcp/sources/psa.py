@@ -8,7 +8,6 @@ Landmines (from validation log):
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 
 from ph_civic_data_mcp.models.population import PopulationStats, PovertyStats
@@ -193,7 +192,10 @@ async def get_population_stats(
     query = {
         "query": [
             {"code": "Geographic Location", "selection": {"filter": "item", "values": [geo_val]}},
-            {"code": param_code or "Parameter", "selection": {"filter": "item", "values": [param_val]}},
+            {
+                "code": param_code or "Parameter",
+                "selection": {"filter": "item", "values": [param_val]},
+            },
         ],
         "response": {"format": "json"},
     }
@@ -218,8 +220,7 @@ async def get_population_stats(
         year=2020,
         population=population,
         reference_note=(
-            "PSA 2020 Census of Population and Housing. "
-            "Latest available PH census data."
+            "PSA 2020 Census of Population and Housing. Latest available PH census data."
         ),
     )
     result = {
@@ -324,7 +325,10 @@ async def get_poverty_stats(region: str | None = None) -> dict:
             sub_year_val = sub_yv[-1] if sub_yv else "0"
             sub_query = {
                 "query": [
-                    {"code": "Geolocation", "selection": {"filter": "item", "values": [sub_geo[0]]}},
+                    {
+                        "code": "Geolocation",
+                        "selection": {"filter": "item", "values": [sub_geo[0]]},
+                    },
                     {
                         "code": sub_measure_code,
                         "selection": {"filter": "item", "values": [sub_incidence_val]},

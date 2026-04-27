@@ -36,9 +36,7 @@ async def test_agency_filter_case_insensitive() -> None:
     if not results_all:
         pytest.skip("no procurement notices available")
     target_agency = results_all[0]["agency"]
-    results = await search_procurement(
-        keyword="", agency=target_agency[:10], limit=50
-    )
+    results = await search_procurement(keyword="", agency=target_agency[:10], limit=50)
     assert all(target_agency[:10].lower() in r["agency"].lower() for r in results)
 
 
