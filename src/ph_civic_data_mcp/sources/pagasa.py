@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 from ph_civic_data_mcp.models.weather import DailyForecast, Typhoon, WeatherForecast
 from ph_civic_data_mcp.server import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.geo import city_to_coords, normalize_region, resolve_to_coords
+from ph_civic_data_mcp.utils.geo import city_to_coords, resolve_to_coords
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 PAGASA_API_BASE = "https://tenday.pagasa.dost.gov.ph/api/v1"
@@ -389,6 +389,16 @@ async def get_active_typhoons() -> list[dict]:
 async def get_weather_alerts(region: str | None = None) -> list[dict]:
     """Get active PAGASA weather alerts and advisories.
 
+    The PAGASA homepage embeds alert names ("Heavy Rainfall Warning",
+    "Flood Advisory") in its navigation menu and breadcrumbs as well as
+    in actual active-warning sections. We can reliably detect the
+    "No Active Warnings" state but cannot yet isolate active warnings
+    from chrome text. To avoid fabricated advisories, this tool returns
+    `[]` with a caveat when the page is reachable but the state is
+    ambiguous, and `[]` with the explicit "no active warnings" signal
+    when the homepage says so. For real-time advisories, call
+    `bagong.pagasa.dost.gov.ph` directly.
+
     Args:
         region: e.g. "NCR", "Region VII", "CALABARZON". None returns all.
     """
@@ -412,29 +422,15 @@ async def get_weather_alerts(region: str | None = None) -> list[dict]:
         cache[key] = []
         return []
 
-    alerts: list[dict] = []
-    for pattern, alert_type in [
-        (r"Heavy Rainfall (?:Warning|Advisory)", "Heavy Rainfall"),
-        (r"Thunderstorm (?:Watch|Warning|Advisory)", "Thunderstorm"),
-        (r"Flood (?:Watch|Warning|Advisory)", "Flood"),
-        (r"Gale Warning", "Gale"),
-    ]:
-        for match in re.finditer(pattern, text_norm, re.IGNORECASE):
-            start = max(0, match.start() - 50)
-            end = min(len(text_norm), match.end() + 200)
-            context = text_norm[start:end]
-            alert = {
-                "alert_type": alert_type,
-                "severity": "Advisory",
-                "description": context,
-                "affected_areas": normalize_region(region) or "Multiple regions",
-                "issued_datetime": _now().isoformat(),
-                "valid_until": None,
-                "source": "PAGASA",
-                "data_retrieved_at": _now().isoformat(),
-            }
-            alerts.append(alert)
-            break  # one per category
-
-    cache[key] = alerts
-    return alerts
+    # Conservative path: PAGASA homepage embeds alert names ("Heavy Rainfall
+    # Warning", "Flood Advisory", "Gale Warning") in its nav menu, breadcrumbs,
+    # and footer alongside any genuinely active alerts. Until we have a
+    # structural way to isolate the active section, returning [] is safer
+    # than risking fabricated advisories pulled from chrome text. Audit
+    # 2026-05-01 documented the previous regex matching menu strings.
+    log_stderr(
+        "get_weather_alerts: page reachable but parser cannot reliably "
+        "distinguish active alerts from PAGASA homepage chrome — returning []"
+    )
+    cache[key] = []
+    return []

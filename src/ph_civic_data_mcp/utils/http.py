@@ -11,8 +11,20 @@ from typing import Any
 
 import httpx
 
+# PHIVOLCS has a broken SSL cert chain that we accept on a dedicated client
+# below. Suppress the per-request InsecureRequestWarning so MCP clients that
+# render server stderr don't surface a TLS warning every PHIVOLCS call. This
+# does NOT disable SSL verification anywhere except the explicit
+# PHIVOLCS_CLIENT below.
+try:
+    import urllib3
+
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except Exception:
+    pass
+
 USER_AGENT = (
-    "ph-civic-data-mcp/0.3.0 (+https://github.com/xmpuspus/ph-civic-data-mcp; civic data research)"
+    "ph-civic-data-mcp/0.3.1 (+https://github.com/xmpuspus/ph-civic-data-mcp; civic data research)"
 )
 
 MAX_RETRIES = 3

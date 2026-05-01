@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -20,6 +21,86 @@ from ph_civic_data_mcp.sources.phivolcs import get_latest_earthquakes
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# Geographic chrome that PHIVOLCS/PAGASA include in location strings but that
+# match too broadly against project titles. Compared in lowercase. Curated on
+# audit 2026-05-01 from observed false-positive evidence.
+_HAZARD_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "area",
+        "areas",
+        "barangay",
+        "city",
+        "cities",
+        "central",
+        "coast",
+        "coastal",
+        "deep",
+        "district",
+        "east",
+        "eastern",
+        "island",
+        "islands",
+        "isle",
+        "luzon",
+        "metro",
+        "manila",
+        "mindanao",
+        "mountain",
+        "municipal",
+        "municipality",
+        "north",
+        "northern",
+        "ocean",
+        "philippine",
+        "philippines",
+        "province",
+        "provinces",
+        "region",
+        "regional",
+        "regions",
+        "river",
+        "sea",
+        "south",
+        "southern",
+        "valley",
+        "visayas",
+        "west",
+        "western",
+    }
+)
+
+
+def _proper_noun_tokens(text: str) -> list[str]:
+    """Extract capitalized proper-noun tokens from a location string.
+
+    Returns lowercase tokens of length >=5 that started with an uppercase
+    letter in the original input and are not in the geographic-chrome
+    stoplist. Splits on parens, slashes, hyphens, and whitespace. Strips
+    trailing punctuation.
+
+    >>> _proper_noun_tokens("012 km N 38° E of San Jose De Buan (Samar)")
+    ['samar']
+    """
+    if not text:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in re.split(r"[\s()/\-,]+", text):
+        token = raw.strip(".,;:")
+        if not token or len(token) < 5 or not token[0].isupper():
+            continue
+        # Drop pure-alpha check after stripping punct; allow accented chars by
+        # falling back on isalpha for broad compatibility.
+        if not token.isalpha():
+            continue
+        lc = token.lower()
+        if lc in _HAZARD_STOPWORDS or lc in seen:
+            continue
+        seen.add(lc)
+        out.append(lc)
+    return out
 
 
 def _risk_from_activity(count: int, max_magnitude: float) -> str:
@@ -191,7 +272,12 @@ async def flag_infra_anomalies(
     else:
         typhoons = typhoons_result or []
 
-    # Hazard footprint: lower-cased location keywords from recent quakes + typhoons.
+    # Hazard footprint: proper-noun location tokens from recent quakes + typhoons.
+    # Use only capitalized words from the original (un-lowercased) location string
+    # to keep generic words ("city", "road", "area") out of the keyword set, then
+    # apply an explicit stoplist of common geographic chrome that survives the
+    # capitalization filter. Audit 2026-05-01 found tokens like "city" and
+    # "surigao" matching project titles like "Pasig City" with no real overlap.
     cutoff = retrieved_at - timedelta(days=30)
     hazard_keywords: set[str] = set()
     for quake in earthquakes:
@@ -205,16 +291,14 @@ async def flag_infra_anomalies(
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         if dt >= cutoff:
-            loc = (quake.get("location") or "").lower()
-            for token in loc.replace("(", " ").replace(")", " ").split():
-                if len(token) >= 4 and token.isalpha():
-                    hazard_keywords.add(token)
+            loc = quake.get("location") or ""
+            for token in _proper_noun_tokens(loc):
+                hazard_keywords.add(token)
 
     for typhoon in typhoons:
         for area in (typhoon.get("signal_numbers") or {}).keys():
-            for token in (area or "").lower().split():
-                if len(token) >= 4 and token.isalpha():
-                    hazard_keywords.add(token)
+            for token in _proper_noun_tokens(area or ""):
+                hazard_keywords.add(token)
 
     # Duplicate-title detector by (agency, normalised title).
     seen_titles: defaultdict[tuple[str, str], list[dict]] = defaultdict(list)

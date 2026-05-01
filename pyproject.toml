@@ -1,6 +1,6 @@
 [project]
 name = "ph-civic-data-mcp"
-version = "0.3.0"
+version = "0.3.1"
 description = "MCP server for Philippine civic data: PSGC, infra spending accountability, earthquakes, weather, typhoons, procurement, population, poverty, solar/climate, air quality, vegetation"
 readme = "README.md"
 requires-python = ">=3.11"

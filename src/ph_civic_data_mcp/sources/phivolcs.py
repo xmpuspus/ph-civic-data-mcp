@@ -357,7 +357,13 @@ async def get_volcano_status(volcano_name: str | None = None) -> list[dict]:
                     "status_description": "No recent WOVODAT bulletin found for this volcano",
                     "last_updated": None,
                     "bulletin_url": None,
+                    "caveats": [
+                        "No matching volcano bulletin in WOVODAT. Try 'Mayon', 'Taal', "
+                        "'Kanlaon', 'Bulusan', or omit volcano_name to list all monitored."
+                    ],
                     "source": "PHIVOLCS",
+                    "source_url": "https://wovodat.phivolcs.dost.gov.ph/bulletin/list-of-bulletin",
+                    "license": "Public — PHIVOLCS public bulletin pages",
                     "data_retrieved_at": _now().isoformat(),
                 }
             ]

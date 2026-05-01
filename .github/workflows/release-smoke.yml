@@ -1,0 +1,94 @@
+name: Release smoke test
+
+# Triggered when a vN.M.P tag is pushed. Installs the freshly-published wheel
+# from PyPI in a clean venv, imports it, lists every registered MCP tool, and
+# spot-checks four offline-safe tools to catch packaging or import regressions.
+# This is the smoke layer the audit (2026-05-01) flagged as missing.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to smoke test (e.g. 0.3.1). Leave blank to use the tag."
+        required: false
+        default: ""
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Wait briefly for PyPI to index
+        run: sleep 30
+
+      - name: Install from PyPI in fresh venv
+        run: |
+          python -m venv /tmp/smokeenv
+          source /tmp/smokeenv/bin/activate
+          pip install --upgrade pip
+          pip install ph-civic-data-mcp==${{ steps.ver.outputs.version }}
+          python -c "import ph_civic_data_mcp; print('installed', ph_civic_data_mcp.__version__)"
+
+      - name: Smoke import + tool registration
+        run: |
+          source /tmp/smokeenv/bin/activate
+          python - <<'PY'
+          import asyncio
+          from ph_civic_data_mcp.server import _register_tools, mcp
+          _register_tools()
+          tools = asyncio.run(mcp.list_tools())
+          names = sorted(t.name for t in tools)
+          print("registered_tool_count =", len(names))
+          print("tools:", names)
+          assert len(names) >= 25, f"expected >=25 tools, got {len(names)}"
+          for required in (
+              "get_data_freshness",
+              "flag_infra_anomalies",
+              "resolve_ph_location",
+              "get_weather_alerts",
+          ):
+              assert required in names, f"missing tool: {required}"
+          PY
+
+      - name: Smoke offline tools
+        run: |
+          source /tmp/smokeenv/bin/activate
+          python - <<'PY'
+          import asyncio
+          from ph_civic_data_mcp.server import _register_tools, get_data_freshness
+          _register_tools()
+          fresh = asyncio.run(get_data_freshness())
+          assert fresh["server_version"], "server_version missing"
+          assert isinstance(fresh["sources"], list) and len(fresh["sources"]) >= 12
+          print("get_data_freshness OK", fresh["server_version"])
+          PY
+
+      - name: Smoke geo helpers (regression guard for v0.3.1 fixes)
+        run: |
+          source /tmp/smokeenv/bin/activate
+          python - <<'PY'
+          from ph_civic_data_mcp.utils.geo import city_to_coords
+          assert city_to_coords("City of Manila") is not None, "C/H1 regression: 'City of Manila' must resolve"
+          assert city_to_coords("Sta. Mesa, Manila") is not None, "C/H1 regression: 'Sta. Mesa, Manila' must resolve"
+          assert city_to_coords("Municipality of Tagaytay") is not None
+          print("geo helpers OK")
+          PY

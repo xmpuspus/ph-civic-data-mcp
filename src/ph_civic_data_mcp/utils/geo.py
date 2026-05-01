@@ -152,18 +152,49 @@ def normalize_region(name: str | None) -> str | None:
 
 
 def city_to_coords(city: str) -> tuple[float, float] | None:
-    """Direct CITY_COORDS lookup (sync, no network). Used as a fallback path."""
+    """Direct CITY_COORDS lookup (sync, no network). Used as a fallback path.
+
+    Handles common PSGC name shapes:
+    - "Manila" / "manila"
+    - "Cebu City" / "cebu city"
+    - "City of Manila" (PSGC inversion)
+    - "Municipality of Tagaytay"
+    - "Sta. Mesa, Manila" (multi-segment, last segment wins)
+    """
     if not city:
         return None
-    key = city.strip().lower()
-    key = key.replace(" city", "").strip()
-    if key in CITY_COORDS:
-        return CITY_COORDS[key]
-    key_with_suffix = f"{key} city"
-    if key_with_suffix in CITY_COORDS:
-        return CITY_COORDS[key_with_suffix]
-    if city.strip().lower() in CITY_COORDS:
-        return CITY_COORDS[city.strip().lower()]
+    raw = city.strip().lower()
+
+    # Try the literal lookup first.
+    if raw in CITY_COORDS:
+        return CITY_COORDS[raw]
+
+    # Strip "city of " / "municipality of " prefixes that PSGC uses.
+    for prefix in ("city of ", "municipality of "):
+        if raw.startswith(prefix):
+            stripped = raw[len(prefix) :].strip()
+            if stripped in CITY_COORDS:
+                return CITY_COORDS[stripped]
+            stripped_with_city = f"{stripped} city"
+            if stripped_with_city in CITY_COORDS:
+                return CITY_COORDS[stripped_with_city]
+
+    # Strip trailing " city" suffix and try.
+    no_suffix = raw[:-5] if raw.endswith(" city") else raw
+    if no_suffix in CITY_COORDS:
+        return CITY_COORDS[no_suffix]
+    with_suffix = f"{no_suffix} city"
+    if with_suffix in CITY_COORDS:
+        return CITY_COORDS[with_suffix]
+
+    # Multi-segment: try the last comma-segment, then the first.
+    if "," in raw:
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        for segment in (parts[-1], parts[0]) if parts else ():
+            seg_result = city_to_coords(segment)
+            if seg_result is not None:
+                return seg_result
+
     return None
 
 

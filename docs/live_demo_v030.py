@@ -49,9 +49,7 @@ def _render_resolve(payload: dict) -> Panel:
         table.add_row("match_score", f"{payload.get('match_score', '?')}")
         table.add_row("source_url", str(payload.get("source_url"))[:80])
         table.add_row("license", str(payload.get("license"))[:80])
-    return Panel(
-        table, title="[bold cyan]resolve_ph_location[/bold cyan]", border_style="cyan"
-    )
+    return Panel(table, title="[bold cyan]resolve_ph_location[/bold cyan]", border_style="cyan")
 
 
 def _render_search(payload: list) -> Panel:

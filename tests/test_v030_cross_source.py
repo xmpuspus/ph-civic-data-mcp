@@ -122,7 +122,10 @@ async def test_flag_graceful_on_partial_failure(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_data_freshness_returns_full_catalog():
     result = await get_data_freshness()
-    assert result["server_version"] == "0.3.0"
+    # Pin shape, not exact version: server_version is whatever __init__ exports.
+    from ph_civic_data_mcp import __version__
+
+    assert result["server_version"] == __version__
     assert isinstance(result["sources"], list)
     assert len(result["sources"]) >= 10
     for entry in result["sources"]:

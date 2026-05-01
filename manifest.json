@@ -1,0 +1,59 @@
+{
+  "manifest_version": "0.2",
+  "name": "ph-civic-data",
+  "display_name": "Philippine Civic Data",
+  "version": "0.3.1",
+  "description": "Live PH government data — earthquakes, weather, typhoons, procurement, population, infra-spending accountability, plus NASA / NOAA / World Bank feeds. 25 tools, no API keys required.",
+  "long_description": "Multi-source MCP server for Philippine civic data. Includes PSGC location resolver, PHIVOLCS earthquakes and volcano alerts, PAGASA weather and typhoons, PhilGEPS procurement and infra-spending, PSA population and poverty stats, NASA POWER solar/climate, Open-Meteo air quality, NASA MODIS NDVI, USGS earthquakes, NOAA IBTrACS historical typhoons, and World Bank macro indicators. Cross-source tools surface multi-hazard risk profiles and heuristic infra anomaly indicators (for further review, never as evidence of wrongdoing).",
+  "author": {
+    "name": "Xavier Puspus",
+    "url": "https://github.com/xmpuspus"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/xmpuspus/ph-civic-data-mcp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xmpuspus/ph-civic-data-mcp"
+  },
+  "keywords": [
+    "philippines",
+    "civic-tech",
+    "phivolcs",
+    "pagasa",
+    "philgeps",
+    "psa",
+    "psgc",
+    "accountability",
+    "nasa",
+    "world-bank"
+  ],
+  "icon": "docs/icon.png",
+  "server": {
+    "type": "python",
+    "entry_point": "ph-civic-data-mcp",
+    "mcp_config": {
+      "command": "uvx",
+      "args": ["ph-civic-data-mcp"],
+      "env": {
+        "PAGASA_API_TOKEN": "${user_config.pagasa_api_token}"
+      }
+    }
+  },
+  "user_config": {
+    "pagasa_api_token": {
+      "type": "string",
+      "title": "PAGASA TenDay API Token",
+      "description": "Optional. Without it, weather forecasts use Open-Meteo as a free fallback (covers the same PH cities). Token is gated by formal request to PAGASA — leave blank to skip.",
+      "default": "",
+      "sensitive": true,
+      "required": false
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.11"
+    }
+  }
+}

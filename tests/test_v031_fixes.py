@@ -1,0 +1,165 @@
+"""Regression tests for v0.3.1 fixes.
+
+Each test pins a specific behaviour identified in the 2026-05-01 product audit:
+- C1: get_weather_alerts no longer fabricates advisories from PAGASA chrome
+- C2: flag_infra_anomalies hazard_overlap requires proper-noun keywords
+- H1: city_to_coords handles "City of Manila" / "Sta. Mesa, Manila"
+- H3: search_infra_projects(province=...) expands via _PROVINCE_AGENCY_HINTS
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from ph_civic_data_mcp.sources.cross_source import _proper_noun_tokens
+from ph_civic_data_mcp.sources.infra import _province_search_terms
+from ph_civic_data_mcp.utils.geo import city_to_coords
+
+
+# --- H1: city_to_coords handles PSGC name shapes -----------------------------
+
+
+def test_city_to_coords_handles_city_of_manila_inversion():
+    """PSGC returns 'City of Manila' for 'Manila' queries; the bridge must
+    not silently fail. Audit C/H1 (2026-05-01)."""
+    assert city_to_coords("City of Manila") is not None
+    assert city_to_coords("city of manila") is not None
+    assert city_to_coords("City of Manila") == city_to_coords("Manila")
+
+
+def test_city_to_coords_handles_municipality_of_prefix():
+    assert city_to_coords("Municipality of Tagaytay") is not None
+    assert city_to_coords("Municipality of Tagaytay") == city_to_coords("Tagaytay")
+
+
+def test_city_to_coords_handles_multi_segment_input():
+    """'Sta. Mesa, Manila' is the most natural Manila phrasing and must
+    return Manila coordinates via the last comma-segment."""
+    assert city_to_coords("Sta. Mesa, Manila") is not None
+    assert city_to_coords("Sta. Mesa, Manila") == city_to_coords("Manila")
+
+
+def test_city_to_coords_returns_none_for_unknown():
+    assert city_to_coords("Atlantis") is None
+    assert city_to_coords("") is None
+
+
+# --- C2: hazard_overlap proper-noun gating -----------------------------------
+
+
+def test_proper_noun_tokens_drops_lowercase_chrome():
+    """Words like 'city' that survive only as lowercase must be stoplisted
+    so 'Pasig City' titles don't false-match. Audit C2 (2026-05-01)."""
+    tokens = _proper_noun_tokens("012 km N 38° E of San Jose De Buan (Samar)")
+    # Capitalised proper nouns survive; the rest go.
+    assert "samar" in tokens
+    # 'jose' is shorter than 5 chars; 'buan' is a real PH locality but ditto.
+    assert "city" not in tokens
+    assert "philippines" not in tokens
+
+
+def test_proper_noun_tokens_stoplists_geographic_chrome():
+    """Capitalised but generic words still drop via stoplist."""
+    tokens = _proper_noun_tokens("Eastern Samar Region")
+    # 'eastern' and 'region' are stoplisted; 'samar' survives.
+    assert "samar" in tokens
+    assert "eastern" not in tokens
+    assert "region" not in tokens
+
+
+def test_proper_noun_tokens_handles_empty():
+    assert _proper_noun_tokens("") == []
+    assert _proper_noun_tokens("   ") == []
+
+
+def test_proper_noun_tokens_dedupes():
+    tokens = _proper_noun_tokens("Surigao Surigao Surigao")
+    assert tokens.count("surigao") == 1
+
+
+# --- H3: province expansion --------------------------------------------------
+
+
+def test_province_search_terms_expands_pampanga():
+    """'Pampanga' must include 'region iii' so DPWH agency-named notices
+    matching only the region tag still pass the province filter.
+    Audit H3 (2026-05-01)."""
+    terms = _province_search_terms("Pampanga")
+    assert "pampanga" in terms
+    assert "region iii" in terms
+
+
+def test_province_search_terms_returns_literal_for_unknown():
+    """Unmapped names fall back to a literal lowercase substring match."""
+    assert _province_search_terms("Atlantis") == ["atlantis"]
+
+
+def test_province_search_terms_empty():
+    assert _province_search_terms(None) == []
+    assert _province_search_terms("") == []
+
+
+# --- C1: get_weather_alerts no longer fabricates -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_weather_alerts_returns_list_or_empty(monkeypatch):
+    """The tool must never embed PAGASA navigation chrome as a real alert.
+    Either [] or a list of objects whose descriptions are not the homepage
+    breadcrumb. Audit C1 (2026-05-01)."""
+    from ph_civic_data_mcp.sources import pagasa
+    from ph_civic_data_mcp.utils.cache import CACHES
+
+    # Bypass cache by using a unique region key.
+    CACHES["pagasa_alerts"].clear()
+
+    class _FakeResponse:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.status_code = 200
+
+        def raise_for_status(self) -> None:
+            pass
+
+    nav_chrome = (
+        "<html><body>"
+        "<nav>Heavy Rainfall Warning Thunderstorm Watch Flood Advisory Gale Warning</nav>"
+        "<header>Research and Development Information</header>"
+        "<main>Welcome to PAGASA</main>"
+        "</body></html>"
+    )
+
+    async def _fake_fetch(*_args, **_kwargs):
+        return _FakeResponse(nav_chrome)
+
+    monkeypatch.setattr(pagasa, "fetch_with_retry", _fake_fetch)
+
+    alerts = await pagasa.get_weather_alerts(region="some-unique-region-xyz")
+    # Must be empty: page doesn't say "No Active Warnings" but parser cannot
+    # reliably isolate active alerts, so we return [] rather than fabricate.
+    assert alerts == []
+
+
+@pytest.mark.asyncio
+async def test_get_weather_alerts_respects_no_active_warnings(monkeypatch):
+    from ph_civic_data_mcp.sources import pagasa
+    from ph_civic_data_mcp.utils.cache import CACHES
+
+    CACHES["pagasa_alerts"].clear()
+
+    class _FakeResponse:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.status_code = 200
+
+        def raise_for_status(self) -> None:
+            pass
+
+    page = "<html><body>No Active Warnings</body></html>"
+
+    async def _fake_fetch(*_args, **_kwargs):
+        return _FakeResponse(page)
+
+    monkeypatch.setattr(pagasa, "fetch_with_retry", _fake_fetch)
+    alerts = await pagasa.get_weather_alerts(region="another-unique-region")
+    assert alerts == []

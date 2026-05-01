@@ -53,3 +53,8 @@ Thumbs.db
 
 # uv
 uv.lock.backup
+
+# Local-only audit / scratch artifacts
+tmp/
+.claude/notepad.json
+*.mcpb

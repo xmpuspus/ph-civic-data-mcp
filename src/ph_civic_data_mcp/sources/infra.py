@@ -30,6 +30,108 @@ INFRA_DISCLAIMER = (
     "Statistical indicators derived from public data. Patterns may have legitimate explanations."
 )
 
+# Province -> additional terms that commonly appear in DPWH agency / PhilGEPS
+# region strings. Used by the province filter to widen substring match beyond
+# the literal province name, since notice payloads rarely contain the bare
+# province token. Expanded conservatively from observed PhilGEPS records.
+_PROVINCE_AGENCY_HINTS: dict[str, list[str]] = {
+    "abra": ["region i", "ilocos", "abra"],
+    "agusan del norte": ["region xiii", "caraga", "agusan"],
+    "agusan del sur": ["region xiii", "caraga", "agusan"],
+    "aklan": ["region vi", "western visayas", "aklan"],
+    "albay": ["region v", "bicol", "albay"],
+    "antique": ["region vi", "western visayas", "antique"],
+    "apayao": ["car", "cordillera", "apayao"],
+    "aurora": ["region iii", "central luzon", "aurora"],
+    "basilan": ["barmm", "basilan"],
+    "bataan": ["region iii", "central luzon", "bataan"],
+    "batanes": ["region ii", "cagayan valley", "batanes"],
+    "batangas": ["region iv-a", "calabarzon", "batangas"],
+    "benguet": ["car", "cordillera", "benguet", "baguio"],
+    "biliran": ["region viii", "eastern visayas", "biliran"],
+    "bohol": ["region vii", "central visayas", "bohol"],
+    "bukidnon": ["region x", "northern mindanao", "bukidnon"],
+    "bulacan": ["region iii", "central luzon", "bulacan"],
+    "cagayan": ["region ii", "cagayan valley", "cagayan"],
+    "camarines norte": ["region v", "bicol", "camarines"],
+    "camarines sur": ["region v", "bicol", "camarines"],
+    "camiguin": ["region x", "northern mindanao", "camiguin"],
+    "capiz": ["region vi", "western visayas", "capiz", "roxas"],
+    "catanduanes": ["region v", "bicol", "catanduanes"],
+    "cavite": ["region iv-a", "calabarzon", "cavite"],
+    "cebu": ["region vii", "central visayas", "cebu"],
+    "compostela valley": ["region xi", "davao", "compostela", "davao de oro"],
+    "cotabato": ["region xii", "soccsksargen", "cotabato"],
+    "davao de oro": ["region xi", "davao", "davao de oro", "compostela"],
+    "davao del norte": ["region xi", "davao", "davao"],
+    "davao del sur": ["region xi", "davao", "davao"],
+    "davao occidental": ["region xi", "davao", "davao"],
+    "davao oriental": ["region xi", "davao", "davao"],
+    "dinagat islands": ["region xiii", "caraga", "dinagat"],
+    "eastern samar": ["region viii", "eastern visayas", "samar"],
+    "guimaras": ["region vi", "western visayas", "guimaras"],
+    "ifugao": ["car", "cordillera", "ifugao"],
+    "ilocos norte": ["region i", "ilocos", "ilocos"],
+    "ilocos sur": ["region i", "ilocos", "ilocos"],
+    "iloilo": ["region vi", "western visayas", "iloilo"],
+    "isabela": ["region ii", "cagayan valley", "isabela"],
+    "kalinga": ["car", "cordillera", "kalinga"],
+    "la union": ["region i", "ilocos", "la union"],
+    "laguna": ["region iv-a", "calabarzon", "laguna"],
+    "lanao del norte": ["region x", "northern mindanao", "lanao"],
+    "lanao del sur": ["barmm", "lanao"],
+    "leyte": ["region viii", "eastern visayas", "leyte"],
+    "maguindanao": ["barmm", "maguindanao"],
+    "marinduque": ["mimaropa", "marinduque"],
+    "masbate": ["region v", "bicol", "masbate"],
+    "metro manila": ["ncr", "metro manila", "manila"],
+    "misamis occidental": ["region x", "northern mindanao", "misamis"],
+    "misamis oriental": ["region x", "northern mindanao", "misamis", "cagayan de oro"],
+    "mountain province": ["car", "cordillera", "mountain province"],
+    "ncr": ["ncr", "metro manila"],
+    "negros occidental": ["region vi", "western visayas", "negros", "bacolod"],
+    "negros oriental": ["region vii", "central visayas", "negros", "dumaguete"],
+    "northern samar": ["region viii", "eastern visayas", "samar"],
+    "nueva ecija": ["region iii", "central luzon", "nueva ecija"],
+    "nueva vizcaya": ["region ii", "cagayan valley", "nueva vizcaya"],
+    "occidental mindoro": ["mimaropa", "mindoro"],
+    "oriental mindoro": ["mimaropa", "mindoro"],
+    "palawan": ["mimaropa", "palawan"],
+    "pampanga": ["region iii", "central luzon", "pampanga", "san fernando"],
+    "pangasinan": ["region i", "ilocos", "pangasinan"],
+    "quezon": ["region iv-a", "calabarzon", "quezon"],
+    "quirino": ["region ii", "cagayan valley", "quirino"],
+    "rizal": ["region iv-a", "calabarzon", "rizal", "antipolo"],
+    "romblon": ["mimaropa", "romblon"],
+    "samar": ["region viii", "eastern visayas", "samar"],
+    "sarangani": ["region xii", "soccsksargen", "sarangani"],
+    "siquijor": ["region vii", "central visayas", "siquijor"],
+    "sorsogon": ["region v", "bicol", "sorsogon"],
+    "south cotabato": ["region xii", "soccsksargen", "cotabato"],
+    "southern leyte": ["region viii", "eastern visayas", "leyte"],
+    "sultan kudarat": ["region xii", "soccsksargen", "sultan kudarat"],
+    "sulu": ["barmm", "sulu"],
+    "surigao del norte": ["region xiii", "caraga", "surigao"],
+    "surigao del sur": ["region xiii", "caraga", "surigao"],
+    "tarlac": ["region iii", "central luzon", "tarlac"],
+    "tawi-tawi": ["barmm", "tawi-tawi", "tawi tawi"],
+    "zambales": ["region iii", "central luzon", "zambales", "olongapo"],
+    "zamboanga del norte": ["region ix", "zamboanga peninsula", "zamboanga"],
+    "zamboanga del sur": ["region ix", "zamboanga peninsula", "zamboanga"],
+    "zamboanga sibugay": ["region ix", "zamboanga peninsula", "zamboanga"],
+}
+
+
+def _province_search_terms(province: str | None) -> list[str]:
+    """Expand a province name into all substring terms to match in notice text."""
+    if not province:
+        return []
+    key = province.strip().lower()
+    if key in _PROVINCE_AGENCY_HINTS:
+        return _PROVINCE_AGENCY_HINTS[key]
+    return [key]
+
+
 # Keywords used to identify infra-related procurement notices.
 INFRA_KEYWORDS = [
     "construction",
@@ -203,6 +305,7 @@ async def search_infra_projects(
     kw_lc = (keyword or "").lower().strip() or None
     region_lc = (region or "").lower().strip() or None
     province_lc = (province or "").lower().strip() or None
+    province_terms = _province_search_terms(province)
     status_lc = (status or "").lower().strip() or None
 
     results: list[dict] = []
@@ -223,8 +326,10 @@ async def search_infra_projects(
             and region_lc not in title
         ):
             continue
-        if province_lc and province_lc not in title and province_lc not in agency:
-            continue
+        if province_lc:
+            haystack = f"{title} {agency} {record_region}"
+            if not any(term in haystack for term in province_terms):
+                continue
         if year and date_pub and date_pub.year != year:
             continue
         if status_lc and status_lc not in record_status:

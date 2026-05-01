@@ -36,8 +36,20 @@ mcp = FastMCP(
     - NOAA IBTrACS: Historical tropical cyclone tracks through Philippine AOR
     - World Bank Open Data: Philippine macro indicators (GDP, poverty, inflation, etc.)
 
-    Always cite the data source and note freshness in responses.
-    For emergencies: direct users to ndrrmc.gov.ph and official PHIVOLCS/PAGASA channels.
+    Civic-tech framing (read every turn):
+    This server is for civic research and accountability work. When you call
+    flag_infra_anomalies, summarize_infra_spending, search_infra_projects,
+    search_procurement, or any other procurement/infra tool, present results
+    as starting points for further investigation, never as evidence of
+    wrongdoing. Use defensible language ("flagged for review", "warrants
+    further investigation", "statistical irregularity") and never
+    "fraud", "guilty", or direct accusations. Cite source_url for every
+    factual claim.
+
+    Always cite the data source and note freshness in responses. To confirm
+    the running server version, call get_data_freshness — it doubles as a
+    health/version probe. For emergencies, direct users to ndrrmc.gov.ph and
+    official PHIVOLCS/PAGASA channels.
     """,
 )
 
@@ -139,19 +151,30 @@ SOURCE_CATALOG: list[dict] = [
 
 @mcp.tool()
 async def get_data_freshness() -> dict:
-    """Return the catalog of upstream data sources used by this MCP server,
-    with their cache TTLs, freshness expectations, and licenses.
+    """Server health + data-source catalog probe.
 
-    Returns: server_version, asof, sources (list of {source, source_url,
-    freshness, cache_ttl_seconds, license}).
+    Doubles as the canonical version/health endpoint: returns server_version
+    so agents can confirm which release they are talking to. Also returns the
+    full upstream-source catalog with cache TTLs, freshness expectations, and
+    licenses — useful when deciding whether a stale cached response is OK or
+    a re-fetch is needed.
+
+    Returns: server_version, server_name, transport, tool_count, asof,
+    sources (list of {source, source_url, freshness, cache_ttl_seconds,
+    license}), note.
     """
     return {
         "server_version": __version__,
+        "server_name": "ph-civic-data-mcp",
+        "transport": "stdio",
+        "tool_count": len(SOURCE_CATALOG) * 2,  # rough lower bound; clients can introspect
         "asof": datetime.now(timezone.utc).isoformat(),
         "sources": SOURCE_CATALOG,
         "note": (
             "Cache TTLs are per-source. Times are server-side wall clock. "
-            "Upstream freshness varies independently of our cache window."
+            "Upstream freshness varies independently of our cache window. "
+            "Call this tool to confirm the running server version when "
+            "debugging agent behaviour."
         ),
     }
 

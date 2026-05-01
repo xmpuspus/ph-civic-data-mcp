@@ -4,6 +4,80 @@ All notable changes to `ph-civic-data-mcp` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-05-01
+
+Correctness pass driven by the 2026-05-01 product audit. No new tools; two flagship
+v0.3.0 tools were producing fabricated-feeling output and the PSGC -> coordinate
+bridge silently failed for natural Manila phrasings.
+
+### Fixed
+
+- **`get_weather_alerts` no longer fabricates advisories** (`sources/pagasa.py`).
+  The previous regex matched alert names ("Heavy Rainfall Warning",
+  "Flood Advisory", "Gale Warning") wherever they appeared on the PAGASA
+  homepage including the navigation menu, breadcrumbs, and footer. Until we
+  have a structural way to isolate the active-warnings section, the tool now
+  returns `[]` when the page is reachable but the state is ambiguous, and `[]`
+  with the explicit "No Active Warnings" signal when the homepage says so. The
+  conservative empty matches `assess_area_risk`'s embedding semantics. For
+  real-time advisories, callers should hit `bagong.pagasa.dost.gov.ph`
+  directly.
+- **`flag_infra_anomalies` hazard_overlap stops firing on stoplist tokens**
+  (`sources/cross_source.py`). The previous implementation extracted every
+  alpha word >=4 chars from earthquake `location` strings into the hazard
+  keyword set, so generic words like "city" and "surigao" matched any project
+  title containing them. The new `_proper_noun_tokens` helper requires
+  capitalisation in the source string and applies an explicit stoplist of
+  geographic chrome (`city`, `region`, `province`, `eastern`, ...). The
+  README's accountability demo no longer needs an apologetic caveat about
+  matches on `['city']`.
+- **`city_to_coords` handles "City of Manila" / "Sta. Mesa, Manila"**
+  (`utils/geo.py`). PSGC returns names in the inverted form ("City of Manila",
+  "Municipality of Tagaytay") but the previous resolver only stripped a
+  trailing ` city` suffix. Now strips `city of ` and `municipality of `
+  prefixes and walks comma-segments, so the v0.3.0 `resolve_ph_location` ->
+  `get_weather_forecast` chain works for the most natural Manila inputs.
+- **`search_infra_projects(province=...)` expands via region/agency hints**
+  (`sources/infra.py`). The new `_PROVINCE_AGENCY_HINTS` map widens substring
+  match so "Pampanga" also catches DPWH agency names like "DEPARTMENT OF
+  PUBLIC WORKS AND HIGHWAYS - REGION III". Covers all 81 PH provinces plus
+  NCR.
+- **`get_volcano_status` not-found branch** now emits `source_url`, `license`,
+  and `caveats` for envelope parity with the rest of v0.3.0
+  (`sources/phivolcs.py`).
+- **urllib3 `InsecureRequestWarning` suppressed** for the dedicated
+  `PHIVOLCS_CLIENT` (`utils/http.py`). The verify-disabled scope is unchanged;
+  only the per-request stderr warning is silenced so MCP clients that render
+  server stderr don't surface a TLS warning every call.
+
+### Changed
+
+- **Server `instructions` block** now anchors civic-tech framing every turn:
+  agents are explicitly instructed to use defensible language ("flagged for
+  review", "warrants further investigation"), never accusations, and to cite
+  `source_url` for every factual claim.
+- **`get_data_freshness` doubles as health/version probe.** Docstring updated
+  to document this; response now includes `server_name` and `transport`.
+- **README hero** gains one-click install badges (Cursor / VS Code /
+  Smithery / Claude Code) above the existing badge row.
+- **`manifest.json`** added at repo root for Claude Desktop `.mcpb` packaging.
+  Run `npx @anthropic-ai/mcpb pack` to produce a one-double-click installer.
+- **GitHub Actions workflows** added: `ci.yml` (lint + tests on push/PR) and
+  `release-smoke.yml` (fresh-venv install of the published wheel + tool
+  registration + offline regression checks for the v0.3.1 fixes).
+
+### Tests
+
+- `tests/test_v031_fixes.py` — 13 new regression tests pinning each fix.
+
+### Notes
+
+- DPWH Transparency portal status was re-verified on 2026-05-01: still behind
+  a Cloudflare bot challenge (`HTTP 403, "Just a moment..."`). PhilGEPS
+  remains the source of record for infra-spending tools. The single
+  integration point in `sources/infra.py` is unchanged and ready to swap in
+  when DPWH lifts the block.
+
 ## [0.3.0] — 2026-04-27
 
 ### Added
