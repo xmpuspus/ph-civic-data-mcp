@@ -242,13 +242,41 @@ uv run twine check dist/*
 - **PhilGEPS is not real-time.** Public portal exposes no filterable API; this server operates on the latest ~100 notices with client-side filtering.
 - **Emergencies:** direct users to official channels; this is a research tool.
 
-## What's new in v0.3.0 — PH Accountability layer
+## What's new in v0.3.1 — correctness pass on the v0.3.0 accountability layer
 
-### Accountability demo: "Audit current PH government infra spending."
+### Re-recorded demo: "Sta. Mesa, Manila" + "flood control in Pampanga"
 
 ![accountability demo](docs/demo_accountability.gif)
 
-One unscripted `claude -p --mcp-config` call exercising four new tools in a single turn against `uvx ph-civic-data-mcp@0.3.0` (live PyPI). Claude resolved Pampanga to canonical PSGC `035400000` (Luzon, Region III), pulled 10 open PhilGEPS construction notices published in the last 24 hours, summarised the cached infra window into 15 projects (7 road/highway, 6 civil works, 1 bridge, 1 school building), and ran `flag_infra_anomalies` against 29 recent PHIVOLCS earthquakes plus PAGASA typhoons — surfacing 4 `hazard_overlap` flags. The agent also caveats those flags honestly ("triggered by weak keyword matches like 'city' rather than substantive hazard correlation") and finishes with the mandatory disclaimer. Tape: `docs/demo_accountability.tape`.
+One real `claude -p --mcp-config` call against `uvx ph-civic-data-mcp@0.3.1` (live PyPI), exercising the v0.3.1 fixes in a single turn:
+
+1. `resolve_ph_location("Sta. Mesa, Manila")` resolves cleanly to PSGC "City of Manila" — the v0.3.0 chain silently failed here because `city_to_coords` couldn't invert "City of Manila" back to a coordinate. v0.3.1's `city_to_coords` strips the `city of ` / `municipality of ` prefixes and walks comma-segments.
+2. `search_infra_projects(keyword="flood control", province="Pampanga")` returns matches via the new `_PROVINCE_AGENCY_HINTS` map, which expands "Pampanga" to also catch DPWH agency names like "REGION III" / "Central Luzon" / "San Fernando". v0.3.0 returned a false-empty list because the substring filter only checked title + agency, never the regional aliases. The hint map covers all 81 PH provinces plus NCR.
+3. `flag_infra_anomalies(province="Pampanga")` now emits clean `hazard_overlap` results because the new `_proper_noun_tokens` helper requires capitalisation in the source string and applies an explicit stoplist of geographic chrome (`city`, `region`, `eastern`, `philippines`, ...). v0.3.0 fired on tokens like `['city']` because every alpha word ≥4 chars from earthquake locations went into the keyword set — the README itself had to caveat this in the v0.3.0 demo caption. The apologetic caveat is gone.
+
+Tape: [`docs/demo_accountability.tape`](docs/demo_accountability.tape) (35s VHS recording, mpdecimate post-process). The gif is the actual frames vhs captured against the live PyPI release.
+
+### What changed under the hood
+
+- **`get_weather_alerts` no longer fabricates advisories.** v0.3.0's regex matched alert names ("Heavy Rainfall Warning", "Flood Advisory", "Gale Warning") wherever they appeared on the PAGASA homepage including the navigation menu and breadcrumbs. v0.3.1 returns `[]` when the page is reachable but the active-warning state is ambiguous, and `[]` with the explicit "No Active Warnings" signal when the homepage says so. For real-time advisories, hit `bagong.pagasa.dost.gov.ph` directly.
+- **`get_volcano_status` not-found branch** emits `source_url` + `license` + `caveats` for envelope parity with the rest of v0.3.0.
+- **Server `instructions` block** now anchors civic-tech framing every turn: agents are instructed to use defensible language ("flagged for review"), never accusations, and to cite `source_url` for every factual claim.
+- **`get_data_freshness` doubles as health/version probe.** Response now includes `server_name`, `transport`, and `tool_count`.
+- **urllib3 `InsecureRequestWarning`** suppressed for the dedicated PHIVOLCS client only. Verify-disabled scope is unchanged.
+
+### Distribution
+
+- **One-click install badges** in the header (Cursor, VS Code, Smithery, Claude Code).
+- **Claude Desktop `.mcpb` bundle** attached to the [v0.3.1 GitHub release](https://github.com/xmpuspus/ph-civic-data-mcp/releases/tag/v0.3.1) (2.8 MB). Double-click to install. Optional PAGASA token prompted via `user_config`.
+- **`.github/workflows/ci.yml`** runs ruff + tests on every push and PR (Python 3.11 and 3.12).
+- **`.github/workflows/release-smoke.yml`** fires on every `v*.*.*` tag, installs the freshly-published wheel from PyPI in a fresh venv, and asserts that `len(tools) >= 25` plus offline regression checks for the v0.3.1 geo fixes.
+- **`tests/test_v031_fixes.py`** — 13 new regression tests pinning each fix. 70 tests pass total (57 existing + 13 new).
+
+### DPWH portal status (verified 2026-05-02)
+
+The DPWH transparency portal at `transparency.dpwh.gov.ph` and `api.transparency.dpwh.gov.ph` is still behind a Cloudflare bot challenge (HTTP 403, "Just a moment..."). PhilGEPS remains the source of record for infra-spending tools; the single integration point in `sources/infra.py` is unchanged and ready to swap in when DPWH lifts the block.
+
+## What's new in v0.3.0 — PH Accountability layer
 
 This release adds three tightly-scoped capabilities for civic accountability work, plus one polish tool.
 
