@@ -27,7 +27,6 @@
     "nasa",
     "world-bank"
   ],
-  "icon": "docs/icon.png",
   "server": {
     "type": "python",
     "entry_point": "ph-civic-data-mcp",

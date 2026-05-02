@@ -1,0 +1,54 @@
+# Mirror of .gitignore plus extra paths the bundle never needs.
+# The .mcpb only needs the manifest + a thin set of metadata; the actual
+# server code is fetched via `uvx ph-civic-data-mcp` at install time.
+
+# Build / Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual envs and tool caches
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.coverage
+htmlcov/
+
+# IDE / editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local-only audit / scratch (must never leak into a public artifact)
+tmp/
+.claude/
+.git/
+.github/
+
+# Other bundles in the repo (don't recurse a .mcpb into a .mcpb)
+*.mcpb
+
+# Lockfile / dev metadata not needed at runtime
+uv.lock
+uv.lock.backup
+.python-version
+
+# Demo recording sources (already shipped via README on GitHub)
+docs/*.tape
+docs/live_demo.py
+docs/live_demo_single.py
+docs/live_demo_v030.py
+docs/live_probe_v020.py
+docs/live_probe_v030.py
