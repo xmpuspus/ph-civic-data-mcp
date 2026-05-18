@@ -2,18 +2,18 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.xmpuspus/ph-civic-data-mcp",
   "title": "PH Civic Data",
-  "description": "PH civic data + accountability layer (PSGC, infra spending, anomaly indicators). 25 tools.",
+  "description": "PH civic data + auto-stitched area profiles (PSGC, PSA economy, infra, hazards). 29 tools.",
   "repository": {
     "url": "https://github.com/xmpuspus/ph-civic-data-mcp",
     "source": "github"
   },
-  "version": "0.3.1",
+  "version": "0.4.0",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "ph-civic-data-mcp",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

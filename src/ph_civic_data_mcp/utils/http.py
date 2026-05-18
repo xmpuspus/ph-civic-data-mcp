@@ -24,7 +24,7 @@ except Exception:
     pass
 
 USER_AGENT = (
-    "ph-civic-data-mcp/0.3.1 (+https://github.com/xmpuspus/ph-civic-data-mcp; civic data research)"
+    "ph-civic-data-mcp/0.4.0 (+https://github.com/xmpuspus/ph-civic-data-mcp; civic data research)"
 )
 
 MAX_RETRIES = 3

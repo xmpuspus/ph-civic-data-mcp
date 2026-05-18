@@ -11,6 +11,13 @@ from ph_civic_data_mcp.sources.open_meteo_aq import get_air_quality
 from ph_civic_data_mcp.sources.usgs import get_usgs_earthquakes_ph
 from ph_civic_data_mcp.sources.world_bank import get_world_bank_indicator
 
+# Entirely external-API smoke tests (NASA POWER/MODIS, Open-Meteo, USGS,
+# IBTrACS, World Bank). Like tests/test_v030_live.py, mark the module `live`
+# so CI's `-m "not live"` excludes it: NASA/ORNL and Open-Meteo intermittently
+# return empty/502 and `pytest -x` would red the whole run on an upstream
+# outage unrelated to this codebase. Run locally or via `-m live`.
+pytestmark = pytest.mark.live
+
 
 @pytest.mark.asyncio
 async def test_nasa_power_returns_manila_week() -> None:

@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "ph-civic-data",
   "display_name": "Philippine Civic Data",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Live PH government data — earthquakes, weather, typhoons, procurement, population, infra-spending accountability, plus NASA / NOAA / World Bank feeds. 25 tools, no API keys required.",
   "long_description": "Multi-source MCP server for Philippine civic data. Includes PSGC location resolver, PHIVOLCS earthquakes and volcano alerts, PAGASA weather and typhoons, PhilGEPS procurement and infra-spending, PSA population and poverty stats, NASA POWER solar/climate, Open-Meteo air quality, NASA MODIS NDVI, USGS earthquakes, NOAA IBTrACS historical typhoons, and World Bank macro indicators. Cross-source tools surface multi-hazard risk profiles and heuristic infra anomaly indicators (for further review, never as evidence of wrongdoing).",
   "author": {

@@ -16,7 +16,7 @@
 [![Install via Smithery](https://img.shields.io/badge/Install%20via-Smithery-blueviolet)](https://smithery.ai/server/ph-civic-data-mcp)
 [![Add via Claude Code](https://img.shields.io/badge/Add%20via-Claude%20Code-D97757?logo=anthropic)](https://code.claude.com/docs/en/mcp)
 
-`ph-civic-data-mcp` is a zero-cost, `stdio`-transport MCP server. **v0.3.1** is a correctness pass on the v0.3.0 accountability layer: the `get_weather_alerts` tool no longer fabricates advisories from PAGASA navigation chrome, `flag_infra_anomalies` no longer fires on stoplist tokens like "city", the PSGC -> coordinate bridge handles "City of Manila" / "Sta. Mesa, Manila", and `search_infra_projects(province=...)` expands across DPWH agency aliases for all 81 PH provinces. **v0.3.0** added the PH Accountability layer: PSGC location resolver, infra spending search, and one cross-source heuristic that flags procurement notices for further review by cross-referencing PHIVOLCS earthquakes and PAGASA typhoon footprints. **v0.2.0** added six no-auth scientific + open-data sources (NASA POWER, Open-Meteo Air Quality, NASA MODIS, USGS FDSN, NOAA IBTrACS, World Bank Open Data) on top of the original four Philippine government feeds (PHIVOLCS, PAGASA, PhilGEPS, PSA). 25 tools total. Boots and runs with zero API keys.
+`ph-civic-data-mcp` is a zero-cost, `stdio`-transport MCP server. **v0.4.0** expands the PSA OpenSTAT layer beyond population/poverty into the live economy — `get_inflation_stats` (regional CPI), `get_labor_stats` (Labor Force Survey), `get_health_indicators` — and adds the auto-stitch differentiator `get_area_profile`: name a place once and get the resolved PSGC spine plus demographics, economy, procurement, hazard, and weather composed in a single agent turn, with infrastructure notices already normalized per 100k residents. **v0.3.1** was a correctness pass on the v0.3.0 accountability layer (no fabricated PAGASA advisories, stoplisted hazard tokens, "City of Manila" coordinate bridge, province/agency-alias infra search). **v0.3.0** added the PH Accountability layer: PSGC location resolver, infra spending search, and one cross-source heuristic that flags procurement notices for further review by cross-referencing PHIVOLCS earthquakes and PAGASA typhoon footprints. **v0.2.0** added six no-auth scientific + open-data sources (NASA POWER, Open-Meteo Air Quality, NASA MODIS, USGS FDSN, NOAA IBTrACS, World Bank Open Data) on top of the original four Philippine government feeds (PHIVOLCS, PAGASA, PhilGEPS, PSA). 29 tools total. Boots and runs with zero API keys.
 
 All data sourced from public records (PSGC, PHIVOLCS, PAGASA, PhilGEPS, PSA, and open scientific feeds). Heuristic indicators are statistical only; specific allegations, if any, require independent investigation and corroboration.
 
@@ -125,6 +125,10 @@ After setup, ask your agent:
 - _"Are there any infra projects whose locations overlap a recent earthquake or typhoon footprint? Flag them for review."_ **(v0.3.0)**
 - _"Walk the location hierarchy from PSGC code 072217000 up to its region."_ **(v0.3.0)**
 - _"What's the cache TTL and freshness of every data source this server uses?"_ **(v0.3.0)**
+- _"What's the latest inflation rate in Central Visayas vs nationally?"_ **(v0.4.0)**
+- _"What are the current employment and underemployment rates from the PSA Labor Force Survey?"_ **(v0.4.0)**
+- _"What's the maternal mortality ratio and total fertility rate for the Philippines?"_ **(v0.4.0)**
+- _"Give me the full civic profile of Cebu — population, poverty, inflation, jobs, procurement activity, hazards, and weather, in one shot."_ **(v0.4.0)**
 
 ## Per-source demos
 
@@ -143,6 +147,12 @@ After setup, ask your agent:
 ### Cross-source — parallel multi-hazard risk profile
 ![cross-source](docs/demo_combined.gif)
 
+### PSA economy + auto-stitch — inflation, labor, health, one-call area profile *(v0.4.0)*
+![v0.4.0 per-source](docs/demo_v040.gif)
+
+The LinkedIn showcase — one question correlated across five sources through
+`get_area_profile` — is under [What's new in v0.4.0](#whats-new-in-v040--psa-economy--the-auto-stitch-context-layer).
+
 ### How the demos are produced
 
 `docs/live_demo.py` and `docs/live_demo_single.py` open an MCP `StdioTransport` pointing at `uvx ph-civic-data-mcp` (which resolves to this PyPI release), call the tools, and render the responses with [Rich](https://github.com/Textualize/rich) (panels, tables, syntax-highlighted JSON, live spinners). [`vhs`](https://github.com/charmbracelet/vhs) drives a real terminal and records the session. Tapes are committed under `docs/*.tape`.
@@ -155,7 +165,7 @@ After setup, ask your agent:
 | PAGASA | 10-day weather, active typhoons, alerts | Hourly | Optional `PAGASA_API_TOKEN` |
 | Open-Meteo | Weather fallback when PAGASA token absent | Hourly | None |
 | PhilGEPS | Government procurement notices (latest ~100) | 6 h (cached) | None |
-| PSA OpenSTAT | Population (2020 Census), poverty (2023) | Periodic | None |
+| PSA OpenSTAT | Population (2020 Census), poverty (2023), CPI/inflation, Labor Force Survey, health indicators | Per-table vintage | None |
 | **NASA POWER** *(v0.2.0)* | Daily solar irradiance + temp/precip/wind, any lat/lng | Daily | None |
 | **Open-Meteo Air Quality** *(v0.2.0)* | PM2.5/PM10/NO2/SO2/O3/CO + AQI | Hourly | None |
 | **NASA MODIS via ORNL DAAC** *(v0.2.0)* | NDVI/EVI vegetation indices (250m, 16-day composites) | Weekly | None |
@@ -164,6 +174,8 @@ After setup, ask your agent:
 | **World Bank Open Data** *(v0.2.0)* | Philippine macro indicators (GDP, poverty ratio, inflation, etc.) | Annual | None |
 | **PSGC** *(v0.3.0)* | Philippine Standard Geographic Code via [psgc.gitlab.io](https://psgc.gitlab.io/api/) (PSA dataset mirror) | When PSA publishes a new version | None |
 | **PH Infra (PhilGEPS-backed)** *(v0.3.0)* | Filtered infra notices for construction / road / bridge / flood control | 6 h cache window | None |
+| **PSA economy** *(v0.4.0)* | CPI/inflation (regional), Labor Force Survey rates, health indicators via PXWeb browse-discovery | Per-table vintage (read from each table) | None |
+| **Area profile (auto-stitch)** *(v0.4.0)* | One-call composition: PSGC + PSA + PhilGEPS + PHIVOLCS + PAGASA, with per-capita normalization | Live per request; 1 h cache | None |
 
 ## All tools
 
@@ -194,6 +206,10 @@ After setup, ask your agent:
 | **`summarize_infra_spending`** *(v0.3.0)* | Aggregate infra notice stats by category, region, agency | `region`, `year`, `funding_source` |
 | **`flag_infra_anomalies`** *(v0.3.0)* | Heuristic indicators for further review (high_cost_no_progress, hazard_overlap, duplicate_titles_same_agency) | `region`, `province`, `min_cost_php` |
 | **`get_data_freshness`** *(v0.3.0)* | Catalog of every upstream source with TTL, freshness, license | (none) |
+| **`get_inflation_stats`** *(v0.4.0)* | Headline year-on-year CPI inflation, national or regional, latest published month | `area` |
+| **`get_labor_stats`** *(v0.4.0)* | PSA Labor Force Survey key rates (LFPR, employment, unemployment, underemployment) | `region` |
+| **`get_health_indicators`** *(v0.4.0)* | National health indicators (maternal mortality, total fertility rate, browse-discovered set) | `indicator` |
+| **`get_area_profile`** *(v0.4.0)* | One-call auto-stitch: resolved PSGC + demographics + economy + procurement + hazard + weather, per-capita normalized | `location` |
 
 ## Environment variables
 
@@ -241,6 +257,98 @@ uv run twine check dist/*
 - **PAGASA token is gated.** Non-government users may be denied. Open-Meteo fallback removes this as a hard dependency.
 - **PhilGEPS is not real-time.** Public portal exposes no filterable API; this server operates on the latest ~100 notices with client-side filtering.
 - **Emergencies:** direct users to official channels; this is a research tool.
+
+## What's new in v0.4.0 — PSA economy + the auto-stitch context layer
+
+v0.4.0 does two things: it takes the PSA OpenSTAT layer past population/poverty
+into the live economy, and it adds the differentiator the project was building
+toward — a single tool that hands the agent correlated multi-source context in
+one turn instead of making it orchestrate eight calls.
+
+### New PSA economy tools
+
+All three use the same browse-discovery convention as the existing
+population/poverty tools: only the stable subject path is fixed, the `.px`
+table is discovered by text (never a hardcoded id), and the data vintage is
+read from each table's own time dimension — never from the response
+timestamp, which is just server wall-clock.
+
+- **`get_inflation_stats(area)`** — headline year-on-year CPI inflation, 2018
+  base, national or by region. PSA splits long series into era tables with
+  near-identical titles (a backcasted 1958–1994 table sits right next to the
+  current one); the resolver picks the table whose time dimension reaches the
+  most recent year, so you always get the current series. Reports the exact
+  reference period because PSA publishes monthly with a lag.
+- **`get_labor_stats()`** — Labor Force Survey key rates: labor-force
+  participation, employment, unemployment, underemployment. National (the PSA
+  key-indicator table has no regional split; a `region` argument is recorded
+  as an explicit caveat rather than silently ignored).
+- **`get_health_indicators(indicator)`** — national health indicators
+  (maternal mortality ratio, total fertility rate) with the full available set
+  browse-discovered, not hardcoded.
+
+### The auto-stitch layer: `get_area_profile(location)`
+
+Name a place once. The tool resolves it to its PSGC code, then fans out in
+parallel and returns demographics, economy, procurement activity, multi-hazard
+risk, and the short-range weather outlook in one envelope — and it does the
+cross-source normalization the agent would otherwise have to do itself
+(infrastructure notices per 100k residents, each block carrying its own
+reference period). One round-trip replaces about eight, and the agent never
+has to know that population keys on region while procurement keys on province
+and hazard is PHIVOLCS+PAGASA.
+
+### The showcase: one question, five sources, a defensible read
+
+![v0.4.0 hero](docs/demo_v040_hero.gif)
+
+This is a real `claude -p --mcp-config` turn (tape: `docs/demo_v040_hero.tape`).
+One question:
+
+> _"Which region's recent government infra-notice count per 100k looks least
+> proportionate to its economic need — weigh poverty, regional inflation, and
+> population — and note hazard exposure. Flagged-for-review language only."_
+
+The agent calls `get_area_profile` twice — Eastern Visayas and Central Visayas
+— each composing PSGC + PSA + PhilGEPS + PHIVOLCS + PAGASA, then reasons across
+the two. Values are what the live sources returned at capture (2026-05-18):
+
+- **Eastern Visayas**: poverty 20.3% (2023), population 4.55M, regional
+  inflation 8.5% (2026 Apr), earthquake risk Low, 0 infra notices in the
+  current PhilGEPS window.
+- **Central Visayas**: poverty 12.3% (2023), population 8.08M, regional
+  inflation 10.8% (2026 Apr), earthquake risk Low, 0 infra notices.
+- **The read it produced**: Eastern Visayas _warrants closer review as the more
+  underserved of the two_ — higher poverty against a smaller population, yet the
+  same zero-notice procurement footprint as the wealthier, faster-inflating
+  Central Visayas; comparable (low) hazard exposure, so the flat footprint is
+  not explained by a disaster driver. "An absence that warrants further
+  investigation … not a finding of wrongdoing", with `source_url` and the
+  public-data disclaimer attached.
+
+That conclusion is impossible from any single feed: it needs census population
++ PSA poverty + PSA regional inflation (the v0.4.0 economic denominator) +
+PhilGEPS procurement + PHIVOLCS/PAGASA hazard, normalized per capita. The new
+auto-stitch layer makes the agent's orchestration invisible — one question, one
+defensible answer.
+
+### Per-source demo
+
+![v0.4.0 per-source](docs/demo_v040.gif)
+
+`docs/live_demo_v040.py` over the real MCP stdio protocol (tape:
+`docs/demo_v040_sources.tape`): national + regional headline inflation, Labor
+Force Survey rates, national health indicators, and the one-call
+`get_area_profile`. Every panel is live tool JSON from the server.
+
+### Tests
+
+`tests/test_psa_expansion.py` (8) and `tests/test_autostitch.py` (4) — live
+integration tests mirroring `tests/test_phivolcs.py`, covering real-figure
+sanity bands, the national-only labor caveat, graceful unknown-area/unknown
+-indicator paths, the unresolved-location degradation path, and per-capita
+arithmetic consistency. The stale v0.3.0 `server_version` assertion in
+`tests/test_v030_live.py` was repinned to the package `__version__`.
 
 ## What's new in v0.3.1 — correctness pass on the v0.3.0 accountability layer
 
@@ -649,6 +757,22 @@ $ get_world_bank_indicator(indicator="gdp", per_page=10)
   "source": "World Bank Open Data"
 }
 ```
+
+## Changelog
+
+Full detail in [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog format). Version
+summary:
+
+| Version | Date | Highlights |
+|---|---|---|
+| **0.4.0** | 2026-05-18 | PSA economy expansion (`get_inflation_stats` regional CPI, `get_labor_stats` LFS rates, `get_health_indicators`) + the auto-stitch `get_area_profile` one-call cross-source context layer with per-capita normalization. 25 → 29 tools. Browse-discovery preserved (no hardcoded `.px`); per-table vintage. |
+| 0.3.1 | 2026-05-01 | Correctness pass: no fabricated PAGASA advisories, stoplisted hazard tokens, "City of Manila" coordinate bridge, province/agency-alias infra search. |
+| 0.3.0 | 2026-04-27 | PH Accountability layer: PSGC resolver, infra spending search, cross-source anomaly indicators. 17 → 25 tools. |
+| 0.2.0 | 2026-04-19 | Six no-auth scientific/open-data sources (NASA POWER, Open-Meteo AQ, MODIS, USGS, IBTrACS, World Bank). 11 → 17 tools. |
+| 0.1.x | — | Initial release: PHIVOLCS, PAGASA, PhilGEPS, PSA. 11 tools. |
+
+Per-version detail is also inlined above under each **What's new in vX.Y.Z**
+section.
 
 ## Roadmap
 

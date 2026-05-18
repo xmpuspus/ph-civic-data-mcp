@@ -13,15 +13,19 @@ from ph_civic_data_mcp.models.infra import InfraProject, InfraSpendingSummary
 from ph_civic_data_mcp.models.location import PSGCHierarchy, PSGCHierarchyLevel, PSGCRecord
 from ph_civic_data_mcp.models.population import PopulationStats, PovertyStats
 from ph_civic_data_mcp.models.procurement import ProcurementRecord
+from ph_civic_data_mcp.models.psa import HealthIndicator, InflationStats, LaborStats
 from ph_civic_data_mcp.models.weather import DailyForecast, Typhoon, WeatherForecast
 
 __all__ = [
     "AirQuality",
     "DailyForecast",
     "Earthquake",
+    "HealthIndicator",
     "HistoricalTyphoon",
+    "InflationStats",
     "InfraProject",
     "InfraSpendingSummary",
+    "LaborStats",
     "PSGCHierarchy",
     "PSGCHierarchyLevel",
     "PSGCRecord",

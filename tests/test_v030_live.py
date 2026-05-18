@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from ph_civic_data_mcp import __version__
 from ph_civic_data_mcp.server import get_data_freshness
 from ph_civic_data_mcp.sources import psgc as psgc_module
 from ph_civic_data_mcp.sources import infra as infra_module
@@ -91,6 +92,6 @@ async def test_live_flag_anomalies_returns_disclaimer_and_metadata():
 @pytest.mark.asyncio
 async def test_live_data_freshness():
     freshness = await get_data_freshness()
-    assert freshness["server_version"] == "0.3.0"
+    assert freshness["server_version"] == __version__
     assert isinstance(freshness["sources"], list)
     assert any(s["source"] == "PSGC" for s in freshness["sources"])
