@@ -13,9 +13,14 @@ from ph_civic_data_mcp.sources.pagasa import (
 )
 
 
+@pytest.mark.live
 @pytest.mark.asyncio
 async def test_weather_forecast_manila_open_meteo() -> None:
-    """Fallback path must work without token."""
+    """Fallback path must work without token.
+
+    `live`-marked: depends on api.open-meteo.com which intermittently 502s;
+    CI's `-m "not live"` excludes it so an upstream blip can't red the run.
+    """
     os.environ.pop("PAGASA_API_TOKEN", None)
     result = await get_weather_forecast("Manila", days=3)
     assert result["location"] == "Manila"
@@ -33,8 +38,10 @@ async def test_weather_forecast_unknown_city_is_graceful() -> None:
     assert "caveats" in result
 
 
+@pytest.mark.live
 @pytest.mark.asyncio
 async def test_weather_forecast_cebu() -> None:
+    # live-marked: same Open-Meteo dependency as the Manila forecast test.
     result = await get_weather_forecast("Cebu City", days=2)
     assert len(result["days"]) >= 1
 
