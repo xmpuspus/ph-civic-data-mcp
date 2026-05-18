@@ -4,6 +4,80 @@ All notable changes to `ph-civic-data-mcp` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-05-18
+
+Additive minor on the shipped public package. Expands the PSA OpenSTAT layer
+into the live economy and adds the cross-source auto-stitch context tool. No
+existing tool changed; the 25 v0.3.1 tools are retained. Tool count 25 -> 29.
+
+### Added
+
+- **PSA economy tools** (`sources/psa.py`), all via the existing
+  browse-discovery convention (stable subject path fixed, `.px` leaf
+  discovered by text predicate — never a hardcoded table id):
+  - `get_inflation_stats(area)` — headline year-on-year CPI inflation
+    (2018-based), national or by region. Among predicate-matching tables it
+    selects the one whose time dimension reaches the most recent year, so the
+    current series is returned instead of a backcasted era table. Reports the
+    exact published reference period (PSA publishes monthly with a lag) and
+    treats the literal `".."` missing-value sentinel as null.
+  - `get_labor_stats(region)` — Labor Force Survey key rates (labor-force
+    participation, employment, unemployment, underemployment). National only;
+    a `region` argument is recorded as an explicit caveat.
+  - `get_health_indicators(indicator)` — national health indicators
+    (maternal mortality ratio, total fertility rate); full available set is
+    browse-discovered.
+- **Auto-stitch context layer** (`sources/autostitch.py::get_area_profile`):
+  resolves a place to its PSGC code once, then composes demographics,
+  economy, procurement, multi-hazard risk, and weather in a single agent turn
+  via `asyncio.gather` (the proven `cross_source.py` pattern). Adds derived
+  cross-source normalization (infra notices per 100k population). Each block
+  carries its own reference period; failed upstreams are named in `caveats`
+  and the rest of the profile still returns; ships the public-data disclaimer.
+- **Models** (`models/psa.py`): `InflationStats`, `LaborStats`,
+  `HealthIndicator` (internal validation; returned as `model_dump`).
+- **Caches** (`utils/cache.py`): `psa_prices`, `psa_labor`, `psa_health` (24h),
+  `psa_browse` (24h), `area_profile` (1h).
+- **Tests**: `tests/test_psa_expansion.py` (8), `tests/test_autostitch.py` (4),
+  live integration style mirroring `tests/test_phivolcs.py`.
+- **SOURCE_CATALOG** rows for the PSA economy expansion and the area-profile
+  composition; PSA freshness note rewritten as per-table vintage.
+- **Demos** (real recordings): `docs/live_demo_v040.py` +
+  `docs/demo_v040_sources.tape` -> `docs/demo_v040.gif` (per-source Rich tour
+  over real MCP stdio); `docs/demo_v040_hero.tape` -> `docs/demo_v040_hero.gif`
+  (one real `claude -p` turn comparing Eastern vs Central Visayas via two
+  `get_area_profile` calls and correlating them into a flagged-for-review read).
+  README gains a dedicated `## Changelog` section.
+
+### Changed
+
+- `server.py` registers the new `autostitch` module; `SOURCE_CATALOG` PSA row
+  no longer claims a blanket vintage.
+- `server.json` / `pyproject.toml` descriptions updated for v0.4.0 (server.json
+  kept under the MCP Registry 100-character limit); version bumped to 0.4.0 in
+  `__init__.py`, `pyproject.toml`, `server.json`, `manifest.json`, and the
+  HTTP `User-Agent`.
+
+### Fixed
+
+- `tests/test_v030_live.py::test_live_data_freshness` asserted a hardcoded
+  `server_version == "0.3.0"` and had been red since v0.3.1; repinned to the
+  package `__version__` so it tracks releases.
+- `get_inflation_stats` / `get_labor_stats` error envelopes now include their
+  value keys as `null` so success and error responses share one shape.
+
+### Notes
+
+- PSA PXWeb verified live 2026-05-18 across all 23 subject databases: the API
+  path is open and zero-key (the `/database` website is Cloudflare-walled);
+  full-cube `filter:"all"` requests are WAF-403'd, so every query selects
+  explicit item codes and stays well under the per-query cell cap; the
+  response `updated` field is server generation time, not data recency.
+- One pre-existing, out-of-scope test failure remains:
+  `test_modis_ndvi_returns_composites` depends on NASA/ORNL MODIS
+  availability and intermittently returns zero composites. It is unrelated to
+  this change and fails identically on `main`.
+
 ## [0.3.1] — 2026-05-01
 
 Correctness pass driven by the 2026-05-01 product audit. No new tools; two flagship

@@ -100,9 +100,23 @@ SOURCE_CATALOG: list[dict] = [
     {
         "source": "PSA OpenSTAT",
         "source_url": "https://openstat.psa.gov.ph/PXWeb/api/v1/en/",
-        "freshness": "Population: 2020 Census. Poverty: 2023.",
+        "freshness": (
+            "Per-table vintage. Population: 2020 Census. Poverty: 2023. "
+            "CPI/inflation: latest published month (lagged). Labor Force "
+            "Survey: latest published quarter. Health (1D): per-indicator."
+        ),
         "cache_ttl_seconds": 86400,
         "license": "PSA Open Data terms",
+    },
+    {
+        "source": "Area profile (auto-stitch)",
+        "source_url": "https://openstat.psa.gov.ph/PXWeb/api/v1/en/",
+        "freshness": (
+            "Composed live from PSGC + PSA + PhilGEPS + PHIVOLCS + PAGASA; "
+            "each block carries its own reference period"
+        ),
+        "cache_ttl_seconds": 3600,
+        "license": "Public — PSA OpenSTAT, PSGC, PhilGEPS, PHIVOLCS, PAGASA",
     },
     {
         "source": "NASA POWER",
@@ -188,6 +202,7 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import psgc  # noqa: F401
     from ph_civic_data_mcp.sources import infra  # noqa: F401
     from ph_civic_data_mcp.sources import cross_source  # noqa: F401
+    from ph_civic_data_mcp.sources import autostitch  # noqa: F401
     from ph_civic_data_mcp.sources import nasa_power  # noqa: F401
     from ph_civic_data_mcp.sources import open_meteo_aq  # noqa: F401
     from ph_civic_data_mcp.sources import modis_ndvi  # noqa: F401

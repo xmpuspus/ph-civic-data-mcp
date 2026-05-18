@@ -1,7 +1,7 @@
 [project]
 name = "ph-civic-data-mcp"
-version = "0.3.1"
-description = "MCP server for Philippine civic data: PSGC, infra spending accountability, earthquakes, weather, typhoons, procurement, population, poverty, solar/climate, air quality, vegetation"
+version = "0.4.0"
+description = "MCP server for Philippine civic data: PSGC, infra spending accountability, PSA economy (inflation, labor, poverty, population), one-call area profiles, earthquakes, weather, typhoons, procurement, solar/climate, air quality, vegetation"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
