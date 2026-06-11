@@ -16,11 +16,44 @@ from ph_civic_data_mcp.sources.infra import (
     search_infra_projects,
 )
 from ph_civic_data_mcp.sources.pagasa import get_active_typhoons, get_weather_alerts
-from ph_civic_data_mcp.sources.phivolcs import get_latest_earthquakes
+from ph_civic_data_mcp.sources.phivolcs import get_latest_earthquakes, get_volcano_status
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _parse_dt(raw: object) -> datetime | None:
+    """Parse an upstream datetime string defensively; None on any failure."""
+    if isinstance(raw, datetime):
+        dt = raw
+    elif isinstance(raw, str):
+        try:
+            dt = date_parser.parse(raw)
+        except (ValueError, OverflowError, TypeError):
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _unwrap_list(result: object, caveats: list[str], label: str) -> list:
+    """Normalize a gathered upstream result to a list.
+
+    Upstream list tools return a dict failure envelope (results: [],
+    upstream_error: true) on outage; exceptions surface via
+    asyncio.gather(return_exceptions=True). Both become caveats here.
+    """
+    if isinstance(result, BaseException):
+        caveats.append(f"{label} failed: {type(result).__name__}")
+        return []
+    if isinstance(result, dict):
+        upstream_caveats = result.get("caveats") or []
+        caveats.append(f"{label} failed: {'; '.join(upstream_caveats) or 'upstream error'}")
+        return []
+    return result or []
 
 
 # Geographic chrome that PHIVOLCS/PAGASA include in location strings but that
@@ -117,16 +150,18 @@ def _risk_from_activity(count: int, max_magnitude: float) -> str:
 async def assess_area_risk(location: str) -> dict:
     """Multi-hazard risk assessment combining PHIVOLCS + PAGASA.
 
-    Makes parallel upstream calls to PHIVOLCS (earthquakes) and PAGASA
-    (active typhoons, weather alerts). Expect 3-6 second response time.
+    Makes parallel upstream calls to PHIVOLCS (earthquakes, volcano alert
+    levels) and PAGASA (active typhoons, weather alerts). Expect 3-6 second
+    response time.
 
     Args:
         location: Municipality, city, or province name.
 
     Returns:
         earthquake_risk_level derived from recent 30-day seismic activity (not an
-        official PHIVOLCS assessment), typhoon signal status, active alerts, and
-        caveats describing any failed sub-calls.
+        official PHIVOLCS assessment), typhoon signal status, active alerts,
+        elevated volcano alerts (national scope), and caveats describing any
+        failed sub-calls.
     """
     retrieved_at = _now()
     caveats: list[str] = []
@@ -136,52 +171,52 @@ async def assess_area_risk(location: str) -> dict:
     )
     typhoons_task = asyncio.create_task(get_active_typhoons())
     alerts_task = asyncio.create_task(get_weather_alerts(region=location))
+    volcano_task = asyncio.create_task(get_volcano_status())
 
     results = await asyncio.gather(
-        earthquakes_task, typhoons_task, alerts_task, return_exceptions=True
+        earthquakes_task, typhoons_task, alerts_task, volcano_task, return_exceptions=True
     )
-    earthquakes_result, typhoons_result, alerts_result = results
+    earthquakes_result, typhoons_result, alerts_result, volcano_result = results
+
+    earthquakes = _unwrap_list(earthquakes_result, caveats, "PHIVOLCS earthquake query")
+    typhoons = _unwrap_list(typhoons_result, caveats, "PAGASA typhoon query")
+    active_alerts = _unwrap_list(alerts_result, caveats, "PAGASA alerts query")
+    volcanoes = _unwrap_list(volcano_result, caveats, "PHIVOLCS volcano query")
 
     recent_earthquakes_30d = 0
     max_magnitude_30d = 0.0
-    if isinstance(earthquakes_result, BaseException):
-        caveats.append(f"PHIVOLCS query failed: {type(earthquakes_result).__name__}")
-    else:
-        earthquakes = earthquakes_result or []
-        cutoff = retrieved_at - timedelta(days=30)
-        for quake in earthquakes:
-            dt_raw = quake.get("datetime_pst")
-            try:
-                dt = date_parser.parse(dt_raw) if isinstance(dt_raw, str) else dt_raw
-            except (ValueError, TypeError):
-                continue
-            if dt is None:
-                continue
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            if dt >= cutoff:
-                recent_earthquakes_30d += 1
-                max_magnitude_30d = max(max_magnitude_30d, quake.get("magnitude", 0.0))
+    cutoff = retrieved_at - timedelta(days=30)
+    for quake in earthquakes:
+        dt = _parse_dt(quake.get("datetime_pst"))
+        if dt is None:
+            continue
+        if dt >= cutoff:
+            recent_earthquakes_30d += 1
+            max_magnitude_30d = max(max_magnitude_30d, quake.get("magnitude", 0.0))
 
     typhoon_signal_active = False
     active_typhoon_name: str | None = None
-    if isinstance(typhoons_result, BaseException):
-        caveats.append(f"PAGASA typhoon query failed: {type(typhoons_result).__name__}")
-    else:
-        typhoons = typhoons_result or []
-        for t in typhoons:
-            if t.get("signal_numbers"):
-                typhoon_signal_active = True
-                active_typhoon_name = t.get("local_name")
-                break
-        if typhoons and not active_typhoon_name:
-            active_typhoon_name = typhoons[0].get("local_name")
+    for t in typhoons:
+        if t.get("signal_numbers"):
+            typhoon_signal_active = True
+            active_typhoon_name = t.get("local_name")
+            break
+    if typhoons and not active_typhoon_name:
+        active_typhoon_name = typhoons[0].get("local_name")
 
-    active_alerts: list[dict] = []
-    if isinstance(alerts_result, BaseException):
-        caveats.append(f"PAGASA alerts query failed: {type(alerts_result).__name__}")
-    else:
-        active_alerts = alerts_result or []
+    # Volcanoes are monitored nationally; PHIVOLCS bulletins don't map to an
+    # arbitrary location string, so this block reports elevated alert levels
+    # countrywide rather than pretending to geo-filter them.
+    volcano_alerts = [
+        {
+            "name": v.get("name"),
+            "alert_level": v.get("alert_level"),
+            "status_description": v.get("status_description"),
+            "bulletin_url": v.get("bulletin_url"),
+        }
+        for v in volcanoes
+        if isinstance(v.get("alert_level"), int) and v["alert_level"] >= 1
+    ]
 
     risk_level = _risk_from_activity(recent_earthquakes_30d, max_magnitude_30d)
 
@@ -193,6 +228,8 @@ async def assess_area_risk(location: str) -> dict:
         "typhoon_signal_active": typhoon_signal_active,
         "active_typhoon_name": active_typhoon_name,
         "active_alerts": active_alerts,
+        "volcano_alerts": volcano_alerts,
+        "volcano_alerts_scope": "national — PHIVOLCS volcano bulletins are not geo-filtered",
         "assessment_datetime": retrieved_at.isoformat(),
         "caveats": caveats,
         "note": (
@@ -226,8 +263,10 @@ async def flag_infra_anomalies(
     Heuristic rules:
     - duplicate_titles_same_agency: same agency files multiple notices with
       effectively identical titles (case-insensitive) within the window
-    - high_cost_no_progress: cost_php exceeds min_cost_php with no progress
-      data published (raises a transparency flag, not a malfeasance flag)
+    - high_cost_no_published_progress: cost_php exceeds min_cost_php. The
+      PhilGEPS open listing publishes no progress data for ANY notice, so
+      this is a cost-threshold transparency flag, not a project-specific
+      "progress is missing" finding.
     - hazard_overlap: project location keywords overlap with a recent
       PHIVOLCS earthquake (>=M4.0 in last 30d) or an active PAGASA typhoon
       footprint, suggesting urgency or post-disaster reconstruction context
@@ -235,7 +274,7 @@ async def flag_infra_anomalies(
     Args:
         region: PH region filter for the project list.
         province: Province filter (partial match).
-        min_cost_php: Threshold for the high_cost_no_progress rule
+        min_cost_php: Threshold for the high_cost_no_published_progress rule
                       (default 50,000,000 PHP).
 
     Returns: flagged list with each entry containing project_id, title,
@@ -254,23 +293,9 @@ async def flag_infra_anomalies(
         projects_task, earthquakes_task, typhoons_task, return_exceptions=True
     )
 
-    if isinstance(projects_result, BaseException):
-        caveats.append(f"PhilGEPS fetch failed: {type(projects_result).__name__}")
-        projects = []
-    else:
-        projects = projects_result or []
-
-    if isinstance(earthquakes_result, BaseException):
-        caveats.append(f"PHIVOLCS fetch failed: {type(earthquakes_result).__name__}")
-        earthquakes = []
-    else:
-        earthquakes = earthquakes_result or []
-
-    if isinstance(typhoons_result, BaseException):
-        caveats.append(f"PAGASA fetch failed: {type(typhoons_result).__name__}")
-        typhoons = []
-    else:
-        typhoons = typhoons_result or []
+    projects = _unwrap_list(projects_result, caveats, "PhilGEPS fetch")
+    earthquakes = _unwrap_list(earthquakes_result, caveats, "PHIVOLCS fetch")
+    typhoons = _unwrap_list(typhoons_result, caveats, "PAGASA fetch")
 
     # Hazard footprint: proper-noun location tokens from recent quakes + typhoons.
     # Use only capitalized words from the original (un-lowercased) location string
@@ -280,20 +305,15 @@ async def flag_infra_anomalies(
     # "surigao" matching project titles like "Pasig City" with no real overlap.
     cutoff = retrieved_at - timedelta(days=30)
     hazard_keywords: set[str] = set()
+    recent_quake_count_30d = 0
     for quake in earthquakes:
-        dt_raw = quake.get("datetime_pst")
-        try:
-            dt = date_parser.parse(dt_raw) if isinstance(dt_raw, str) else dt_raw
-        except (ValueError, TypeError):
+        dt = _parse_dt(quake.get("datetime_pst"))
+        if dt is None or dt < cutoff:
             continue
-        if dt is None:
-            continue
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        if dt >= cutoff:
-            loc = quake.get("location") or ""
-            for token in _proper_noun_tokens(loc):
-                hazard_keywords.add(token)
+        recent_quake_count_30d += 1
+        loc = quake.get("location") or ""
+        for token in _proper_noun_tokens(loc):
+            hazard_keywords.add(token)
 
     for typhoon in typhoons:
         for area in (typhoon.get("signal_numbers") or {}).keys():
@@ -319,10 +339,13 @@ async def flag_infra_anomalies(
                     "title": project.get("title"),
                     "agency": project.get("agency"),
                     "region": project.get("region"),
-                    "rule_fired": "high_cost_no_progress",
+                    "rule_fired": "high_cost_no_published_progress",
                     "evidence": (
-                        f"approved_budget = ₱{cost:,.0f} but no progress_pct "
-                        "published in the public listing"
+                        f"approved_budget = ₱{cost:,.0f} exceeds the "
+                        f"₱{min_cost_php:,.0f} threshold. Note: the PhilGEPS "
+                        "open listing publishes no progress data for any "
+                        "notice, so this is a cost-threshold transparency "
+                        "flag, not a project-specific progress finding."
                     ),
                     "source_url": project.get("source_url"),
                 }
@@ -389,21 +412,7 @@ async def flag_infra_anomalies(
         "rules_summary": rule_counts,
         "flagged": unique_flags,
         "hazard_inputs": {
-            "recent_earthquake_count_30d": sum(
-                1
-                for q in earthquakes
-                if (
-                    isinstance(q.get("datetime_pst"), str)
-                    and (
-                        (
-                            date_parser.parse(q["datetime_pst"]).replace(tzinfo=timezone.utc)
-                            if date_parser.parse(q["datetime_pst"]).tzinfo is None
-                            else date_parser.parse(q["datetime_pst"])
-                        )
-                        >= cutoff
-                    )
-                )
-            ),
+            "recent_earthquake_count_30d": recent_quake_count_30d,
             "active_typhoon_count": len(typhoons),
         },
         "caveats": caveats,

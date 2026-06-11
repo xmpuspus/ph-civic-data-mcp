@@ -6,10 +6,15 @@ import time
 
 import pytest
 
+
 from ph_civic_data_mcp.sources.philgeps import (
     get_procurement_summary,
     search_procurement,
 )
+
+# Hits the live PhilGEPS portal with no offline fallback — live-marked so a
+# transient upstream outage cannot red the offline CI gate (`pytest -x`).
+pytestmark = pytest.mark.live
 
 
 @pytest.mark.asyncio

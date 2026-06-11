@@ -12,6 +12,7 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 from ph_civic_data_mcp.models.climate import USGSEarthquake
 from ph_civic_data_mcp.server import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 USGS_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
@@ -70,7 +71,7 @@ async def get_usgs_earthquakes_ph(
     end_date: str | None = None,
     min_magnitude: float = 4.0,
     limit: int = 50,
-) -> list[dict]:
+) -> list[dict] | dict:
     """Philippine-region earthquakes from USGS, cross-reference to PHIVOLCS.
 
     Returns events inside the PH bounding box (lat 4..22, lng 115..130) that
@@ -126,7 +127,13 @@ async def get_usgs_earthquakes_ph(
         payload = response.json()
     except Exception as exc:
         log_stderr(f"USGS error: {exc}")
-        return []
+        return failure_envelope(
+            "USGS",
+            USGS_URL,
+            f"USGS FDSN API unavailable ({type(exc).__name__}: {exc}). "
+            "This is an upstream failure, not an absence of earthquakes.",
+            license="Public domain (USGS)",
+        )
 
     features = payload.get("features") or []
     events: list[dict] = []

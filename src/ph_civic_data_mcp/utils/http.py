@@ -23,8 +23,11 @@ try:
 except Exception:
     pass
 
+from ph_civic_data_mcp import __version__
+
 USER_AGENT = (
-    "ph-civic-data-mcp/0.4.0 (+https://github.com/xmpuspus/ph-civic-data-mcp; civic data research)"
+    f"ph-civic-data-mcp/{__version__} "
+    "(+https://github.com/xmpuspus/ph-civic-data-mcp; civic data research)"
 )
 
 MAX_RETRIES = 3

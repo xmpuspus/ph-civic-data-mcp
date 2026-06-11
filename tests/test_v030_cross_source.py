@@ -84,10 +84,10 @@ async def test_flag_infra_anomalies_returns_disclaimer_and_metadata():
 
 
 @pytest.mark.asyncio
-async def test_flag_high_cost_no_progress_fires():
+async def test_flag_high_cost_no_published_progress_fires():
     result = await cs.flag_infra_anomalies(min_cost_php=100_000_000)
     rules = {f["rule_fired"] for f in result["flagged"]}
-    assert "high_cost_no_progress" in rules
+    assert "high_cost_no_published_progress" in rules
     assert any(f["project_id"] == "P-001" for f in result["flagged"])
 
 

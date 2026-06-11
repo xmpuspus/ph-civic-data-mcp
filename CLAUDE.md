@@ -26,6 +26,69 @@ Every URL, API shape, and technical claim was cross-checked against live sources
 
 ---
 
+## Shipped status & landmines (updated June 11, 2026 — v0.5.0)
+
+This doc below describes the original v0.1.0 build. The package has shipped
+through **v0.5.0** (PyPI + GitHub release + MCP Registry, all live). Current
+state: **29 tools across 12 sources**, zero required keys. Build/test/release
+detail and hard-won pitfalls live in project memory
+(`project_psa_expansion_handoff`, `project_ph_civic_data_mcp`,
+`feedback_release_pipeline`, `feedback_demo_gifs`, `feedback_research_verification`).
+Read those before any change.
+
+Version-line summary: v0.1.x (4 PH gov sources, 11 tools) → v0.2.0 (+6 no-auth
+science/open-data sources, 17) → v0.3.0 (PSGC + infra accountability +
+cross-source anomaly flags, 25) → v0.3.1 (correctness pass) → **v0.4.0** (PSA
+economy: `get_inflation_stats`/`get_labor_stats`/`get_health_indicators`, +
+`get_area_profile` auto-stitch, 29) → **v0.5.0** (audit-driven reliability
+pass: failure envelopes `{results, upstream_error, caveats}` on list tools,
+errors never cached, PSGC aliases + "X City"↔"City of X" bridging +
+`alternatives`, volcano alerts in both composites, bulletin-URL host
+allowlist, `high_cost_no_published_progress` rename, MCP resources/prompts,
+weekly live-drift CI; still 29 tools).
+
+**PSA PXWeb landmines (live-verified 2026-05-18, do not re-learn):**
+- POST with `response:{format:"json"}` (parse `data[].key`/`values`). **NOT
+  `json-stat2`** — on this PXWeb it returns a sparse shape that mis-parses to a
+  constant-looking `1.0` for every cell. Silent fabrication trap.
+- PSA splits long series into backcasted era tables with near-identical
+  titles. Among predicate matches, pick the table whose Year dimension MAX
+  reaches the most recent year (`_pick_latest_table`/`_year_max` in psa.py).
+- `".."` (also `"..."`, `"-"`) is PSA's missing-value sentinel; guard every
+  float cast (`_to_float`).
+- Full-cube `filter:"all"`/`"*"` requests are WAF HTTP-403'd. Always select
+  explicit item codes; keep cell counts small.
+- Response `updated` is server wall-clock, NOT data recency. Read vintage from
+  the table's Year/time dimension (1D health tables: `Year` is not `time`-typed).
+- Hardcoding the stable subject path prefix is OK (existing convention:
+  `DB/1A/PO/`, `DB/1E/FY/`, `DB/2M/PI/CPI/2018NEW/`, `DB/1B/LFS/`, `DB/1D/`);
+  only the `.px` leaf must be browse-discovered (Validation Log #6).
+
+**Auto-stitch pattern:** `sources/autostitch.py::get_area_profile` resolves
+PSGC once, then `asyncio.gather` fans to PSA + PhilGEPS + PHIVOLCS + PAGASA
+(same pattern as `cross_source.py`), returns one envelope with per-100k
+normalization, per-block reference periods, graceful per-upstream caveats, and
+the public-data disclaimer. New composition tools belong in their own module
+(clean test file + catalog), not bolted onto cross_source.py.
+
+**CI determinism:** `.github/workflows/ci.yml` runs `pytest -x -m "not live"
+--ignore=tests/test_v030_live.py`. Any test that hard-asserts on an external
+API with no offline fallback MUST be `live`-marked (module `pytestmark =
+pytest.mark.live`, like `test_v030_live.py`) or a transient NASA/Open-Meteo
+outage reds the whole gate via `-x`. New live-API tests for sources should
+`pytest.skip` on caveat/empty so they degrade to skips, not failures.
+
+**Release pipeline order (release-smoke installs from PyPI):** merge PR →
+build → `twine check` → `twine upload` to PyPI → confirm PyPI serves the
+version → `gh release create vX.Y.Z` (creates tag, triggers release-smoke
+against the now-live wheel, attach `.mcpb` + demo GIFs) → `mcp-publisher
+publish` (Registry JWT in `~/.config/mcp-publisher/token.json` expires; if 401,
+user must run `mcp-publisher login github`) → fresh-venv functional smoke. The
+Registry search endpoint shows the OLDEST version by default; confirm a new
+version via the full version list, not the search summary.
+
+---
+
 ## Project Identity
 
 | Field | Value |
@@ -992,11 +1055,17 @@ All 9 prompts must return real data:
 - [ ] `uvx` install from wheel works
 - [ ] `twine upload` to PyPI
 - [ ] GitHub public, MIT license, topics: `mcp`, `philippines`, `phivolcs`, `pagasa`, `philgeps`, `civic-tech`
-- [ ] Glama auto-indexes (check within 48h)
+- [ ] Glama auto-indexes (check within 48h; manual rebuild click required after each PyPI bump per `reference_mcp_install_distribution.md`)
 - [ ] Smithery submission via `smithery.ai`
 - [ ] PulseMCP manual at `pulsemcp.com`
-- [ ] MCP.so submission
-- [ ] PR to `wong2/awesome-mcp-servers`
+- [ ] MCP.so submission at `https://mcp.so/submit`
+- [ ] Official MCP Registry via `mcp-publisher publish`
+- [ ] Awesome-list directories (full landscape + per-list format rules in `feedback_awesome_list_pr_pipeline.md` and `reference_mcp_install_distribution.md`):
+  - PR to `punkpeye/awesome-mcp-servers` with `🤖🤖🤖` fast-track tag; pre-empt the duplicate-check bot in the PR body on any description-update PR (`-1/+1` diffs reliably trip it)
+  - PR to `TensorBlock/awesome-mcp-servers` (plain format, no badges)
+  - PR to `brandonhimpfen/awesome-civic-tech` under `## Data Sources & APIs`; frame as taxonomy gap-fill, not promotion (their CONTRIBUTING declines promotion-framed entries)
+  - PR to `brandonhimpfen/awesome-open-governance` under `## Government APIs`; same framing
+  - `wong2/awesome-mcp-servers` is portal-only at `mcpservers.org/submit`; direct PRs do not merge
 - [ ] Post to Data Engineering Pilipinas Facebook (~38k members)
 - [ ] Post to DEVCON Philippines
 - [ ] LinkedIn post

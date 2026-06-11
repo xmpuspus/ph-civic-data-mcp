@@ -19,8 +19,11 @@ from bs4 import BeautifulSoup
 from ph_civic_data_mcp.models.weather import DailyForecast, Typhoon, WeatherForecast
 from ph_civic_data_mcp.server import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.geo import city_to_coords, resolve_to_coords
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
+
+PAGASA_LICENSE = "Public — PAGASA bulletin pages"
 
 PAGASA_API_BASE = "https://tenday.pagasa.dost.gov.ph/api/v1"
 OPEN_METEO_BASE = "https://api.open-meteo.com/v1/forecast"
@@ -265,10 +268,13 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
         log_stderr(f"get_weather_forecast error: {exc}")
         return {
             "location": location,
-            "caveats": [f"Open-Meteo fetch failed: {type(exc).__name__}"],
+            "upstream_error": True,
+            "caveats": [f"Open-Meteo fetch failed ({type(exc).__name__}: {exc})"],
             "days": [],
             "data_source": "open_meteo",
             "data_retrieved_at": _now().isoformat(),
+            "source": "Open-Meteo",
+            "source_url": OPEN_METEO_BASE,
         }
 
     cache[key] = result
@@ -276,10 +282,12 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
 
 
 @mcp.tool()
-async def get_active_typhoons() -> list[dict]:
+async def get_active_typhoons() -> list[dict] | dict:
     """Get active tropical cyclones in/near the Philippine Area of Responsibility (PAR).
 
-    Returns empty list if none active.
+    Returns empty list if none active. If the PAGASA bulletin page is
+    unreachable, returns {results: [], upstream_error: true, caveats} instead,
+    so an outage is never read as "no active typhoons".
     """
     key = cache_key({"endpoint": "typhoons"})
     cache = CACHES["pagasa_typhoons"]
@@ -291,7 +299,13 @@ async def get_active_typhoons() -> list[dict]:
         response.raise_for_status()
     except Exception as exc:
         log_stderr(f"get_active_typhoons error: {exc}")
-        return []
+        return failure_envelope(
+            "PAGASA",
+            PAGASA_TC_BULLETIN_URL,
+            f"PAGASA tropical cyclone bulletin unavailable ({type(exc).__name__}: {exc}). "
+            "This is an upstream failure, not an absence of active typhoons.",
+            license=PAGASA_LICENSE,
+        )
 
     soup = BeautifulSoup(response.text, "lxml")
     text = soup.get_text(" ", strip=True)
@@ -386,7 +400,7 @@ async def get_active_typhoons() -> list[dict]:
 
 
 @mcp.tool()
-async def get_weather_alerts(region: str | None = None) -> list[dict]:
+async def get_weather_alerts(region: str | None = None) -> list[dict] | dict:
     """Get active PAGASA weather alerts and advisories.
 
     The PAGASA homepage embeds alert names ("Heavy Rainfall Warning",
@@ -412,7 +426,13 @@ async def get_weather_alerts(region: str | None = None) -> list[dict]:
         response.raise_for_status()
     except Exception as exc:
         log_stderr(f"get_weather_alerts error: {exc}")
-        return []
+        return failure_envelope(
+            "PAGASA",
+            PAGASA_MAIN_URL,
+            f"PAGASA homepage unavailable ({type(exc).__name__}: {exc}). "
+            "Alert state unknown — this is an upstream failure, not 'no active warnings'.",
+            license=PAGASA_LICENSE,
+        )
 
     soup = BeautifulSoup(response.text, "lxml")
     text = soup.get_text(" ", strip=True)

@@ -8,9 +8,10 @@ Landmines (from validation log):
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timezone
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
@@ -18,7 +19,24 @@ from dateutil import parser as date_parser
 from ph_civic_data_mcp.models.earthquake import Earthquake
 from ph_civic_data_mcp.server import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.http import PHIVOLCS_CLIENT, fetch_with_retry, log_stderr
+
+PHIVOLCS_LICENSE = "Public — PHIVOLCS public bulletin pages"
+
+# get_earthquake_bulletin takes an agent-supplied URL and fetches it through
+# the SSL-disabled PHIVOLCS client. Restrict it to PHIVOLCS hosts so the tool
+# cannot be steered into fetching arbitrary URLs (e.g. via prompt injection).
+ALLOWED_BULLETIN_HOST_SUFFIX = ".phivolcs.dost.gov.ph"
+
+
+def _is_phivolcs_url(url: str) -> bool:
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host.endswith(ALLOWED_BULLETIN_HOST_SUFFIX) or host == "phivolcs.dost.gov.ph"
+
 
 PHIVOLCS_EQ_LIST_URL = "https://earthquake.phivolcs.dost.gov.ph/"
 WOVODAT_BULLETIN_LIST_URL = "https://wovodat.phivolcs.dost.gov.ph/bulletin/list-of-bulletin"
@@ -61,9 +79,9 @@ async def _fetch_earthquake_list() -> list[dict]:
             break
 
     if target_table is None:
-        log_stderr("PHIVOLCS earthquake table not found on list page")
-        cache[key] = []
-        return []
+        # Parse drift, not "no earthquakes" — raise so callers report the
+        # failure instead of caching a false all-clear.
+        raise RuntimeError("PHIVOLCS earthquake table not found on list page (HTML drift?)")
 
     results: list[dict] = []
     rows = target_table.find_all("tr")
@@ -116,20 +134,30 @@ async def get_latest_earthquakes(
     min_magnitude: float = 1.0,
     limit: int = 20,
     region: str | None = None,
-) -> list[dict]:
+) -> list[dict] | dict:
     """Get the latest earthquake events from PHIVOLCS.
 
     Args:
         min_magnitude: Minimum magnitude to include (default 1.0).
         limit: Max events to return (default 20, max 100).
         region: Filter by PH region/province/city name (partial match).
+
+    Returns a list of events on success. If the PHIVOLCS upstream is
+    unreachable, returns a dict {results: [], upstream_error: true, caveats}
+    instead of an empty list, so "outage" is never mistaken for "no quakes".
     """
     limit = max(1, min(int(limit), 100))
     try:
         rows = await _fetch_earthquake_list()
     except Exception as exc:
         log_stderr(f"get_latest_earthquakes error: {exc}")
-        return []
+        return failure_envelope(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            f"PHIVOLCS earthquake list unavailable ({type(exc).__name__}: {exc}). "
+            "This is an upstream/parse failure, not an absence of earthquakes.",
+            license=PHIVOLCS_LICENSE,
+        )
 
     retrieved_at = _now()
     results: list[dict] = []
@@ -170,6 +198,16 @@ async def get_earthquake_bulletin(bulletin_url: str) -> dict:
             "caveats": ["bulletin_url is empty or malformed"],
             "data_retrieved_at": _now().isoformat(),
         }
+    if not _is_phivolcs_url(bulletin_url):
+        return {
+            "url": bulletin_url,
+            "source": "PHIVOLCS",
+            "caveats": [
+                "bulletin_url must be a *.phivolcs.dost.gov.ph URL returned by "
+                "get_latest_earthquakes; refusing to fetch other hosts."
+            ],
+            "data_retrieved_at": _now().isoformat(),
+        }
 
     key = cache_key({"bulletin_url": bulletin_url})
     cache = CACHES["phivolcs_bulletins"]
@@ -193,7 +231,8 @@ async def get_earthquake_bulletin(bulletin_url: str) -> dict:
         return {
             "url": bulletin_url,
             "source": "PHIVOLCS",
-            "caveats": [f"fetch failed: {type(exc).__name__}"],
+            "upstream_error": True,
+            "caveats": [f"bulletin fetch failed ({type(exc).__name__}: {exc})"],
             "data_retrieved_at": _now().isoformat(),
         }
 
@@ -265,13 +304,10 @@ async def _fetch_volcano_bulletin_list() -> dict[str, dict]:
         return cache[key]
 
     result: dict[str, dict] = {}
-    try:
-        response = await fetch_with_retry(PHIVOLCS_CLIENT, "GET", WOVODAT_BULLETIN_LIST_URL)
-        response.raise_for_status()
-    except Exception as exc:
-        log_stderr(f"volcano list fetch error: {exc}")
-        cache[key] = result
-        return result
+    # Fetch failures propagate to the caller; never cache an empty list born
+    # from an outage for the full success TTL.
+    response = await fetch_with_retry(PHIVOLCS_CLIENT, "GET", WOVODAT_BULLETIN_LIST_URL)
+    response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "lxml")
     vo_map = {
@@ -327,21 +363,35 @@ async def _fetch_volcano_alert(bulletin_url: str) -> tuple[int | None, str | Non
 
 
 @mcp.tool()
-async def get_volcano_status(volcano_name: str | None = None) -> list[dict]:
+async def get_volcano_status(volcano_name: str | None = None) -> list[dict] | dict:
     """Get current alert level for Philippine volcanoes.
 
     Args:
         volcano_name: e.g. "Mayon", "Taal", "Kanlaon", "Bulusan".
                       None returns all monitored volcanoes with recent bulletins.
+
+    Returns a list on success. If the WOVODAT bulletin list is unreachable or
+    parses to nothing, returns {results: [], upstream_error: true, caveats}.
     """
     try:
         bulletins = await _fetch_volcano_bulletin_list()
     except Exception as exc:
         log_stderr(f"get_volcano_status list error: {exc}")
-        return []
+        return failure_envelope(
+            "PHIVOLCS",
+            WOVODAT_BULLETIN_LIST_URL,
+            f"WOVODAT volcano bulletin list unavailable ({type(exc).__name__}: {exc}).",
+            license=PHIVOLCS_LICENSE,
+        )
 
     if not bulletins:
-        return []
+        return failure_envelope(
+            "PHIVOLCS",
+            WOVODAT_BULLETIN_LIST_URL,
+            "WOVODAT bulletin list parsed to zero entries — likely HTML drift, "
+            "not an absence of monitored volcanoes.",
+            license=PHIVOLCS_LICENSE,
+        )
 
     target_volcanoes: list[str] = []
     if volcano_name:
@@ -370,10 +420,12 @@ async def get_volcano_status(volcano_name: str | None = None) -> list[dict]:
     else:
         target_volcanoes = list(bulletins.keys())
 
+    alerts = await asyncio.gather(
+        *(_fetch_volcano_alert(bulletins[name]["bulletin_url"]) for name in target_volcanoes)
+    )
     results: list[dict] = []
-    for name in target_volcanoes:
+    for name, (alert_level, status) in zip(target_volcanoes, alerts):
         info = bulletins[name]
-        alert_level, status = await _fetch_volcano_alert(info["bulletin_url"])
         results.append(
             {
                 "name": name,

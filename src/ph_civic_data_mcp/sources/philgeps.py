@@ -20,9 +20,11 @@ from dateutil import parser as date_parser
 from ph_civic_data_mcp.models.procurement import ProcurementRecord
 from ph_civic_data_mcp.server import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 PHILGEPS_INDEX_URL = "https://www.philgeps.gov.ph/Indexes/index"
+PHILGEPS_LICENSE = "Public — PhilGEPS open notice listing"
 
 
 def _now() -> datetime:
@@ -44,19 +46,15 @@ async def _fetch_notices() -> list[ProcurementRecord]:
     if key in cache:
         return cache[key]
 
-    try:
-        response = await fetch_with_retry(CLIENT, "GET", PHILGEPS_INDEX_URL)
-        response.raise_for_status()
-    except Exception as exc:
-        log_stderr(f"philgeps fetch error: {exc}")
-        cache[key] = []
-        return []
+    # Fetch and parse failures raise — callers turn them into a failure
+    # envelope. Never cache an error as "no notices" for the 6h success TTL.
+    response = await fetch_with_retry(CLIENT, "GET", PHILGEPS_INDEX_URL)
+    response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "lxml")
     tables = soup.find_all("table")
     if not tables:
-        cache[key] = []
-        return []
+        raise RuntimeError("PhilGEPS Indexes page has no table (HTML drift?)")
 
     rows = tables[0].find_all("tr")
     records: list[ProcurementRecord] = []
@@ -92,7 +90,7 @@ async def search_procurement(
     date_from: str | None = None,
     date_to: str | None = None,
     limit: int = 20,
-) -> list[dict]:
+) -> list[dict] | dict:
     """Search PH government procurement from PhilGEPS open data.
 
     Note: the PhilGEPS public portal does not expose server-side search for
@@ -106,6 +104,10 @@ async def search_procurement(
         region: PH region filter (partial match).
         date_from / date_to: YYYY-MM-DD bounds on publish date.
         limit: Max results (default 20, max 100).
+
+    Returns a list on success. If the PhilGEPS listing is unreachable,
+    returns {results: [], upstream_error: true, caveats} instead of an
+    empty list, so an outage is never read as "no matching notices".
     """
     limit = max(1, min(int(limit), 100))
 
@@ -113,7 +115,12 @@ async def search_procurement(
         records = await _fetch_notices()
     except Exception as exc:
         log_stderr(f"search_procurement error: {exc}")
-        return []
+        return failure_envelope(
+            "PhilGEPS",
+            PHILGEPS_INDEX_URL,
+            f"PhilGEPS notice listing unavailable ({type(exc).__name__}: {exc}).",
+            license=PHILGEPS_LICENSE,
+        )
 
     retrieved_at = _now()
     kw_lc = keyword.lower().strip() if keyword else ""
@@ -168,11 +175,16 @@ async def get_procurement_summary(
         Totals, breakdown by procurement mode, top agencies, reference period.
     """
     retrieved_at = _now()
+    summary_caveats: list[str] = []
     try:
         records = await _fetch_notices()
     except Exception as exc:
         log_stderr(f"procurement_summary error: {exc}")
         records = []
+        summary_caveats.append(
+            f"PhilGEPS notice listing unavailable ({type(exc).__name__}: {exc}); "
+            "totals below are zero because of the outage, not zero activity."
+        )
 
     agency_lc = agency.lower().strip() if agency else None
     region_lc = region.lower().strip() if region else None
@@ -215,6 +227,8 @@ async def get_procurement_summary(
             "Summary computed over latest ~100 PhilGEPS bid notices (6h cache). "
             "Approved budget totals are not published in the open listing."
         ),
+        "caveats": summary_caveats,
+        "upstream_error": bool(summary_caveats),
         "source": "PhilGEPS",
         "data_retrieved_at": retrieved_at.isoformat(),
     }
