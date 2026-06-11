@@ -284,6 +284,10 @@ docker build -t ph-civic-data-mcp .
 
 ## What's new in v0.5.0 — reliability + agent-UX pass
 
+![v0.5.0 demo](docs/demo_v050.gif)
+
+A real recording (`vhs docs/demo_v050.tape`) of `docs/live_demo_v050.py` against the published PyPI release: "QC" resolves to Quezon City, "Manila City" resolves to City of Manila at score 1.0 (v0.4.0 resolved that exact query to Danao City, Cebu), "San Juan" returns its runner-up candidates, and the Albay risk profile carries the live volcano block (Mayon at alert level 3 at recording time).
+
 A product audit of the shipped v0.4.0 surfaced one theme: the happy paths were
 solid, but nearly every weak spot was about what an agent sees when an upstream
 fails. v0.5.0 fixes the failure paths and tightens self-description. Tool count
