@@ -256,6 +256,18 @@ def render_risk(data) -> Panel:
             ("  PAGASA advisories", "dim"),
         ),
     ]
+    volcanoes = data.get("volcano_alerts") or []
+    if volcanoes:
+        summary = "  ".join(
+            f"{v.get('name')} AL{v.get('alert_level')}" for v in volcanoes if v.get("name")
+        )
+        rows.append(
+            Text.assemble(
+                ("volcanoes      ", "dim"),
+                (summary, "bold red"),
+                ("  (national, alert level >= 1)", "dim"),
+            )
+        )
     caveats = data.get("caveats") or []
     if caveats:
         rows.append(Text(""))
