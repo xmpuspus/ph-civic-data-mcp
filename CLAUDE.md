@@ -47,6 +47,54 @@ errors never cached, PSGC aliases + "X City"↔"City of X" bridging +
 allowlist, `high_cost_no_published_progress` rename, MCP resources/prompts,
 weekly live-drift CI; still 29 tools).
 
+**v0.5.0 conventions — every future change must hold these:**
+- **Failure envelope contract.** List tools return a real list on success; on
+  upstream failure they return
+  `{results: [], upstream_error: true, caveats: [...]}` via
+  `utils/envelope.py::failure_envelope`. Never return a bare `[]` from an
+  error path — agents read that as "no earthquakes / no notices".
+  Composites unwrap envelopes with `cross_source._unwrap_list`.
+- **Never cache errors.** Fetch helpers raise (or return un-cached error
+  dicts) on failure; only successes and genuine negatives go into `CACHES`.
+  The v0.5.0 audit found PhilGEPS/PSGC/PSA pinning outages for 6-24h as
+  empty data. Parse-to-zero on a page that always has rows = HTML drift =
+  raise, not cache-empty (see `_fetch_earthquake_list`, `_fetch_notices`).
+- **Caveats carry the real error** (`ConnectError: ...`), never just the
+  exception class name.
+- **Live tests are `pytestmark = pytest.mark.live`.** Any test that
+  hard-asserts on a real upstream with no mock goes in a live-marked module
+  (or gets a per-test mark). Detection: no `monkeypatch|mock|respx` in the
+  file + imports a source module = live. The weekly
+  `.github/workflows/live-drift.yml` (Mon 02:23 UTC) runs `pytest -m live`
+  to catch scraper rot; offline CI stays `-m "not live"` with `-x`.
+- **Agent-supplied URLs are allowlisted** before fetching (see
+  `phivolcs._is_phivolcs_url` — mandatory for anything routed through the
+  `verify=False` client).
+- **Heuristic rule names say what was actually checked**
+  (`high_cost_no_published_progress`, not `high_cost_no_progress` —
+  `progress_pct` is None for every PhilGEPS record, so the old name implied
+  a per-project check that never happened).
+- **Version surfaces:** `__init__.py.__version__` is the single source
+  (hatch `dynamic`); `manifest.json` and `server.json` (top-level +
+  `packages[].version`) still need manual bumps each release. User-Agent
+  derives from `__version__` automatically.
+- **Self-description stays current:** the `FastMCP(instructions=...)` block,
+  `get_data_freshness` (`tool_count` = real `len(await mcp.list_tools())`),
+  README tool counts, and MCP resources/prompts must be updated in the same
+  PR that adds/renames tools — the v0.5.0 audit found instructions a full
+  version behind, hiding the flagship tool from agents.
+- **PSGC resolver:** nicknames live in `LOCATION_ALIASES`; "X City" ↔
+  "City of X" is bridged by `_city_variant` (on v0.4.0 "Manila City"
+  resolved to Danao City, Cebu at 0.61); ambiguous names surface
+  `alternatives`. After touching scoring, live-probe natural inputs
+  ("Manila City", "QC", "San Juan") — offline fixtures don't cover the
+  full PSGC name corpus.
+- **Demo tapes:** warm the uvx cache BEFORE invoking vhs (a fresh PyPI
+  version inside the Hide block blows past its Sleep and records nothing);
+  Hide block is just `cd && clear`. Tapes are committed
+  (`demo_combined.tape`, `demo_v050.tape`); frame-extract and Read the
+  last frame before committing any GIF.
+
 **PSA PXWeb landmines (live-verified 2026-05-18, do not re-learn):**
 - POST with `response:{format:"json"}` (parse `data[].key`/`values`). **NOT
   `json-stat2`** — on this PXWeb it returns a sparse shape that mis-parses to a
