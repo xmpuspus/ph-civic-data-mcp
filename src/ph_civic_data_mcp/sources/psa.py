@@ -178,14 +178,13 @@ async def get_population_stats(
 
     geo_hit = _find_geo_value(meta, region, "Geographic Location")
     if geo_hit is None:
-        result = {
+        # Not cached: the geo dimension can drift; don't pin a miss for 24h.
+        return {
             "region": region or "Philippines",
             "caveats": [f"Region '{region}' not found in PSA geographic dimension"],
             "source": "PSA",
             "data_retrieved_at": _now().isoformat(),
         }
-        cache[key] = result
-        return result
     geo_val, geo_text = geo_hit
 
     param_code, param_values, _ = _variable_values(meta, "Parameter")
@@ -203,14 +202,14 @@ async def get_population_stats(
     }
     payload = await _post_json(table_url, query)
     if payload is None or not payload.get("data"):
-        result = {
+        # Not cached: likely a transient PXWeb failure, not a data property.
+        return {
             "region": geo_text,
+            "upstream_error": True,
             "caveats": ["PSA PXWeb query returned no data"],
             "source": "PSA",
             "data_retrieved_at": _now().isoformat(),
         }
-        cache[key] = result
-        return result
 
     try:
         population = int(payload["data"][0]["values"][0])
@@ -551,18 +550,19 @@ async def get_inflation_stats(area: str | None = None) -> dict:
         return cache[key]
 
     def _err(msg: str) -> dict:
-        result = {
+        # Error results are never cached — a transient PXWeb failure must not
+        # pin a null inflation figure for the 24h success TTL.
+        return {
             "area": area or "Philippines",
             "headline_inflation_pct": None,
             "reference_period": None,
+            "upstream_error": True,
             "caveats": [msg],
             "source": "PSA",
             "source_url": f"{PSA_API_BASE}/DB/2M/PI/CPI/",
             "license": PSA_LICENSE,
             "data_retrieved_at": _now().isoformat(),
         }
-        cache[key] = result
-        return result
 
     discovered = await _pick_latest_table(
         "2M/PI/CPI/2018NEW",
@@ -689,21 +689,21 @@ async def get_labor_stats(region: str | None = None) -> dict:
         )
 
     def _err(msg: str) -> dict:
-        result = {
+        # Error results are never cached (see get_inflation_stats._err).
+        return {
             "area": "Philippines",
             "employment_rate_pct": None,
             "unemployment_rate_pct": None,
             "underemployment_rate_pct": None,
             "labor_force_participation_rate_pct": None,
             "reference_period": None,
+            "upstream_error": True,
             "caveats": [*caveats, msg],
             "source": "PSA",
             "source_url": f"{PSA_API_BASE}/DB/1B/LFS/",
             "license": PSA_LICENSE,
             "data_retrieved_at": _now().isoformat(),
         }
-        cache[key] = result
-        return result
 
     discovered = await _pick_latest_table("1B/LFS", ["rates", "key employment indicators"], [])
     if discovered is None:
@@ -888,16 +888,16 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
     tables = [e for e in entries if e.get("type") == "t"]
     available = [e.get("text", "") for e in tables]
     if not tables:
-        result = {
+        # Not cached: discovery failure is usually a transient PXWeb error.
+        return {
             "indicators": [],
+            "upstream_error": True,
             "caveats": ["PSA Health (1D) table discovery failed"],
             "source": "PSA",
             "source_url": f"{PSA_API_BASE}/DB/1D/",
             "license": PSA_LICENSE,
             "data_retrieved_at": _now().isoformat(),
         }
-        cache[key] = result
-        return result
 
     if indicator:
         want = indicator.lower().strip()

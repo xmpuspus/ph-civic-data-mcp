@@ -1,6 +1,6 @@
 [project]
 name = "ph-civic-data-mcp"
-version = "0.4.0"
+dynamic = ["version"]
 description = "MCP server for Philippine civic data: PSGC, infra spending accountability, PSA economy (inflation, labor, poverty, population), one-call area profiles, earthquakes, weather, typhoons, procurement, solar/climate, air quality, vegetation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,7 +25,6 @@ dependencies = [
     "pydantic>=2.0.0",
     "python-dateutil>=2.9.0",
     "cachetools>=5.3.0",
-    "openpyxl>=3.1.0",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +45,9 @@ ph-civic-data-mcp = "ph_civic_data_mcp.server:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/ph_civic_data_mcp/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ph_civic_data_mcp"]

@@ -6,11 +6,16 @@ import os
 
 import pytest
 
+
 from ph_civic_data_mcp.sources.pagasa import (
     get_active_typhoons,
     get_weather_alerts,
     get_weather_forecast,
 )
+
+# Hits live Open-Meteo / PAGASA / PSGC endpoints with no offline fallback — live-marked so a
+# transient upstream outage cannot red the offline CI gate (`pytest -x`).
+pytestmark = pytest.mark.live
 
 
 @pytest.mark.live

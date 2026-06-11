@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import pytest
 
+
 from ph_civic_data_mcp.sources.phivolcs import (
     get_earthquake_bulletin,
     get_latest_earthquakes,
     get_volcano_status,
 )
+
+# Hits real PHIVOLCS endpoints with no offline fallback — must be live-marked
+# or a transient upstream outage reds the whole CI gate via `pytest -x`.
+pytestmark = pytest.mark.live
 
 
 @pytest.mark.asyncio

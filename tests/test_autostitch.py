@@ -13,6 +13,11 @@ import pytest
 from ph_civic_data_mcp.sources.autostitch import get_area_profile
 
 
+# Hits live PSGC/PSA/PhilGEPS/PHIVOLCS/PAGASA with no offline fallback —
+# must be live-marked or transient outages red the CI gate via `pytest -x`.
+pytestmark = pytest.mark.live
+
+
 def _has_envelope(profile: dict) -> None:
     assert "PSA" in profile["source"]
     assert profile["source_url"].startswith("http")

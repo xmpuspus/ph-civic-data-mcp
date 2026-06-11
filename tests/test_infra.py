@@ -166,8 +166,12 @@ async def test_search_graceful_when_upstream_dies(monkeypatch):
     monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _boom)
     CACHES["infra_projects"].clear()
     results = await infra_module.search_infra_projects(keyword="flood")
-    # Empty list, never raises
-    assert results == []
+    # Failure envelope, never raises — and never a bare [] that reads as
+    # "no matching projects" during an outage.
+    assert isinstance(results, dict)
+    assert results["upstream_error"] is True
+    assert results["results"] == []
+    assert results["caveats"]
 
 
 def test_categorize():

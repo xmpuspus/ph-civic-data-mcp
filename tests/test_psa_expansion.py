@@ -8,11 +8,16 @@ from __future__ import annotations
 
 import pytest
 
+
 from ph_civic_data_mcp.sources.psa import (
     get_health_indicators,
     get_inflation_stats,
     get_labor_stats,
 )
+
+# Hits the live PSA PXWeb API with no offline fallback — live-marked so a
+# transient upstream outage cannot red the offline CI gate (`pytest -x`).
+pytestmark = pytest.mark.live
 
 
 def _has_envelope(result: dict) -> None:

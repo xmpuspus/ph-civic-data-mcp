@@ -125,6 +125,11 @@ async def get_area_profile(location: str) -> dict:
     hazard = _unwrap(results.get("hazard"), caveats, "Hazard assessment") or {}
     weather = _unwrap(results.get("weather"), caveats, "Weather forecast") or {}
     infra = _unwrap(results.get("infra"), caveats, "PhilGEPS infra search") or []
+    if isinstance(infra, dict):
+        # List tools return a dict failure envelope on upstream outage.
+        for c in infra.get("caveats") or []:
+            caveats.append(f"PhilGEPS infra search: {c}")
+        infra = []
     if not isinstance(infra, list):
         infra = []
 
@@ -154,6 +159,7 @@ async def get_area_profile(location: str) -> dict:
             "province": province_name,
             "psgc_code": resolved.get("psgc_code"),
             "level": resolved.get("level"),
+            "alternatives": resolved.get("alternatives") or [],
             "hierarchy": [{"level": n.get("level"), "name": n.get("name")} for n in chain],
         },
         "demographics": {
@@ -182,6 +188,8 @@ async def get_area_profile(location: str) -> dict:
             "max_magnitude_30d": hazard.get("max_magnitude_30d"),
             "typhoon_signal_active": hazard.get("typhoon_signal_active"),
             "active_typhoon_name": hazard.get("active_typhoon_name"),
+            "volcano_alerts": hazard.get("volcano_alerts") or [],
+            "volcano_alerts_scope": hazard.get("volcano_alerts_scope"),
         },
         "weather": {
             "data_source": weather.get("data_source"),

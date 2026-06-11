@@ -24,10 +24,32 @@ from ph_civic_data_mcp.models.location import (
 )
 from ph_civic_data_mcp.server import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 PSGC_BASE = "https://psgc.gitlab.io/api"
 PSGC_LICENSE = "Public domain (PSA Philippine Standard Geographic Code)"
+
+# Common nicknames and abbreviations that the fuzzy scorer cannot bridge on
+# its own ("QC" scores nowhere near "Quezon City"). Keys are compared
+# lowercase. Conservative, well-known entries only — no guesses.
+LOCATION_ALIASES: dict[str, str] = {
+    "qc": "Quezon City",
+    "gensan": "General Santos",
+    "cdo": "Cagayan de Oro",
+    "zambo": "Zamboanga City",
+    "bgc": "Taguig",
+    "metro manila": "NCR",
+    "mm": "NCR",
+    "car": "Cordillera Administrative Region",
+    "caraga": "Region XIII",
+    "soccsksargen": "Region XII",
+    "calabarzon": "Region IV-A",
+    "mimaropa": "Mimaropa Region",
+    "bicol": "Region V",
+    "ilocos region": "Region I",
+    "davao city": "City of Davao",
+}
 
 LEVEL_ENDPOINTS: dict[str, str] = {
     "region": "regions",
@@ -136,18 +158,14 @@ async def _fetch_level(level: str) -> list[dict[str, Any]]:
     if key in cache:
         return cache[key]
 
-    try:
-        response = await fetch_with_retry(CLIENT, "GET", f"{PSGC_BASE}/{endpoint}/")
-        response.raise_for_status()
-        data = response.json()
-    except Exception as exc:
-        log_stderr(f"PSGC fetch error ({endpoint}): {exc}")
-        cache[key] = []
-        return []
+    # Failures raise — a transient PSGC outage must not be cached as an empty
+    # level list for 24h (which made every resolve report "no match").
+    response = await fetch_with_retry(CLIENT, "GET", f"{PSGC_BASE}/{endpoint}/")
+    response.raise_for_status()
+    data = response.json()
 
     if not isinstance(data, list):
-        cache[key] = []
-        return []
+        raise RuntimeError(f"PSGC {endpoint} endpoint returned non-list payload")
     cache[key] = data
     return data
 
@@ -159,6 +177,7 @@ async def _fetch_one(code: str) -> dict[str, Any] | None:
     if key in cache:
         return cache[key]
 
+    had_errors = False
     for endpoint in (
         "regions",
         "provinces",
@@ -175,8 +194,12 @@ async def _fetch_one(code: str) -> dict[str, Any] | None:
                     return payload
         except Exception as exc:
             log_stderr(f"PSGC code fetch error ({endpoint}/{code}): {exc}")
+            had_errors = True
             continue
-    cache[key] = None
+    # Only cache a genuine miss; a None born from upstream errors must not
+    # pin "code does not exist" for the 24h TTL.
+    if not had_errors:
+        cache[key] = None
     return None
 
 
@@ -220,6 +243,9 @@ def _candidate_queries(query: str) -> list[str]:
     if not query:
         return []
     raw = query.strip()
+    alias = LOCATION_ALIASES.get(raw.lower())
+    if alias:
+        raw = alias
     parts = [p.strip() for p in raw.split(",") if p.strip()]
     expansions = {
         "sta.": "santa",
@@ -235,6 +261,15 @@ def _candidate_queries(query: str) -> list[str]:
             out = out.replace(abbr, full)
         return " ".join(out.split())
 
+    def _city_variant(text: str) -> str | None:
+        # PSGC names cities "City of X" while people write "X City" — the
+        # fuzzy scorer can't bridge that ("Manila City" scored Danao City
+        # highest before this). Generate the canonical form as a candidate.
+        lc = text.lower().strip()
+        if lc.endswith(" city") and len(lc) > len(" city"):
+            return f"city of {text[: -len(' city')].strip()}"
+        return None
+
     candidates_ordered: list[str] = [raw]
     if len(parts) > 1:
         candidates_ordered.append(parts[-1])
@@ -243,6 +278,10 @@ def _candidate_queries(query: str) -> list[str]:
     if len(parts) > 1:
         candidates_ordered.append(_expand(parts[-1]))
         candidates_ordered.append(_expand(parts[0]))
+    for base in list(candidates_ordered):
+        variant = _city_variant(base)
+        if variant:
+            candidates_ordered.append(variant)
     seen: set[str] = set()
     deduped: list[str] = []
     for q in candidates_ordered:
@@ -266,6 +305,7 @@ async def _resolve_query(query: str) -> dict | None:
     ]
 
     best: tuple[float, dict[str, Any], str] | None = None
+    best_pool: list[tuple[float, dict[str, Any], str]] = []
     queries = _candidate_queries(query)
 
     for q in queries:
@@ -282,6 +322,7 @@ async def _resolve_query(query: str) -> dict | None:
             top = candidates[0]
             if best is None or top[0] > best[0]:
                 best = top
+                best_pool = candidates
             if top[0] >= 0.95:
                 break
 
@@ -300,10 +341,34 @@ async def _resolve_query(query: str) -> dict | None:
 
     score, top, level = best
     record = _record_to_psgc(top, level_hint=level)
+
+    # Surface runner-up candidates so ambiguous names ("San Juan" exists in
+    # several provinces) don't resolve silently to one of many equals.
+    top_code = top.get("code") or top.get("psgcCode")
+    alternatives: list[dict] = []
+    seen_codes: set[str] = {top_code} if top_code else set()
+    for alt_score, alt_item, alt_level in best_pool:
+        if alt_score < 0.8 or len(alternatives) >= 3:
+            break
+        alt_code = alt_item.get("code") or alt_item.get("psgcCode")
+        if not alt_code or alt_code in seen_codes:
+            continue
+        seen_codes.add(alt_code)
+        alternatives.append(
+            {
+                "psgc_code": alt_code,
+                "name": alt_item.get("name", ""),
+                "region_name": alt_item.get("regionName"),
+                "level": alt_level,
+                "match_score": round(alt_score, 3),
+            }
+        )
+
     return {
         **record.model_dump(mode="json"),
         "matched": True,
         "match_score": round(score, 3),
+        "alternatives": alternatives,
         "data_retrieved_at": _now().isoformat(),
     }
 
@@ -317,8 +382,12 @@ async def resolve_ph_location(query: str) -> dict:
                "Sta. Mesa, Manila", "Cebu City", "NCR", "Pampanga", "Tagaytay".
 
     Returns: psgc_code, name, level (region|province|city|municipality|barangay),
-    parent_code, region_name, source_url, license, match_score, data_retrieved_at.
-    Empty {"caveats": [...]} when no match.
+    parent_code, region_name, source_url, license, match_score, alternatives
+    (runner-up candidates for ambiguous names), data_retrieved_at.
+    {"matched": false, "caveats": [...]} when no match; the same shape plus
+    "upstream_error": true when the PSGC API itself was unreachable.
+
+    Common nicknames resolve directly: "QC", "Gensan", "CDO", "Metro Manila".
     """
     key = cache_key({"tool": "resolve", "query": query.lower().strip()})
     cache = CACHES["psgc_resolve"]
@@ -328,8 +397,22 @@ async def resolve_ph_location(query: str) -> dict:
     try:
         result = await _resolve_query(query)
     except Exception as exc:
+        # Upstream outage — report it as such and do NOT cache, so a blip
+        # doesn't pin "no match" for the 24h TTL.
         log_stderr(f"resolve_ph_location error: {exc}")
-        result = None
+        return {
+            "query": query,
+            "matched": False,
+            "upstream_error": True,
+            "caveats": [
+                f"PSGC API unavailable ({type(exc).__name__}: {exc}). "
+                f"Could not attempt resolution of '{query}' — retry later."
+            ],
+            "source": "PSGC",
+            "source_url": PSGC_BASE,
+            "license": PSGC_LICENSE,
+            "data_retrieved_at": _now().isoformat(),
+        }
 
     if result is None:
         result = {
@@ -352,7 +435,8 @@ async def list_admin_units(
     parent_code: str | None = None,
     level: str | None = None,
     limit: int = 50,
-) -> list[dict]:
+    offset: int = 0,
+) -> list[dict] | dict:
     """Browse children of a PSGC node, or top-level regions when parent_code is None.
 
     Args:
@@ -360,21 +444,39 @@ async def list_admin_units(
         level: Filter children by level
                (region|province|city|municipality|district|barangay).
         limit: Max units to return (default 50, capped at 500).
+        offset: Skip this many matching units before returning results —
+                page past 500 children (e.g. Manila has 897 barangays) by
+                calling again with offset=500.
 
     Returns: list of PSGC records with psgc_code, name, level, parent_code,
-    region_name, source_url, license, source.
+    region_name, source_url, license, source. On PSGC API failure returns
+    {results: [], upstream_error: true, caveats}.
     """
     limit = max(1, min(int(limit), 500))
+    offset = max(0, int(offset))
 
-    if parent_code is None:
-        target_level = level or "region"
-        items = await _fetch_level(target_level)
-        out = [
-            _record_to_psgc(it, level_hint=target_level).model_dump(mode="json")
-            for it in items[:limit]
-        ]
-        return out
+    try:
+        if parent_code is None:
+            target_level = level or "region"
+            items = await _fetch_level(target_level)
+            return [
+                _record_to_psgc(it, level_hint=target_level).model_dump(mode="json")
+                for it in items[offset : offset + limit]
+            ]
+        return await _list_children(parent_code, level, limit, offset)
+    except Exception as exc:
+        log_stderr(f"list_admin_units error: {exc}")
+        return failure_envelope(
+            "PSGC",
+            PSGC_BASE,
+            f"PSGC API unavailable ({type(exc).__name__}: {exc}).",
+            license=PSGC_LICENSE,
+        )
 
+
+async def _list_children(
+    parent_code: str, level: str | None, limit: int, offset: int
+) -> list[dict]:
     parent_code = parent_code.strip()
     target_level = level
     if target_level is None:
@@ -390,6 +492,7 @@ async def list_admin_units(
     items = await _fetch_level(target_level)
     parent_norm = parent_code.lstrip("0")
     filtered: list[dict] = []
+    matched_so_far = 0
     for item in items:
         # Children fields vary by level
         child_parent_keys = (
@@ -407,6 +510,9 @@ async def list_admin_units(
                 match = True
                 break
         if match:
+            matched_so_far += 1
+            if matched_so_far <= offset:
+                continue
             filtered.append(_record_to_psgc(item, level_hint=target_level).model_dump(mode="json"))
             if len(filtered) >= limit:
                 break
@@ -562,7 +668,20 @@ async def get_location_hierarchy(psgc_code: str) -> dict:
             "data_retrieved_at": _now().isoformat(),
         }
 
-    chain = await _walk_hierarchy(record, level_hint)
+    try:
+        chain = await _walk_hierarchy(record, level_hint)
+    except Exception as exc:
+        log_stderr(f"get_location_hierarchy walk error: {exc}")
+        return {
+            "psgc_code": code,
+            "chain": [],
+            "upstream_error": True,
+            "caveats": [f"PSGC API unavailable while walking hierarchy ({type(exc).__name__})."],
+            "source": "PSGC",
+            "source_url": PSGC_BASE,
+            "license": PSGC_LICENSE,
+            "data_retrieved_at": _now().isoformat(),
+        }
     hierarchy = PSGCHierarchy(
         psgc_code=code,
         chain=chain,

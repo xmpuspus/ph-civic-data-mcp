@@ -14,27 +14,50 @@ mcp = FastMCP(
     You have access to live Philippine civic data, accountability, weather,
     and Earth-observation sources.
 
-    Philippine government sources:
-    - PSGC: Resolve free-text PH place names to canonical PSA Standard Geographic Codes
-    - PHIVOLCS: Real-time earthquakes (5-min updates) and volcano alerts
-    - PAGASA: 10-day weather forecast and active typhoon tracking
-    - PhilGEPS: Government procurement contracts and infra spending notices
-    - PSA: Population (2020 Census) and poverty statistics (2023)
+    Start here for place-based questions:
+    - get_area_profile(location) — ONE call that resolves the place to its
+      PSGC code, then composes demographics (population, poverty), economy
+      (inflation, labor), procurement activity, multi-hazard risk (quakes,
+      typhoons, volcano alerts), and the 3-day weather outlook, with per-100k
+      normalization already derived. Prefer this over orchestrating the
+      individual tools yourself.
+    - assess_area_risk(location) — hazard-only subset (faster) when you just
+      need earthquake/typhoon/volcano status.
+    - resolve_ph_location(query) — PSGC code for a free-text place name.
+      Handles nicknames (QC, Gensan, CDO, Metro Manila) and returns an
+      `alternatives` list for ambiguous names like "San Juan".
 
-    Accountability tools (v0.3.0):
-    - search_infra_projects / get_infra_project / summarize_infra_spending —
-      Filtered PhilGEPS notices for construction / road / bridge / flood control
-    - flag_infra_anomalies — heuristic indicators (high_cost_no_progress,
-      hazard_overlap, duplicate_titles_same_agency). Indicators only — patterns
-      may have legitimate explanations.
+    Philippine government sources:
+    - PSGC: place-name resolution, admin-unit browsing (list_admin_units
+      supports offset pagination), full hierarchies
+    - PHIVOLCS: real-time earthquakes (5-min updates), bulletins, volcano alerts
+    - PAGASA: 10-day weather forecast, active typhoons, weather alerts
+    - PhilGEPS: procurement notices. search_procurement covers ALL notices;
+      search_infra_projects is the infra-only subset (construction, roads,
+      flood control) with get_infra_project / summarize_infra_spending on top
+    - PSA OpenSTAT: population (2020 Census), poverty (2023),
+      get_inflation_stats (regional CPI, latest published month),
+      get_labor_stats (national LFS rates), get_health_indicators
+
+    Accountability:
+    - flag_infra_anomalies — heuristic indicators
+      (high_cost_no_published_progress, hazard_overlap,
+      duplicate_titles_same_agency). Indicators only — patterns may have
+      legitimate explanations.
 
     Open-data + NASA / NOAA / World Bank sources:
-    - NASA POWER: Daily solar irradiance + climate (temp, precip, wind) at any lat/lng
+    - NASA POWER: daily solar irradiance + climate (temp, precip, wind) at any lat/lng
     - Open-Meteo Air Quality: PM2.5/PM10/NO2/SO2/O3/CO + AQI (no auth)
     - NASA MODIS via ORNL: NDVI + EVI vegetation indices at any lat/lng
     - USGS FDSN: Philippine-region earthquakes from global network (cross-ref to PHIVOLCS)
-    - NOAA IBTrACS: Historical tropical cyclone tracks through Philippine AOR
+    - NOAA IBTrACS: historical tropical cyclone tracks through Philippine AOR
     - World Bank Open Data: Philippine macro indicators (GDP, poverty, inflation, etc.)
+
+    Failure semantics: list tools return a real list on success. On upstream
+    failure they return {results: [], upstream_error: true, caveats: [...]}
+    instead — treat that as "source unavailable", NEVER as "no earthquakes /
+    no typhoons / no notices". Failures are never cached, so retrying later
+    is meaningful.
 
     Civic-tech framing (read every turn):
     This server is for civic research and accountability work. When you call
@@ -177,11 +200,12 @@ async def get_data_freshness() -> dict:
     sources (list of {source, source_url, freshness, cache_ttl_seconds,
     license}), note.
     """
+    tools = await mcp.list_tools()
     return {
         "server_version": __version__,
         "server_name": "ph-civic-data-mcp",
         "transport": "stdio",
-        "tool_count": len(SOURCE_CATALOG) * 2,  # rough lower bound; clients can introspect
+        "tool_count": len(tools),
         "asof": datetime.now(timezone.utc).isoformat(),
         "sources": SOURCE_CATALOG,
         "note": (
@@ -191,6 +215,86 @@ async def get_data_freshness() -> dict:
             "debugging agent behaviour."
         ),
     }
+
+
+@mcp.resource(
+    "data://ph-civic/source-catalog",
+    description=(
+        "The full upstream-source catalog: source name, canonical URL, "
+        "freshness expectation, cache TTL, and license for every data source "
+        "this server composes. Same payload as get_data_freshness.sources."
+    ),
+    mime_type="application/json",
+)
+def source_catalog_resource() -> list[dict]:
+    return SOURCE_CATALOG
+
+
+@mcp.resource(
+    "data://ph-civic/civic-framing",
+    description=(
+        "The civic-tech framing and disclaimer that applies to every "
+        "accountability / procurement result from this server."
+    ),
+    mime_type="text/plain",
+)
+def civic_framing_resource() -> str:
+    return (
+        "This server is for civic research and accountability work. "
+        "Heuristic indicators are statistical only — patterns may have "
+        "legitimate explanations. Present procurement/infra results as "
+        "starting points for further investigation, never as evidence of "
+        "wrongdoing. Use defensible language ('flagged for review', "
+        "'warrants further investigation') and never direct accusations. "
+        "Cite source_url for every factual claim. All data sourced from "
+        "public records (PSGC, PHIVOLCS, PAGASA, PhilGEPS, PSA, and open "
+        "scientific feeds)."
+    )
+
+
+@mcp.prompt(
+    name="area_briefing",
+    description=(
+        "Build a sourced civic briefing for one Philippine location using "
+        "get_area_profile, with hazard and economy context."
+    ),
+)
+def area_briefing(location: str) -> str:
+    return (
+        f"Build a civic data briefing for {location}. Call get_area_profile "
+        f"with location='{location}' first. Then summarize: resolved PSGC "
+        "identity (mention alternatives if the name was ambiguous), "
+        "demographics, economy (note each reference period — PSA publishes "
+        "with a lag), procurement activity with the per-100k normalization, "
+        "hazard status (earthquakes, typhoons, volcano alerts), and the "
+        "3-day weather outlook. Cite source_url for every factual claim and "
+        "surface every caveat the profile returns. If any block shows "
+        "upstream_error, say the source was unavailable rather than "
+        "reporting empty data."
+    )
+
+
+@mcp.prompt(
+    name="infra_accountability_scan",
+    description=(
+        "Run an infra-spending accountability scan for a region or province "
+        "using search_infra_projects + flag_infra_anomalies, with the "
+        "required defensible framing."
+    ),
+)
+def infra_accountability_scan(area: str) -> str:
+    return (
+        f"Run an infrastructure accountability scan for {area}. Call "
+        f"summarize_infra_spending and flag_infra_anomalies for '{area}'. "
+        "Report flagged notices as items that warrant further review — "
+        "never as evidence of wrongdoing. For each flag, quote the rule "
+        "that fired and its evidence string, and note that "
+        "high_cost_no_published_progress is a cost-threshold transparency "
+        "flag (the public listing publishes no progress data for any "
+        "notice). Include the disclaimer the tools return, cite source_url, "
+        "and state the notice-window limitation (latest ~100 notices, not a "
+        "complete census of projects)."
+    )
 
 
 def _register_tools() -> None:

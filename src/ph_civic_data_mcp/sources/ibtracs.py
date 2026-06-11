@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from ph_civic_data_mcp.models.climate import HistoricalTyphoon
 from ph_civic_data_mcp.server import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 ERDDAP_LAST3Y_URL = "https://erddap.aoml.noaa.gov/hdb/erddap/tabledap/IBTRACS_last3years.csv"
@@ -72,7 +73,7 @@ def _in_par(lat: float | None, lng: float | None) -> bool:
 
 
 @mcp.tool()
-async def get_historical_typhoons_ph(year: int | None = None, limit: int = 30) -> list[dict]:
+async def get_historical_typhoons_ph(year: int | None = None, limit: int = 30) -> list[dict] | dict:
     """Historical tropical cyclone tracks that passed through the Philippine AOR.
 
     Sourced from NOAA IBTrACS (International Best Track Archive) — the
@@ -104,12 +105,22 @@ async def get_historical_typhoons_ph(year: int | None = None, limit: int = 30) -
         text = response.text
     except Exception as exc:
         log_stderr(f"IBTrACS error: {exc}")
-        return []
+        return failure_envelope(
+            "NOAA IBTrACS",
+            base_url,
+            f"IBTrACS ERDDAP endpoint unavailable ({type(exc).__name__}: {exc}).",
+            license="Public domain (NOAA)",
+        )
 
     reader = csv.reader(io.StringIO(text))
     rows = list(reader)
     if len(rows) < 3:
-        return []
+        return failure_envelope(
+            "NOAA IBTrACS",
+            base_url,
+            "IBTrACS response had no data rows — likely an upstream/format issue.",
+            license="Public domain (NOAA)",
+        )
 
     header = rows[0]
     # rows[1] is units, rows[2:] is data

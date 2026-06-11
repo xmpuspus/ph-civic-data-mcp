@@ -4,6 +4,87 @@ All notable changes to `ph-civic-data-mcp` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-06-11
+
+Reliability + agent-UX pass driven by a full 8-dimension product audit of the
+shipped v0.4.0. Tool count stays at 29. One behavior change agents will
+notice: list tools no longer return a bare `[]` when their upstream is down.
+
+### Changed
+
+- **Failure envelopes on list tools.** `get_latest_earthquakes`,
+  `get_volcano_status`, `get_active_typhoons`, `get_weather_alerts`,
+  `search_procurement`, `search_infra_projects`, `get_usgs_earthquakes_ph`,
+  `get_historical_typhoons_ph`, and `list_admin_units` now return
+  `{results: [], upstream_error: true, caveats: [...]}` on upstream failure
+  instead of an empty list, so an outage can never be read as "no
+  earthquakes / no typhoons / no notices". Success responses keep their
+  original list shape. Aggregate tools (`get_procurement_summary`,
+  `summarize_infra_spending`) gain `caveats` + `upstream_error` fields.
+- **Errors are never cached.** Transient upstream failures previously
+  poisoned TTL caches for the full success window (PhilGEPS: 6h of empty
+  notices; PSGC: 24h of "no match", which also dropped the PSA blocks from
+  `get_area_profile`; PSA `_err` envelopes: 24h of nulls). All error paths
+  now bypass the caches.
+- **`flag_infra_anomalies` rule renamed**: `high_cost_no_progress` →
+  `high_cost_no_published_progress`, with an evidence string that states
+  exactly what was checked. The PhilGEPS open listing publishes no progress
+  data for any notice, so the old name implied a per-project check that
+  never happened.
+- `get_data_freshness` reports the real registered tool count (previously a
+  `len(SOURCE_CATALOG) * 2` estimate); server instructions rewritten for
+  v0.5.0 with tool-choice guidance and the failure-envelope contract.
+- Per-volcano bulletin fetches in `get_volcano_status` run in parallel.
+- Error caveats include the exception message, not just the class name.
+
+### Added
+
+- **PSGC nickname aliases** in `resolve_ph_location`: QC, Gensan, CDO,
+  Zambo, BGC, Metro Manila, MM, CAR, CALABARZON, MIMAROPA, SOCCSKSARGEN,
+  Caraga, Bicol, and more.
+- **"X City" ↔ "City of X" bridging** in the resolver. PSGC names cities
+  "City of Manila" while people write "Manila City"; the fuzzy scorer could
+  not bridge that and "Manila City" actually resolved to Danao City (Cebu)
+  at score 0.61 in v0.4.0 — despite the tool's own docstring recommending
+  that exact query. Both forms now resolve at score 1.0.
+- **`alternatives` field** on resolve results: ambiguous names ("San Juan")
+  return runner-up candidates with PSGC codes, regions, and match scores.
+- **`offset` parameter** on `list_admin_units` — page past the 500 cap
+  (Manila has 897 barangays).
+- **Volcano alerts in both composites**: `assess_area_risk` and
+  `get_area_profile` include `volcano_alerts` (alert level >= 1, national
+  scope, explicitly labeled).
+- **MCP resources**: `data://ph-civic/source-catalog`,
+  `data://ph-civic/civic-framing`.
+- **MCP prompts**: `area_briefing(location)`,
+  `infra_accountability_scan(area)`.
+- **Weekly live-drift CI workflow** (`.github/workflows/live-drift.yml`)
+  runs the `live`-marked suite against real upstreams every Monday so
+  scraper rot surfaces in Actions, not user reports.
+- Offline regression suite `tests/test_v050_fixes.py` (envelopes, negative-
+  cache elimination, aliases, alternatives, pagination, allowlist, volcano
+  stitch, real tool_count, resources/prompts).
+
+### Fixed
+
+- **SSRF-shaped gap**: `get_earthquake_bulletin` fetched any agent-supplied
+  URL through the SSL-relaxed PHIVOLCS client with only a
+  `startswith("http")` check. Now allowlisted to `*.phivolcs.dost.gov.ph`.
+- Unguarded `date_parser.parse` in `flag_infra_anomalies`' hazard-input
+  summary could crash the whole tool on one malformed upstream datetime.
+- Seven live-hitting test modules ran inside the "no live HTTP" CI gate
+  (`pytest -x` + transient outage = red CI). All are now `live`-marked.
+- `manifest.json` and README said "25 tools" (actual: 29).
+- README air-quality city count corrected (~70, was "~80").
+- Dockerfile runs as a non-root user and is now documented in the README.
+- Version is single-sourced from `__init__.py` (hatch dynamic version);
+  the HTTP User-Agent derives from it instead of a hardcoded string.
+
+### Removed
+
+- Unused `openpyxl` dependency (a leftover from the original xlsx plan that
+  PhilGEPS never shipped).
+
 ## [0.4.0] — 2026-05-18
 
 Additive minor on the shipped public package. Expands the PSA OpenSTAT layer

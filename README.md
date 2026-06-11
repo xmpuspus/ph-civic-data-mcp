@@ -16,7 +16,7 @@
 [![Install via Smithery](https://img.shields.io/badge/Install%20via-Smithery-blueviolet)](https://smithery.ai/server/ph-civic-data-mcp)
 [![Add via Claude Code](https://img.shields.io/badge/Add%20via-Claude%20Code-D97757?logo=anthropic)](https://code.claude.com/docs/en/mcp)
 
-`ph-civic-data-mcp` is a zero-cost, `stdio`-transport MCP server. **v0.4.0** expands the PSA OpenSTAT layer beyond population/poverty into the live economy — `get_inflation_stats` (regional CPI), `get_labor_stats` (Labor Force Survey), `get_health_indicators` — and adds the auto-stitch differentiator `get_area_profile`: name a place once and get the resolved PSGC spine plus demographics, economy, procurement, hazard, and weather composed in a single agent turn, with infrastructure notices already normalized per 100k residents. **v0.3.1** was a correctness pass on the v0.3.0 accountability layer (no fabricated PAGASA advisories, stoplisted hazard tokens, "City of Manila" coordinate bridge, province/agency-alias infra search). **v0.3.0** added the PH Accountability layer: PSGC location resolver, infra spending search, and one cross-source heuristic that flags procurement notices for further review by cross-referencing PHIVOLCS earthquakes and PAGASA typhoon footprints. **v0.2.0** added six no-auth scientific + open-data sources (NASA POWER, Open-Meteo Air Quality, NASA MODIS, USGS FDSN, NOAA IBTrACS, World Bank Open Data) on top of the original four Philippine government feeds (PHIVOLCS, PAGASA, PhilGEPS, PSA). 29 tools total. Boots and runs with zero API keys.
+`ph-civic-data-mcp` is a zero-cost, `stdio`-transport MCP server. **v0.5.0** is a reliability + agent-UX pass from a full product audit: list tools now return an explicit `{results: [], upstream_error: true, caveats}` envelope on upstream failure instead of an empty list (an outage can no longer read as "no earthquakes"), failures are never cached, the PSGC resolver understands nicknames (QC, Gensan, CDO) and surfaces `alternatives` for ambiguous names, volcano alert levels are stitched into both multi-hazard composites, and the server now ships MCP resources + prompts. **v0.4.0** expands the PSA OpenSTAT layer beyond population/poverty into the live economy — `get_inflation_stats` (regional CPI), `get_labor_stats` (Labor Force Survey), `get_health_indicators` — and adds the auto-stitch differentiator `get_area_profile`: name a place once and get the resolved PSGC spine plus demographics, economy, procurement, hazard, and weather composed in a single agent turn, with infrastructure notices already normalized per 100k residents. **v0.3.1** was a correctness pass on the v0.3.0 accountability layer (no fabricated PAGASA advisories, stoplisted hazard tokens, "City of Manila" coordinate bridge, province/agency-alias infra search). **v0.3.0** added the PH Accountability layer: PSGC location resolver, infra spending search, and one cross-source heuristic that flags procurement notices for further review by cross-referencing PHIVOLCS earthquakes and PAGASA typhoon footprints. **v0.2.0** added six no-auth scientific + open-data sources (NASA POWER, Open-Meteo Air Quality, NASA MODIS, USGS FDSN, NOAA IBTrACS, World Bank Open Data) on top of the original four Philippine government feeds (PHIVOLCS, PAGASA, PhilGEPS, PSA). 29 tools total. Boots and runs with zero API keys.
 
 All data sourced from public records (PSGC, PHIVOLCS, PAGASA, PhilGEPS, PSA, and open scientific feeds). Heuristic indicators are statistical only; specific allegations, if any, require independent investigation and corroboration.
 
@@ -191,20 +191,20 @@ The LinkedIn showcase — one question correlated across five sources through
 | `get_procurement_summary` | Aggregate procurement stats | `agency`, `region`, `year` |
 | `get_population_stats` | 2020 Census population | `region` |
 | `get_poverty_stats` | 2023 Full-Year poverty incidence | `region` |
-| `assess_area_risk` | Multi-hazard profile (parallel PHIVOLCS + PAGASA) | `location` |
+| `assess_area_risk` | Multi-hazard profile (parallel PHIVOLCS earthquakes + volcano alerts + PAGASA) | `location` |
 | **`get_solar_and_climate`** *(v0.2.0)* | NASA POWER daily solar irradiance + climate variables at any coordinate | `latitude`, `longitude`, `start_date`, `end_date` |
-| **`get_air_quality`** *(v0.2.0)* | Real-time air quality for ~80 major PH cities via Open-Meteo | `location` |
+| **`get_air_quality`** *(v0.2.0)* | Real-time air quality for ~70 major PH cities via Open-Meteo | `location` |
 | **`get_vegetation_index`** *(v0.2.0)* | MODIS NDVI + EVI vegetation index timeseries at any coordinate | `latitude`, `longitude`, `start_date`, `end_date` |
 | **`get_usgs_earthquakes_ph`** *(v0.2.0)* | PH-bbox earthquakes from USGS global network (cross-ref to PHIVOLCS) | `start_date`, `end_date`, `min_magnitude`, `limit` |
 | **`get_historical_typhoons_ph`** *(v0.2.0)* | Historical typhoons that passed through the Philippine AOR (IBTrACS) | `year`, `limit` |
 | **`get_world_bank_indicator`** *(v0.2.0)* | Philippine macro indicator from World Bank Open Data (code or friendly alias) | `indicator`, `per_page` |
-| **`resolve_ph_location`** *(v0.3.0)* | Fuzzy-resolve a free-text PH place name to its canonical PSGC record | `query` |
-| **`list_admin_units`** *(v0.3.0)* | Browse children of a PSGC node, or top-level regions when `parent_code` is None | `parent_code`, `level`, `limit` |
+| **`resolve_ph_location`** *(v0.3.0)* | Fuzzy-resolve a free-text PH place name to its canonical PSGC record. Handles nicknames (QC, Gensan, CDO) and returns `alternatives` for ambiguous names *(v0.5.0)* | `query` |
+| **`list_admin_units`** *(v0.3.0)* | Browse children of a PSGC node, or top-level regions when `parent_code` is None | `parent_code`, `level`, `limit`, `offset` *(v0.5.0)* |
 | **`get_location_hierarchy`** *(v0.3.0)* | Full chain region -> province -> city/municipality for one PSGC code | `psgc_code` |
 | **`search_infra_projects`** *(v0.3.0)* | Filter PhilGEPS notices for infra-related work (construction, road, bridge, flood control) | `keyword`, `region`, `province`, `year`, `min_cost_php`, `status`, `limit` |
 | **`get_infra_project`** *(v0.3.0)* | Full record for one infra project by `project_id` | `project_id` |
 | **`summarize_infra_spending`** *(v0.3.0)* | Aggregate infra notice stats by category, region, agency | `region`, `year`, `funding_source` |
-| **`flag_infra_anomalies`** *(v0.3.0)* | Heuristic indicators for further review (high_cost_no_progress, hazard_overlap, duplicate_titles_same_agency) | `region`, `province`, `min_cost_php` |
+| **`flag_infra_anomalies`** *(v0.3.0)* | Heuristic indicators for further review (high_cost_no_published_progress, hazard_overlap, duplicate_titles_same_agency) | `region`, `province`, `min_cost_php` |
 | **`get_data_freshness`** *(v0.3.0)* | Catalog of every upstream source with TTL, freshness, license | (none) |
 | **`get_inflation_stats`** *(v0.4.0)* | Headline year-on-year CPI inflation, national or regional, latest published month | `area` |
 | **`get_labor_stats`** *(v0.4.0)* | PSA Labor Force Survey key rates (LFPR, employment, unemployment, underemployment) | `region` |
@@ -217,7 +217,7 @@ The LinkedIn showcase — one question correlated across five sources through
 |---|---|---|
 | `PAGASA_API_TOKEN` | Optional | Requires formal PAGASA request. Without it, weather auto-falls-back to Open-Meteo. |
 
-No mandatory API keys. The server boots and all 25 tools work without any token.
+No mandatory API keys. The server boots and all 29 tools work without any token.
 
 ## Data freshness warnings
 
@@ -244,12 +244,36 @@ uv sync --extra dev
 # MCP Inspector
 fastmcp dev src/ph_civic_data_mcp/server.py
 
-# Tests (run against live APIs)
-uv run pytest tests/ -v
+# Offline tests (what CI runs)
+uv run pytest tests/ -q -m "not live" --ignore=tests/test_v030_live.py
+
+# Live tests against real upstreams (also run weekly in CI to catch scraper drift)
+uv run pytest tests/ -q -m live
 
 # Build
 uv run python -m build
 uv run twine check dist/*
+```
+
+### Docker
+
+A `Dockerfile` ships in the repo (runs as a non-root user). The container speaks
+MCP over stdin/stdout, so run it with `-i` and point your MCP client at the
+`docker run` command:
+
+```bash
+docker build -t ph-civic-data-mcp .
+```
+
+```json
+{
+  "mcpServers": {
+    "ph-civic-data": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "ph-civic-data-mcp"]
+    }
+  }
+}
 ```
 
 ## Limitations
@@ -257,6 +281,73 @@ uv run twine check dist/*
 - **PAGASA token is gated.** Non-government users may be denied. Open-Meteo fallback removes this as a hard dependency.
 - **PhilGEPS is not real-time.** Public portal exposes no filterable API; this server operates on the latest ~100 notices with client-side filtering.
 - **Emergencies:** direct users to official channels; this is a research tool.
+
+## What's new in v0.5.0 — reliability + agent-UX pass
+
+A product audit of the shipped v0.4.0 surfaced one theme: the happy paths were
+solid, but nearly every weak spot was about what an agent sees when an upstream
+fails. v0.5.0 fixes the failure paths and tightens self-description. Tool count
+stays at 29; two MCP resources and two MCP prompts are new.
+
+### Honest failure semantics (the big one)
+
+- **No more silent all-clears.** List tools (`get_latest_earthquakes`,
+  `get_active_typhoons`, `get_weather_alerts`, `get_volcano_status`,
+  `search_procurement`, `search_infra_projects`, `get_usgs_earthquakes_ph`,
+  `get_historical_typhoons_ph`, `list_admin_units`) returned a bare `[]` when
+  their upstream was down — indistinguishable from "no earthquakes right now".
+  They now return `{results: [], upstream_error: true, caveats: [...]}` on
+  failure, with the failure mode named. Success responses keep their original
+  list shape.
+- **Failures are never cached.** Previously a single transient PhilGEPS error
+  pinned an empty notice window for 6 hours, and a PSGC blip made every
+  location resolve report "no match" for 24 hours (which also silently dropped
+  the PSA blocks out of `get_area_profile`). Error results now bypass every
+  TTL cache, so retrying later actually retries.
+- **Caveats carry the real error** (`ConnectError: ...`), not just an
+  exception class name.
+
+### Location resolution that meets agents where they are
+
+- `resolve_ph_location` understands common nicknames: QC, Gensan, CDO,
+  Zambo, BGC, Metro Manila, CAR, CALABARZON, and friends.
+- Ambiguous names no longer resolve silently: "San Juan" (which exists in
+  NCR, La Union, Batangas, ...) returns the best match plus an
+  `alternatives` list with PSGC codes, regions, and scores.
+- `list_admin_units` gains an `offset` parameter — Manila's 897 barangays are
+  now fully pageable past the 500 cap.
+
+### Composites get volcanoes
+
+`assess_area_risk` and `get_area_profile` now include `volcano_alerts`
+(PHIVOLCS volcanoes at alert level >= 1, national scope, explicitly labeled as
+such). The per-volcano bulletin fetches also went from sequential to parallel.
+
+### Honest accountability heuristics
+
+`flag_infra_anomalies`' rule `high_cost_no_progress` implied it had checked
+progress data per project. It hadn't — the PhilGEPS open listing publishes no
+progress data for *any* notice. The rule is renamed
+`high_cost_no_published_progress` and its evidence string states exactly what
+was checked: a cost threshold, nothing more.
+
+### Hardening + self-description
+
+- `get_earthquake_bulletin` now refuses URLs outside `*.phivolcs.dost.gov.ph`
+  (it fetches through the SSL-relaxed PHIVOLCS client, so it must not be
+  steerable to arbitrary hosts).
+- `get_data_freshness` reports the real registered tool count instead of an
+  estimate; server instructions now describe all 29 tools with tool-choice
+  guidance (`get_area_profile` vs `assess_area_risk`, `search_procurement` vs
+  `search_infra_projects`).
+- New MCP **resources** (`data://ph-civic/source-catalog`,
+  `data://ph-civic/civic-framing`) and **prompts** (`area_briefing`,
+  `infra_accountability_scan`).
+- Live-vs-offline test split is now enforced (live suites are `live`-marked;
+  a weekly scheduled CI run exercises them against real upstreams to catch
+  scraper drift early), the Dockerfile runs as a non-root user, the unused
+  `openpyxl` dependency is gone, and the package version is single-sourced
+  from `__init__.py`.
 
 ## What's new in v0.4.0 — PSA economy + the auto-stitch context layer
 
@@ -390,7 +481,7 @@ This release adds three tightly-scoped capabilities for civic accountability wor
 
 1. **PSGC backbone** (`resolve_ph_location` / `list_admin_units` / `get_location_hierarchy`) — fuzzy free-text place name resolution to the canonical Philippine Standard Geographic Code, full hierarchy walks, and admin-unit browsing. Sourced from the community-mirrored PSA dataset at [psgc.gitlab.io](https://psgc.gitlab.io/api/).
 2. **Infra spending** (`search_infra_projects` / `get_infra_project` / `summarize_infra_spending`) — PhilGEPS notices filtered for construction / road / bridge / flood control / drainage / school building / civil works. The DPWH Transparency portal at `transparency.dpwh.gov.ph` is currently behind Cloudflare's bot challenge and not reachable to non-browser clients, so v0.3.0 sources from the open PhilGEPS listing instead.
-3. **Cross-source anomaly indicator** (`flag_infra_anomalies`) — emits heuristic flags for further review by cross-referencing the infra notice window against PHIVOLCS earthquakes (>=M4.0 in last 30d) and active PAGASA typhoon footprints. Three rules: `high_cost_no_progress`, `hazard_overlap`, `duplicate_titles_same_agency`. Every flagged item ships with a "Statistical indicators derived from public data. Patterns may have legitimate explanations." disclaimer.
+3. **Cross-source anomaly indicator** (`flag_infra_anomalies`) — emits heuristic flags for further review by cross-referencing the infra notice window against PHIVOLCS earthquakes (>=M4.0 in last 30d) and active PAGASA typhoon footprints. Three rules: `high_cost_no_published_progress` (renamed in v0.5.0 — the listing publishes no progress data for any notice, so this is a cost-threshold transparency flag), `hazard_overlap`, `duplicate_titles_same_agency`. Every flagged item ships with a "Statistical indicators derived from public data. Patterns may have legitimate explanations." disclaimer.
 4. **Polish** — `get_data_freshness` returns the catalog of every upstream source with cache TTL, freshness expectation, and license. Every new tool response includes `source`, `source_url`, `data_retrieved_at`, and `license`.
 
 ### Per-tool live outputs

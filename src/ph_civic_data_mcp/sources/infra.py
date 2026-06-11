@@ -22,6 +22,7 @@ from ph_civic_data_mcp.models.infra import InfraProject, InfraSpendingSummary
 from ph_civic_data_mcp.server import mcp
 from ph_civic_data_mcp.sources.philgeps import _fetch_notices  # type: ignore
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.http import log_stderr
 
 PHILGEPS_PORTAL = "https://www.philgeps.gov.ph/"
@@ -248,12 +249,9 @@ async def _load_infra_records() -> list[object]:
     cache = CACHES["infra_projects"]
     if key in cache:
         return cache[key]
-    try:
-        records = await _fetch_notices()
-    except Exception as exc:
-        log_stderr(f"infra _fetch_notices error: {exc}")
-        cache[key] = []
-        return []
+    # _fetch_notices raises on upstream failure; let it propagate so callers
+    # report the outage. Never cache an error as an empty window for 6h.
+    records = await _fetch_notices()
     infra = [r for r in records if _is_infra(r)]
     cache[key] = infra
     return infra
@@ -268,7 +266,7 @@ async def search_infra_projects(
     min_cost_php: float | None = None,
     status: str | None = None,
     limit: int = 25,
-) -> list[dict]:
+) -> list[dict] | dict:
     """Search Philippine government infrastructure projects.
 
     Backed by PhilGEPS open notice listing filtered for infra-related work
@@ -300,7 +298,12 @@ async def search_infra_projects(
         records = await _load_infra_records()
     except Exception as exc:
         log_stderr(f"search_infra_projects error: {exc}")
-        return []
+        return failure_envelope(
+            "PhilGEPS",
+            PHILGEPS_PORTAL,
+            f"PhilGEPS notice listing unavailable ({type(exc).__name__}: {exc}).",
+            license=INFRA_LICENSE,
+        )
 
     kw_lc = (keyword or "").lower().strip() or None
     region_lc = (region or "").lower().strip() or None
@@ -379,7 +382,8 @@ async def get_infra_project(project_id: str) -> dict:
         return {
             "project_id": project_id,
             "matched": False,
-            "caveats": [f"PhilGEPS fetch failed: {type(exc).__name__}"],
+            "upstream_error": True,
+            "caveats": [f"PhilGEPS fetch failed ({type(exc).__name__}: {exc})"],
             "source": "PhilGEPS",
             "source_url": PHILGEPS_PORTAL,
             "license": INFRA_LICENSE,
@@ -432,11 +436,16 @@ async def summarize_infra_spending(
     """
     retrieved_at = _now()
 
+    summary_caveats: list[str] = []
     try:
         records = await _load_infra_records()
     except Exception as exc:
         log_stderr(f"summarize_infra_spending error: {exc}")
         records = []
+        summary_caveats.append(
+            f"PhilGEPS notice listing unavailable ({type(exc).__name__}: {exc}); "
+            "totals below are zero because of the outage, not zero activity."
+        )
 
     region_lc = (region or "").lower().strip() or None
 
@@ -499,6 +508,8 @@ async def summarize_infra_spending(
     )
     return {
         **summary.model_dump(mode="json"),
+        "caveats": summary_caveats,
+        "upstream_error": bool(summary_caveats),
         "data_retrieved_at": retrieved_at.isoformat(),
         "disclaimer": INFRA_DISCLAIMER,
     }

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
+
 from ph_civic_data_mcp.sources.cross_source import assess_area_risk
+
+# Fans out to live PHIVOLCS + PAGASA with no offline fallback — live-marked so a
+# transient upstream outage cannot red the offline CI gate (`pytest -x`).
+pytestmark = pytest.mark.live
 
 
 @pytest.mark.asyncio
