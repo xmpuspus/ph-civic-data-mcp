@@ -42,7 +42,12 @@ mcp = FastMCP(
       flood control) with get_infra_project / summarize_infra_spending on top
     - PSA OpenSTAT: population (2020 Census), poverty (2023 Full Year),
       get_inflation_stats (regional CPI, latest published month),
-      get_labor_stats (national LFS rates), get_health_indicators
+      get_labor_stats (national LFS rates), get_health_indicators.
+      For anything outside those curated tables, walk the whole ~2,900-table
+      catalog: browse_psa_catalog(path) -> describe_psa_dataset(dataset_path)
+      -> query_psa_dataset(dataset_path, selections). Always describe before
+      you query: every dimension needs explicit value codes, "all" and "*"
+      are rejected, and one query is capped at 1000 cells.
 
     Accountability:
     - flag_infra_anomalies — heuristic indicators

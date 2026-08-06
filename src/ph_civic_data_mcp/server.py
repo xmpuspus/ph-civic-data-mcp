@@ -242,6 +242,43 @@ def infra_accountability_scan(area: str) -> str:
 _TOOLS_REGISTERED = False
 
 
+@mcp.prompt(
+    name="psa_data_explorer",
+    title="Explore the PSA OpenSTAT catalog",
+    description=(
+        "Walk the PSA OpenSTAT statistical catalog safely: browse to a topic, "
+        "describe the table, then run one bounded query with explicit codes."
+    ),
+    tags={"psa", "openstat", "statistics", "philippines"},
+)
+def psa_data_explorer(topic: str) -> str:
+    return (
+        f"Find Philippine statistics on '{topic}' in PSA OpenSTAT, then report "
+        "the figures. Work in this order and do not skip a step.\n\n"
+        "1. Call browse_psa_catalog() with no path to list the subjects. Pick "
+        f"the subject whose title fits '{topic}'. Call browse_psa_catalog again "
+        "with that entry's `path`, and keep going until entries come back with "
+        'type "dataset". Folder depth varies by subject, so do not assume two '
+        "levels.\n"
+        "2. Call describe_psa_dataset(dataset_path) on the dataset you chose. "
+        "Read the dimensions, the value codes, and total_cells.\n"
+        "3. Build `selections` with an explicit list of value codes for EVERY "
+        'dimension. "all" and "*" are rejected, and an unselected dimension '
+        "would expand to all of its values and trip the 1000-cell cap. Prefer "
+        "the most recent code in a time dimension.\n"
+        "4. Call query_psa_dataset(dataset_path, selections). If it returns "
+        "validation_error, fix the selection it names and retry once.\n"
+        "5. Report the figures with the table title, the source_url, and the "
+        "reference_period the query returns. State the reference period as the "
+        "vintage of the data. Never present the OpenSTAT publication timestamp "
+        "as the data vintage; they are different things.\n"
+        "6. Surface every entry in `caveats`. A null value means PSA published "
+        "'..' for that cell, which is a missing value and never a zero. If the "
+        "response carries upstream_error, say OpenSTAT was unreachable rather "
+        "than reporting no data."
+    )
+
+
 def _register_tools() -> None:
     """Import every source module so its @mcp.tool decorators run.
 
@@ -274,6 +311,7 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import usgs  # noqa: F401
     from ph_civic_data_mcp.sources import ibtracs  # noqa: F401
     from ph_civic_data_mcp.sources import world_bank  # noqa: F401
+    from ph_civic_data_mcp.sources import psa_catalog  # noqa: F401
 
 
 def main() -> None:
