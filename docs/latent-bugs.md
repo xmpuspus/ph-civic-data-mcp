@@ -1,7 +1,7 @@
 # Latent bugs found but not fixed in v0.6.0
 
 > Items 4 and 8 were fixed during the review rounds and are marked below.
-> Everything else still stands.
+> Items 12 to 16 came from rounds 5 and 6. Everything else still stands.
 
 Found by an adversarial and a cross-model review of the v0.6.0 branch on
 2026-08-06. Every item here predates that branch, so none of them ship as a
@@ -119,6 +119,45 @@ empty result.
 
 Severity: low.
 
+## 12. A failed metadata fetch can let an older PSA table win discovery
+
+`sources/psa.py`, in `_pick_latest_table`. When the metadata GET for a
+candidate fails, that candidate is skipped, so an older backcast table can win
+and cache as the current series. The tool then reports stale figures as latest.
+
+Severity: high. It publishes a wrong vintage silently. Predates v0.4.0.
+
+## 13. A failed CPI query for the newest year falls back to an older year
+
+`sources/psa.py`, in `get_inflation_stats`. The year loop walks backwards and
+returns the first year that answers, labelling it the latest available result.
+A transient failure on the newest year therefore reports an older month as
+current.
+
+Severity: high, same class as 12.
+
+## 14. The national lookup substitutes the first regional value
+
+`sources/psa.py`, in `_find_geo_value`. With `region=None` and no PHILIPPINES
+entry in the metadata, it returns `values[0]`, which is whatever sits first.
+
+Severity: medium. Only metadata drift reaches it.
+
+## 15. A year-filtered infra search keeps records with an unknown year
+
+`sources/infra.py`. A record whose publication year cannot be parsed passes a
+year filter instead of being excluded.
+
+Severity: medium.
+
+## 16. The rate limiter counts logical calls, not physical retries
+
+`sources/psa.py`. A 429 or 503 retry inside `fetch_with_retry` re-sends without
+taking a new token, so the achieved rate can exceed the bucket under retries.
+The 429 backoff covers the practical case.
+
+Severity: low.
+
 ## Suggested order
 
 1, then 10, then 2, then 6 and 7 together, then 3 and 5, then 4, 8, 9 and 11.
@@ -126,3 +165,5 @@ Items 1, 8 and 10 are data-integrity defects and should lead. Item 2 is the
 only one with a security shape.
 
 Items 9, 10 and 11 came from the second cross-model pass on 2026-08-06.
+Items 12 to 16 came from rounds 5 and 6 the same day. 12 and 13 are the most
+urgent of the whole list: both publish a wrong vintage without saying so.

@@ -893,3 +893,69 @@ def test_release_smoke_never_interpolates_the_dispatch_input_into_shell():
         if in_run and "github.event.inputs" in line:
             raise AssertionError(f"dispatch input reaches the shell body: {line.strip()}")
     assert "INPUT_VERSION: ${{ github.event.inputs.version }}" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sub_year_labels", [["2018", "2021"], ["2018", "unknown"]])
+async def test_a_mismatched_subsistence_year_withholds_rather_than_crashes(
+    monkeypatch, sub_year_labels
+):
+    """Setting sub_geo = None mid-block used to reach sub_geo[0] and crash."""
+    _clear_psa_state()
+    sub_meta = {
+        **SUBSISTENCE_META,
+        "variables": [
+            SUBSISTENCE_META["variables"][0],
+            SUBSISTENCE_META["variables"][1],
+            {
+                "code": "Year",
+                "text": "Year",
+                "values": ["0", "1"],
+                "valueTexts": sub_year_labels,
+            },
+        ],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _json_response(
+                method,
+                url,
+                {
+                    "columns": [{"code": "Geolocation", "type": "d"}],
+                    "data": [{"key": ["0"], "values": ["10.9"]}],
+                },
+            )
+        if url.endswith("/DB/"):
+            return _json_response(method, url, ROOT_ENTRIES)
+        if url.endswith("/DB/1F/"):
+            return _json_response(method, url, POVERTY_SUBJECT_ENTRIES)
+        if url.endswith("/DB/1F/FY/"):
+            return _json_response(method, url, FY_TABLE_ENTRIES)
+        if url.endswith("0011F3DF010.px"):
+            return _json_response(method, url, POVERTY_META)
+        if url.endswith("0051F3DF030.px"):
+            return _json_response(method, url, sub_meta)
+        return httpx.Response(404, text="no", request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+
+    result = await psa_module.get_poverty_stats()
+    assert result["poverty_incidence_pct"] == pytest.approx(10.9)
+    assert result["reference_year"] == 2023
+    assert result["subsistence_incidence_pct"] is None
+    assert result["upstream_error"] is True
+    assert any("withheld" in c for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["psa_poverty"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_matching_subsistence_year_is_still_reported(monkeypatch):
+    """The withholding guard must not suppress the normal case."""
+    _clear_psa_state()
+    _install_fake_openstat(monkeypatch)
+
+    result = await psa_module.get_poverty_stats()
+    assert result["poverty_incidence_pct"] == pytest.approx(10.9)
+    assert result["subsistence_incidence_pct"] == pytest.approx(10.9)
+    assert not result.get("upstream_error")

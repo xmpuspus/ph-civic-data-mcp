@@ -608,38 +608,43 @@ async def get_poverty_stats(region: str | None = None) -> dict:
             sub_year_code, sub_yv, sub_yt = _variable_values(sub_meta, "Year")
             sub_year_val = sub_yv[-1] if sub_yv else "0"
             sub_year_int = _year_from_label(sub_yt[-1]) if sub_yt else None
-            if sub_year_int is not None and sub_year_int != year_int:
-                # Labelling a different year's subsistence figure with the
-                # poverty table's reference year would misstate the vintage.
-                partial.append(
-                    f"Subsistence table's latest year is {sub_year_int}, not {year_int}; "
-                    "the subsistence figure is withheld rather than mislabelled."
+            # The two tables can publish different latest years. Reporting the
+            # subsistence figure under the poverty table's reference year would
+            # misstate its vintage, so withhold it instead. An unreadable label
+            # counts as a mismatch: an unknown year is not a matching one.
+            if sub_year_int != year_int:
+                seen = (
+                    sub_year_int if sub_year_int is not None else (sub_yt[-1] if sub_yt else None)
                 )
-                sub_geo = None
-            sub_query = {
-                "query": [
-                    {
-                        "code": "Geolocation",
-                        "selection": {"filter": "item", "values": [sub_geo[0]]},
-                    },
-                    {
-                        "code": sub_measure_code,
-                        "selection": {"filter": "item", "values": [sub_incidence_val]},
-                    },
-                    {
-                        "code": sub_year_code or "Year",
-                        "selection": {"filter": "item", "values": [sub_year_val]},
-                    },
-                ],
-                "response": {"format": "json"},
-            }
-            try:
-                sub_payload = await _post_json_or_raise(sub_url, sub_query)
-            except PSAUpstreamError as exc:
-                sub_payload = None
-                partial.append(f"Subsistence query failed: {exc}")
-            if sub_payload:
-                subsistence_pct = _first_cell(sub_payload)
+                partial.append(
+                    f"Subsistence table's latest year is {seen!r}, not {year_int}. "
+                    "The subsistence figure is withheld rather than mislabelled."
+                )
+            else:
+                sub_query = {
+                    "query": [
+                        {
+                            "code": "Geolocation",
+                            "selection": {"filter": "item", "values": [sub_geo[0]]},
+                        },
+                        {
+                            "code": sub_measure_code,
+                            "selection": {"filter": "item", "values": [sub_incidence_val]},
+                        },
+                        {
+                            "code": sub_year_code or "Year",
+                            "selection": {"filter": "item", "values": [sub_year_val]},
+                        },
+                    ],
+                    "response": {"format": "json"},
+                }
+                try:
+                    sub_payload = await _post_json_or_raise(sub_url, sub_query)
+                except PSAUpstreamError as exc:
+                    sub_payload = None
+                    partial.append(f"Subsistence query failed: {exc}")
+                if sub_payload:
+                    subsistence_pct = _first_cell(sub_payload)
 
     stats = PovertyStats(
         region=geo_text,
