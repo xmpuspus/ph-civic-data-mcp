@@ -94,6 +94,14 @@ class PSAUpstreamError(RuntimeError):
     """
 
 
+class PSANotFoundError(PSAUpstreamError):
+    """OpenSTAT answered 404. The path is wrong, so retrying will not help.
+
+    A subclass, so every existing `except PSAUpstreamError` still catches it,
+    but a caller that cares can tell a caller mistake from an outage.
+    """
+
+
 async def _get_json(url: str) -> dict | list | None:
     try:
         await _psa_rate_limit()
@@ -109,6 +117,8 @@ async def _get_json_or_raise(url: str) -> dict | list:
     try:
         await _psa_rate_limit()
         response = await fetch_with_retry(CLIENT, "GET", url)
+        if response.status_code == 404:
+            raise PSANotFoundError(f"OpenSTAT has no such path: {url}")
         response.raise_for_status()
         return response.json()
     except PSAUpstreamError:
@@ -165,6 +175,19 @@ async def _discover_population_table() -> tuple[str, dict] | None:
                 _DISCOVERY_CACHE["population"] = (table_url, meta)
                 return table_url, meta
     return None
+
+
+def _year_from_label(label: str) -> int | None:
+    """Parse a 4-digit year out of a PSA dimension label, or return None.
+
+    Returning None matters: the old code fell back to a hardcoded 2023, which
+    published a reference period nobody measured.
+    """
+    digits = "".join(ch for ch in str(label) if ch.isdigit())
+    if len(digits) < 4:
+        return None
+    year = int(digits[:4])
+    return year if 1900 < year < 2100 else None
 
 
 def _pick_folder(entries: list[dict], exact: str, *needles: str) -> dict | None:
@@ -296,6 +319,9 @@ def _find_geo_value(meta: dict, region: str | None, geo_code: str) -> tuple[str,
                     return val, txt
             if values:
                 return values[0], texts[0]
+            # An empty values list used to fall through to region.strip() and
+            # raise AttributeError on None.
+            return None
         region_norm = region.strip().lower()
         for val, txt in zip(values, texts):
             t_norm = txt.lower().strip(" .")
@@ -309,7 +335,18 @@ def _find_geo_value(meta: dict, region: str | None, geo_code: str) -> tuple[str,
             if _token_match(region_norm, t_norm):
                 return val, txt.strip(" .")
         # try matching against region codes (I, II, III, NCR, CAR, BARMM)
-        aliases = {"ncr": "national capital", "car": "cordillera", "barmm": "bangsamoro"}
+        # PSA does not label every region the way people name it. A live probe
+        # of the 108-entry geolocation list found these four with no match.
+        aliases = {
+            "ncr": "national capital",
+            "metro manila": "national capital",
+            "car": "cordillera",
+            "barmm": "bangsamoro",
+            "region iv-b": "mimaropa",
+            "iv-b": "mimaropa",
+            "region iv-a": "calabarzon",
+            "iv-a": "calabarzon",
+        }
         target = aliases.get(region_norm, region_norm)
         for val, txt in zip(values, texts):
             if _token_match(target, txt.lower()):
@@ -483,6 +520,9 @@ async def get_poverty_stats(region: str | None = None) -> dict:
     geo_val, geo_text = geo_hit
 
     measure_code, measure_values, measure_texts = _variable_values(meta, "Incidence")
+    if not measure_values:
+        # Indexing [0] here raised IndexError and killed the whole call.
+        return _err("PSA poverty table declares no Incidence dimension; its schema changed.")
     incidence_val = measure_values[0]
     for val, txt in zip(measure_values, measure_texts):
         if "poverty incidence" in txt.lower() and "famil" in txt.lower():
@@ -492,10 +532,12 @@ async def get_poverty_stats(region: str | None = None) -> dict:
     year_code, year_values, year_texts = _variable_values(meta, "Year")
     year_val = year_values[-1] if year_values else "0"
     year_text = year_texts[-1] if year_texts else "latest"
-    try:
-        year_int = int(year_text)
-    except ValueError:
-        year_int = 2023
+    year_int = _year_from_label(year_text)
+    if year_int is None:
+        # Hardcoding 2023 here published a reference period nobody measured.
+        return _err(
+            f"PSA poverty table year label {year_text!r} is not a year; the table schema changed."
+        )
 
     query = {
         "query": [
@@ -569,11 +611,15 @@ async def get_poverty_stats(region: str | None = None) -> dict:
                 ],
                 "response": {"format": "json"},
             }
-            sub_payload = await _post_json(sub_url, sub_query)
+            try:
+                sub_payload = await _post_json_or_raise(sub_url, sub_query)
+            except PSAUpstreamError as exc:
+                sub_payload = None
+                partial.append(f"Subsistence query failed: {exc}")
             if sub_payload and sub_payload.get("data"):
                 try:
-                    subsistence_pct = float(sub_payload["data"][0]["values"][0])
-                except (KeyError, IndexError, ValueError):
+                    subsistence_pct = _to_float(sub_payload["data"][0]["values"][0])
+                except (KeyError, IndexError):
                     subsistence_pct = None
 
     stats = PovertyStats(
@@ -691,6 +737,10 @@ async def _browse(subpath: str) -> list[dict]:
         if key in cache:
             return cache[key]
         entries = await _get_json_or_raise(url)
+        if isinstance(entries, dict):
+            raise PSANotFoundError(
+                f"{url} is a dataset, not a folder. Use describe_psa_dataset for a .px path."
+            )
         if not isinstance(entries, list) or not entries:
             raise PSAUpstreamError(f"PSA browse of {url} returned no entries")
         cache[key] = entries

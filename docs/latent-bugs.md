@@ -1,5 +1,8 @@
 # Latent bugs found but not fixed in v0.6.0
 
+> Items 4 and 8 were fixed during the review rounds and are marked below.
+> Everything else still stands.
+
 Found by an adversarial and a cross-model review of the v0.6.0 branch on
 2026-08-06. Every item here predates that branch, so none of them ship as a
 v0.6.0 regression. They are logged rather than bundled, because widening a
@@ -49,7 +52,7 @@ published".
 
 Severity: medium, and it sits on a hazard tool.
 
-## 4. A subsistence-table outage becomes a null statistic
+## 4. FIXED in v0.6.0. A subsistence-table outage becomes a null statistic
 
 `sources/psa.py`, in `get_poverty_stats`. When subsistence discovery fails, the
 result carries `subsistence_incidence_pct: null` and no `caveats` entry names
@@ -57,6 +60,9 @@ the failure, and the whole response caches for 24h. v0.6.0 logs the failure to
 stderr but still does not surface it to the caller.
 
 Severity: low. The poverty figure beside it is correct.
+
+Fixed: a discovery or query failure now reaches the caller as a `caveats`
+entry with `upstream_error`, and that partial answer never caches.
 
 ## 5. PSGC hierarchy turns an endpoint failure into "record not found"
 
@@ -80,12 +86,15 @@ source was down.
 
 Severity: medium.
 
-## 8. An unparseable poverty reference year silently becomes 2023
+## 8. FIXED in v0.6.0. An unparseable poverty reference year silently becomes 2023
 
 `sources/psa.py`, in `get_poverty_stats`. `except ValueError: year_int = 2023`
 hardcodes a vintage when the label does not parse.
 
 Severity: low, but it is a fabricated reference period.
+
+Fixed: `_year_from_label` returns None and the tool returns an envelope rather
+than publish a year nobody measured.
 
 ## 9. PAGASA: the list-response fallback is unreachable
 

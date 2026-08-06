@@ -693,3 +693,135 @@ async def test_a_health_table_that_fails_to_load_is_reported(monkeypatch):
     assert result["upstream_error"] is True
     assert any("did not load" in c for c in result["caveats"]), result["caveats"]
     assert len(CACHES["psa_health"]) == 0, "a partial answer must not cache"
+
+
+# ---------------------------------------------------------------------------
+# Round-4 review findings
+# ---------------------------------------------------------------------------
+
+
+def test_year_from_label_refuses_to_invent_a_year():
+    """The old fallback published a hardcoded 2023 nobody measured."""
+    assert psa_module._year_from_label("2023") == 2023
+    assert psa_module._year_from_label("FY 2021") == 2021
+    assert psa_module._year_from_label("latest") is None
+    assert psa_module._year_from_label("") is None
+    assert psa_module._year_from_label("99") is None
+    assert psa_module._year_from_label("3199") is None
+
+
+@pytest.mark.asyncio
+async def test_a_poverty_table_with_no_incidence_dimension_does_not_crash(monkeypatch):
+    _clear_psa_state()
+    broken_meta = {
+        "title": "Table 1. Something else entirely",
+        "variables": [
+            {
+                "code": "Geolocation",
+                "values": ["0"],
+                "valueTexts": ["PHILIPPINES"],
+            }
+        ],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if url.endswith("/DB/"):
+            return _json_response(method, url, ROOT_ENTRIES)
+        if url.endswith("/DB/1F/"):
+            return _json_response(method, url, POVERTY_SUBJECT_ENTRIES)
+        if url.endswith("/DB/1F/FY/"):
+            return _json_response(method, url, FY_TABLE_ENTRIES)
+        if url.endswith(".px"):
+            return _json_response(method, url, broken_meta)
+        return httpx.Response(404, text="no", request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+
+    result = await psa_module.get_poverty_stats()
+    assert result["upstream_error"] is True
+    assert any("Incidence" in c for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["psa_poverty"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_subsistence_query_outage_is_reported_and_not_cached(monkeypatch):
+    """The poverty figure is still right; the null subsistence is an outage."""
+    _clear_psa_state()
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            if "0051F3DF030" in url:
+                raise httpx.ConnectError("subsistence table dropped")
+            return _json_response(
+                method,
+                url,
+                {
+                    "columns": [
+                        {"code": "Geolocation", "type": "d"},
+                        {"code": "Threshold/Incidence/Measures of Precision", "type": "d"},
+                        {"code": "Year", "type": "d"},
+                        {"code": "P", "type": "c"},
+                    ],
+                    "data": [{"key": ["0", "1", "2"], "values": ["10.9"]}],
+                },
+            )
+        if url.endswith("/DB/"):
+            return _json_response(method, url, ROOT_ENTRIES)
+        if url.endswith("/DB/1F/"):
+            return _json_response(method, url, POVERTY_SUBJECT_ENTRIES)
+        if url.endswith("/DB/1F/FY/"):
+            return _json_response(method, url, FY_TABLE_ENTRIES)
+        if url.endswith("0011F3DF010.px"):
+            return _json_response(method, url, POVERTY_META)
+        if url.endswith("0051F3DF030.px"):
+            return _json_response(method, url, SUBSISTENCE_META)
+        return httpx.Response(404, text="no", request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+
+    result = await psa_module.get_poverty_stats()
+    assert result["poverty_incidence_pct"] == pytest.approx(10.9)
+    assert result["subsistence_incidence_pct"] is None
+    assert result["upstream_error"] is True
+    assert any("Subsistence query failed" in c for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["psa_poverty"]) == 0, "a partial answer must not cache"
+
+
+@pytest.mark.parametrize(
+    "query,expected_fragment",
+    [
+        ("Metro Manila", "National Capital Region"),
+        ("Region IV-B", "MIMAROPA"),
+        ("IV-B", "MIMAROPA"),
+        ("Region IV-A", "CALABARZON"),
+        ("CAR", "Cordillera"),
+        ("BARMM", "Bangsamoro"),
+    ],
+)
+def test_region_aliases_the_live_probe_found_missing(query, expected_fragment):
+    """A live probe of the 108-entry list found these four with no match."""
+    meta = {
+        "variables": [
+            {
+                "code": "Geolocation",
+                "values": ["0", "1", "2", "3", "4", "5"],
+                "valueTexts": [
+                    "PHILIPPINES",
+                    "..National Capital Region (NCR)",
+                    "..MIMAROPA Region",
+                    "..Region IV-A (CALABARZON)",
+                    "..Cordillera Administrative Region (CAR)",
+                    "..Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)",
+                ],
+            }
+        ]
+    }
+    hit = psa_module._find_geo_value(meta, query, "Geolocation")
+    assert hit is not None, f"{query!r} resolved to nothing"
+    assert expected_fragment in hit[1], f"{query!r} resolved to {hit[1]!r}"
+
+
+def test_a_null_region_on_an_empty_dimension_does_not_crash():
+    """region.strip() on None used to raise AttributeError here."""
+    meta = {"variables": [{"code": "Geolocation", "values": [], "valueTexts": []}]}
+    assert psa_module._find_geo_value(meta, None, "Geolocation") is None

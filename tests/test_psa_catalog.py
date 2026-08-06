@@ -847,3 +847,72 @@ def test_the_metadata_lock_registry_is_bounded():
         cat._meta_lock(f"1F/FY/{i}.px")
     assert len(cat._META_LOCKS) <= cat._MAX_META_LOCKS
     cat._META_LOCKS.clear()
+
+
+@pytest.mark.asyncio
+async def test_the_reference_period_reads_chronologically(monkeypatch):
+    """Caller order must not reverse the reported period."""
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, DATA)
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    backwards = await cat.query_psa_dataset(
+        DATASET,
+        {
+            "Major Island Group": ["0"],
+            "Among Families/Population": ["0"],
+            "Year": ["2", "0"],
+        },
+    )
+    assert backwards["reference_period"] == "2018 to 2023", backwards["reference_period"]
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_path_is_a_caller_mistake_not_an_outage(monkeypatch):
+    """A 404 told the agent 'unreachable', so it retried a path that cannot work."""
+
+    async def _not_found(client, method, url, **kwargs):
+        return httpx.Response(404, text="nope", request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _not_found)
+
+    listing = await cat.browse_psa_catalog("ZZ")
+    assert listing["validation_error"] is True
+    assert not listing.get("upstream_error")
+
+    described = await cat.describe_psa_dataset("1F/FY/nosuch.px")
+    assert described["validation_error"] is True
+    assert not described.get("upstream_error")
+
+    queried = await cat.query_psa_dataset("1F/FY/nosuch.px", {"Year": ["0"]})
+    assert queried["validation_error"] is True
+    assert not queried.get("upstream_error")
+
+
+@pytest.mark.asyncio
+async def test_browsing_a_dataset_path_says_so(monkeypatch):
+    """A .px path answers with metadata, not a listing. That is a caller error."""
+
+    async def _meta_body(client, method, url, **kwargs):
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _meta_body)
+    out = await cat.browse_psa_catalog("1F/FY/0241F3DF013.px")
+    assert out["validation_error"] is True
+    assert "describe_psa_dataset" in out["caveats"][0]
+
+
+@pytest.mark.asyncio
+async def test_a_real_outage_is_still_an_outage(monkeypatch):
+    """The 404 mapping must not swallow a genuine transport failure."""
+
+    async def _boom(client, method, url, **kwargs):
+        raise httpx.ConnectError("openstat down")
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _boom)
+    out = await cat.browse_psa_catalog("1F")
+    assert out["upstream_error"] is True
+    assert not out.get("validation_error")

@@ -30,6 +30,7 @@ from ph_civic_data_mcp.sources.psa import (
     _MISSING as PSA_MISSING_MARKERS,
     PSA_API_BASE,
     PSA_LICENSE,
+    PSANotFoundError,
     PSAUpstreamError,
     _browse,
     _get_json_or_raise,
@@ -442,6 +443,10 @@ async def browse_psa_catalog(path: str | None = None) -> dict:
     url = _catalog_url(safe)
     try:
         raw_entries = await _browse(safe)
+    except PSANotFoundError as exc:
+        # A wrong path is a caller mistake. Calling it an outage would tell the
+        # agent to retry something that can never work.
+        return _validation_envelope(url, str(exc), path=safe, entries=[])
     except PSAUpstreamError as exc:
         return _upstream_envelope(url, f"PSA OpenSTAT browse failed: {exc}", path=safe, entries=[])
 
@@ -522,6 +527,8 @@ async def describe_psa_dataset(dataset_path: str) -> dict:
     url = _dataset_url(path)
     try:
         meta = await _dataset_meta(path)
+    except PSANotFoundError as exc:
+        return _validation_envelope(url, str(exc), dataset_path=path, dimensions=[])
     except PSAUpstreamError as exc:
         return _upstream_envelope(
             url,
@@ -641,9 +648,14 @@ def _reference_period(dims: list[dict], resolved: dict[str, list[str]]) -> str |
         if not dim["is_time_like"]:
             continue
         by_code = dim["_all_labels"]
-        labels = [by_code.get(c, c) for c in resolved.get(dim["code"], [])]
-        if not labels:
+        chosen = resolved.get(dim["code"], [])
+        if not chosen:
             continue
+        # Order by the table's own declared sequence, not by the order the
+        # caller happened to list the codes. Otherwise ["2","0"] reports
+        # "2023 to 2018", which is backwards.
+        order = {code: i for i, code in enumerate(by_code)}
+        labels = [by_code.get(c, c) for c in sorted(chosen, key=lambda c: order.get(c, 0))]
         parts.append(labels[0] if len(labels) == 1 else f"{labels[0]} to {labels[-1]}")
     if not parts:
         return None
@@ -713,6 +725,8 @@ async def query_psa_dataset(
 
     try:
         meta = await _dataset_meta(path)
+    except PSANotFoundError as exc:
+        return _validation_envelope(url, str(exc), dataset_path=path, rows=[], row_count=0)
     except PSAUpstreamError as exc:
         return _upstream_envelope(
             url,
