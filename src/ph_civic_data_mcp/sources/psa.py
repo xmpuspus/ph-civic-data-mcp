@@ -335,8 +335,10 @@ def _find_geo_value(meta: dict, region: str | None, geo_code: str) -> tuple[str,
             for val, txt in zip(values, texts):
                 if "philippines" in txt.lower():
                     return val, txt
-            if values:
-                return values[0], texts[0]
+            # zip stops at the shorter list, so a short valueTexts cannot make
+            # texts[0] raise the way a bare index would.
+            for val, txt in zip(values, texts):
+                return val, txt
             # An empty values list used to fall through to region.strip() and
             # raise AttributeError on None.
             return None

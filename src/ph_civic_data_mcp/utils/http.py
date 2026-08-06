@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -46,11 +48,28 @@ def _retry_delay(response: httpx.Response, attempt: int) -> float:
     delay = float(ladder[min(attempt, len(ladder) - 1)])
     raw = response.headers.get("Retry-After")
     if raw:
-        try:
-            delay = max(delay, min(float(raw), MAX_RETRY_AFTER_SECONDS))
-        except ValueError:
-            pass
+        seconds = _retry_after_seconds(raw)
+        if seconds is not None:
+            delay = max(delay, min(seconds, MAX_RETRY_AFTER_SECONDS))
     return delay
+
+
+def _retry_after_seconds(raw: str) -> float | None:
+    """Retry-After is delta-seconds OR an HTTP-date (RFC 9110)."""
+    raw = raw.strip()
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
 
 
 CLIENT = httpx.AsyncClient(

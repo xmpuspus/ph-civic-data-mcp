@@ -339,7 +339,12 @@ async def _dataset_meta(path: str) -> dict:
         if key in cache:
             return cache[key]
         meta = await _get_json_or_raise(_dataset_url(path))
-        if not isinstance(meta, dict) or not meta.get("variables"):
+        if not isinstance(meta, dict):
+            raise PSAUpstreamError(f"PSA dataset {path} returned a non-object body")
+        variables = meta.get("variables")
+        if not isinstance(variables, list) or not variables:
+            # A truthy check alone let a string or a dict through, and every
+            # reader downstream then treated it as a list of variables.
             raise PSAUpstreamError(f"PSA dataset {path} returned no variable metadata")
         cache[key] = meta
         return meta

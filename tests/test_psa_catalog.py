@@ -971,3 +971,17 @@ async def test_max_rows_rejects_a_non_integer(monkeypatch, bad):
     _install(monkeypatch)
     out = await cat.query_psa_dataset(DATASET, FULL, max_rows=bad)
     assert out["validation_error"] is True, f"{bad!r} was accepted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("variables", ["abc", {"a": 1}, [], 7, None])
+async def test_non_list_variables_is_an_upstream_error(monkeypatch, variables):
+    """A truthy check let a string through, and readers treated it as a list."""
+
+    async def _fake(client, method, url, **kwargs):
+        return _resp(method, url, {"title": "T", "variables": variables})
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.describe_psa_dataset("1F/FY/broken.px")
+    assert out["upstream_error"] is True, f"{variables!r} was accepted"
+    assert out["dimensions"] == []

@@ -959,3 +959,27 @@ async def test_a_matching_subsistence_year_is_still_reported(monkeypatch):
     assert result["poverty_incidence_pct"] == pytest.approx(10.9)
     assert result["subsistence_incidence_pct"] == pytest.approx(10.9)
     assert not result.get("upstream_error")
+
+
+def test_retry_after_accepts_an_http_date():
+    """RFC 9110 allows delta-seconds OR an HTTP-date."""
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+
+    from ph_civic_data_mcp.utils import http
+
+    when = datetime.now(timezone.utc) + timedelta(seconds=14)
+    assert http._retry_after_seconds(format_datetime(when)) == pytest.approx(14, abs=2)
+    assert http._retry_after_seconds("17") == pytest.approx(17.0)
+    assert http._retry_after_seconds("  17  ") == pytest.approx(17.0)
+    assert http._retry_after_seconds("nonsense") is None
+    past = datetime.now(timezone.utc) - timedelta(seconds=60)
+    assert http._retry_after_seconds(format_datetime(past)) == pytest.approx(0.0, abs=2)
+
+
+def test_a_short_value_texts_list_does_not_raise():
+    """The empty-values guard covered values but the fallback indexed texts."""
+    meta = {"variables": [{"code": "Geolocation", "values": ["0", "1"], "valueTexts": []}]}
+    assert psa_module._find_geo_value(meta, None, "Geolocation") is None
+    partial = {"variables": [{"code": "Geolocation", "values": ["0", "1"], "valueTexts": ["A"]}]}
+    assert psa_module._find_geo_value(partial, None, "Geolocation") == ("0", "A")
