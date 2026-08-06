@@ -34,6 +34,24 @@ MAX_RETRIES = 3
 RETRY_STATUSES = {429, 503, 504}
 RETRY_DELAYS = [1, 2, 4]
 
+# A 429 means a rate window is full, so the 1s/2s/4s ladder can burn all three
+# attempts inside one window. PSA's is 10 seconds wide. Back off past it, and
+# prefer the server's own Retry-After when it sends one.
+THROTTLE_DELAYS = [5, 11, 11]
+MAX_RETRY_AFTER_SECONDS = 30.0
+
+
+def _retry_delay(response: httpx.Response, attempt: int) -> float:
+    ladder = THROTTLE_DELAYS if response.status_code == 429 else RETRY_DELAYS
+    delay = float(ladder[min(attempt, len(ladder) - 1)])
+    raw = response.headers.get("Retry-After")
+    if raw:
+        try:
+            delay = max(delay, min(float(raw), MAX_RETRY_AFTER_SECONDS))
+        except ValueError:
+            pass
+    return delay
+
 CLIENT = httpx.AsyncClient(
     timeout=httpx.Timeout(30.0, connect=10.0),
     headers={
@@ -63,7 +81,7 @@ async def fetch_with_retry(
         try:
             response = await client.request(method, url, **kwargs)
             if response.status_code in RETRY_STATUSES and attempt < MAX_RETRIES - 1:
-                await asyncio.sleep(RETRY_DELAYS[attempt])
+                await asyncio.sleep(_retry_delay(response, attempt))
                 continue
             return response
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:

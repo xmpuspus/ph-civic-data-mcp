@@ -63,6 +63,7 @@ class PSAUpstreamError(RuntimeError):
 
 async def _get_json(url: str) -> dict | list | None:
     try:
+        await _psa_rate_limit()
         response = await fetch_with_retry(CLIENT, "GET", url)
         response.raise_for_status()
         return response.json()
@@ -102,6 +103,7 @@ async def _post_json_or_raise(url: str, query: dict) -> dict:
 
 async def _post_json(url: str, query: dict) -> dict | None:
     try:
+        await _psa_rate_limit()
         response = await fetch_with_retry(CLIENT, "POST", url, json=query)
         response.raise_for_status()
         return response.json()

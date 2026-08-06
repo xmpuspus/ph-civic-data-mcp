@@ -348,3 +348,90 @@ async def test_labor_survives_a_browse_failure(monkeypatch):
     result = await psa_module.get_labor_stats()
     assert result["upstream_error"] is True
     assert len(CACHES["psa_labor"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting and 429 backoff
+# ---------------------------------------------------------------------------
+
+
+def test_a_429_backs_off_past_the_psa_window():
+    """The 1/2/4s ladder burns all three tries inside one 10s window."""
+    from ph_civic_data_mcp.utils import http
+
+    response = httpx.Response(429, request=httpx.Request("GET", "https://example.test"))
+    delays = [http._retry_delay(response, i) for i in range(3)]
+    assert delays[0] >= 5
+    assert sum(delays[:2]) > 10, f"two 429 retries must outlast a 10s window: {delays}"
+
+
+def test_a_503_keeps_the_short_ladder():
+    from ph_civic_data_mcp.utils import http
+
+    response = httpx.Response(503, request=httpx.Request("GET", "https://example.test"))
+    assert [http._retry_delay(response, i) for i in range(3)] == [1.0, 2.0, 4.0]
+
+
+def test_retry_after_wins_when_the_server_sends_one():
+    from ph_civic_data_mcp.utils import http
+
+    request = httpx.Request("GET", "https://example.test")
+    longer = httpx.Response(429, headers={"Retry-After": "17"}, request=request)
+    assert http._retry_delay(longer, 0) == 17.0
+
+    # A shorter Retry-After never shrinks our own floor.
+    shorter = httpx.Response(429, headers={"Retry-After": "1"}, request=request)
+    assert http._retry_delay(shorter, 0) >= 5
+
+    # A silly value is capped, and a junk value is ignored.
+    huge = httpx.Response(429, headers={"Retry-After": "99999"}, request=request)
+    assert http._retry_delay(huge, 0) == http.MAX_RETRY_AFTER_SECONDS
+    junk = httpx.Response(429, headers={"Retry-After": "Wed, 21 Oct"}, request=request)
+    assert http._retry_delay(junk, 0) >= 5
+
+
+@pytest.mark.asyncio
+async def test_psa_rate_limiter_holds_the_published_window(monkeypatch):
+    """10 requests per 10 seconds: the 11th waits for the window to roll."""
+    import asyncio
+
+    from ph_civic_data_mcp.sources import psa as psa_mod
+
+    psa_mod._RECENT_CALLS.clear()
+    slept: list[float] = []
+
+    async def _record(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", _record)
+
+    for _ in range(psa_mod.PSA_RATE_LIMIT_REQUESTS):
+        await psa_mod._psa_rate_limit()
+    assert slept == [], "the first 10 calls must not wait"
+
+    await psa_mod._psa_rate_limit()
+    assert slept, "the 11th call must wait for the window"
+    assert slept[0] <= psa_mod.PSA_RATE_LIMIT_WINDOW_SECONDS
+    psa_mod._RECENT_CALLS.clear()
+
+
+@pytest.mark.asyncio
+async def test_every_psa_fetch_helper_passes_the_rate_limiter(monkeypatch):
+    from ph_civic_data_mcp.sources import psa as psa_mod
+
+    hits = {"n": 0}
+
+    async def _count():
+        hits["n"] += 1
+
+    async def _ok(client, method, url, **kwargs):
+        return _json_response(method, url, {"variables": []})
+
+    monkeypatch.setattr(psa_mod, "_psa_rate_limit", _count)
+    monkeypatch.setattr(psa_mod, "fetch_with_retry", _ok)
+
+    await psa_mod._get_json("https://example.test/a")
+    await psa_mod._get_json_or_raise("https://example.test/b")
+    await psa_mod._post_json("https://example.test/c", {})
+    await psa_mod._post_json_or_raise("https://example.test/d", {})
+    assert hits["n"] == 4, "all four PSA helpers must go through the limiter"
