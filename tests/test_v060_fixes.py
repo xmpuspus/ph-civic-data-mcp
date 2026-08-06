@@ -825,3 +825,71 @@ def test_a_null_region_on_an_empty_dimension_does_not_crash():
     """region.strip() on None used to raise AttributeError here."""
     meta = {"variables": [{"code": "Geolocation", "values": [], "valueTexts": []}]}
     assert psa_module._find_geo_value(meta, None, "Geolocation") is None
+
+
+def test_first_cell_refuses_a_wrong_typed_values_field():
+    """values[0] on the string '10.9' yields '1' and publishes it as data."""
+    good = {"data": [{"key": ["0"], "values": ["10.9"]}]}
+    assert psa_module._first_cell(good) == pytest.approx(10.9)
+
+    for bad in (
+        {"data": [{"key": ["0"], "values": "10.9"}]},
+        {"data": [{"key": ["0"], "values": 10.9}]},
+        {"data": ["not-a-row"]},
+        {"data": []},
+        {"data": "nope"},
+        {},
+    ):
+        assert psa_module._first_cell(bad) is None, bad
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_typed_poverty_cell_is_not_its_first_character(monkeypatch):
+    _clear_psa_state()
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _json_response(
+                method,
+                url,
+                {
+                    "columns": [{"code": "Geolocation", "type": "d"}],
+                    "data": [{"key": ["0"], "values": "10.9"}],
+                },
+            )
+        if url.endswith("/DB/"):
+            return _json_response(method, url, ROOT_ENTRIES)
+        if url.endswith("/DB/1F/"):
+            return _json_response(method, url, POVERTY_SUBJECT_ENTRIES)
+        if url.endswith("/DB/1F/FY/"):
+            return _json_response(method, url, FY_TABLE_ENTRIES)
+        if url.endswith("0011F3DF010.px"):
+            return _json_response(method, url, POVERTY_META)
+        if url.endswith("0051F3DF030.px"):
+            return _json_response(method, url, SUBSISTENCE_META)
+        return httpx.Response(404, text="no", request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    result = await psa_module.get_poverty_stats()
+    assert result.get("poverty_incidence_pct") != 1.0, "read '1' out of the string '10.9'"
+    assert result.get("poverty_incidence_pct") is None
+    assert len(CACHES["psa_poverty"]) == 0
+
+
+def test_release_smoke_never_interpolates_the_dispatch_input_into_shell():
+    """GitHub substitutes ${{ }} into the script body before bash runs it."""
+    import pathlib
+
+    workflow = pathlib.Path(__file__).resolve().parents[1] / ".github/workflows/release-smoke.yml"
+    text = workflow.read_text()
+    in_run = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("run:"):
+            in_run = True
+            continue
+        if stripped.startswith(("- name:", "env:", "with:", "uses:")):
+            in_run = False
+        if in_run and "github.event.inputs" in line:
+            raise AssertionError(f"dispatch input reaches the shell body: {line.strip()}")
+    assert "INPUT_VERSION: ${{ github.event.inputs.version }}" in text

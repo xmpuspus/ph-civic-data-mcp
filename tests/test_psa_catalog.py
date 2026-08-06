@@ -916,3 +916,58 @@ async def test_a_real_outage_is_still_an_outage(monkeypatch):
     out = await cat.browse_psa_catalog("1F")
     assert out["upstream_error"] is True
     assert not out.get("validation_error")
+
+
+@pytest.mark.asyncio
+async def test_wrong_typed_metadata_is_not_split_into_characters(monkeypatch):
+    """list('abc') is ['a','b','c'], which would publish three fake codes."""
+    broken = {
+        "title": "Broken",
+        "variables": [
+            {"code": "Year", "text": "Year", "values": "012", "valueTexts": "abc"},
+            "not-a-variable",
+        ],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        return _resp(method, url, broken)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.describe_psa_dataset("1F/FY/broken.px")
+    dims = out["dimensions"]
+    assert len(dims) == 1
+    assert dims[0]["values"] == [], f"characters leaked as codes: {dims[0]['values']}"
+    assert dims[0]["value_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_row_does_not_crash_the_tool(monkeypatch):
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(
+                method,
+                url,
+                {
+                    "columns": [
+                        {"code": "Major Island Group", "type": "d"},
+                        {"code": "Among Families/Population", "type": "d"},
+                        {"code": "Year", "type": "d"},
+                        {"code": "V", "type": "c"},
+                    ],
+                    "data": ["not-a-row", {"key": "abc", "values": ["1.0"]}],
+                },
+            )
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(DATASET, FULL)
+    assert not out.get("upstream_error")
+    assert any("key count" in c for c in out["caveats"]), out["caveats"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", [True, False, 1.5, "500", None])
+async def test_max_rows_rejects_a_non_integer(monkeypatch, bad):
+    _install(monkeypatch)
+    out = await cat.query_psa_dataset(DATASET, FULL, max_rows=bad)
+    assert out["validation_error"] is True, f"{bad!r} was accepted"

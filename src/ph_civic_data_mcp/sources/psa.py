@@ -177,6 +177,24 @@ async def _discover_population_table() -> tuple[str, dict] | None:
     return None
 
 
+def _first_cell(payload: dict) -> float | None:
+    """First numeric cell of a PXWeb response, or None.
+
+    Indexing `values[0]` directly turns a wrong-typed string like "10.9" into
+    its first character, "1", and publishes that as a statistic.
+    """
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        return None
+    row = data[0]
+    if not isinstance(row, dict):
+        return None
+    values = row.get("values")
+    if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
+        return None
+    return _to_float(values[0]) if values else None
+
+
 def _year_from_label(label: str) -> int | None:
     """Parse a 4-digit year out of a PSA dimension label, or return None.
 
@@ -558,12 +576,7 @@ async def get_poverty_stats(region: str | None = None) -> dict:
     except PSAUpstreamError as exc:
         return _err(f"PSA poverty query failed: {exc}")
 
-    poverty_pct: float | None = None
-    if payload.get("data"):
-        try:
-            poverty_pct = _to_float(payload["data"][0]["values"][0])
-        except (KeyError, IndexError):
-            poverty_pct = None
+    poverty_pct = _first_cell(payload)
 
     if poverty_pct is None:
         # The call worked, so this is a real gap in PSA's data, not an outage.
@@ -592,8 +605,17 @@ async def get_poverty_stats(region: str | None = None) -> dict:
                 if "subsistence" in t.lower() and "famil" in t.lower():
                     sub_incidence_val = v
                     break
-            sub_year_code, sub_yv, _ = _variable_values(sub_meta, "Year")
+            sub_year_code, sub_yv, sub_yt = _variable_values(sub_meta, "Year")
             sub_year_val = sub_yv[-1] if sub_yv else "0"
+            sub_year_int = _year_from_label(sub_yt[-1]) if sub_yt else None
+            if sub_year_int is not None and sub_year_int != year_int:
+                # Labelling a different year's subsistence figure with the
+                # poverty table's reference year would misstate the vintage.
+                partial.append(
+                    f"Subsistence table's latest year is {sub_year_int}, not {year_int}; "
+                    "the subsistence figure is withheld rather than mislabelled."
+                )
+                sub_geo = None
             sub_query = {
                 "query": [
                     {
@@ -616,11 +638,8 @@ async def get_poverty_stats(region: str | None = None) -> dict:
             except PSAUpstreamError as exc:
                 sub_payload = None
                 partial.append(f"Subsistence query failed: {exc}")
-            if sub_payload and sub_payload.get("data"):
-                try:
-                    subsistence_pct = _to_float(sub_payload["data"][0]["values"][0])
-                except (KeyError, IndexError):
-                    subsistence_pct = None
+            if sub_payload:
+                subsistence_pct = _first_cell(sub_payload)
 
     stats = PovertyStats(
         region=geo_text,

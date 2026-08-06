@@ -354,8 +354,13 @@ def _is_time_like(var: dict) -> bool:
 def _dimensions(meta: dict) -> list[dict]:
     dims: list[dict] = []
     for var in meta.get("variables", []):
-        values = list(var.get("values", []))
-        texts = list(var.get("valueTexts", []))
+        if not isinstance(var, dict):
+            continue
+        raw_values = var.get("values")
+        raw_texts = var.get("valueTexts")
+        # list("abc") is ["a","b","c"], which would publish three fake codes.
+        values = list(raw_values) if isinstance(raw_values, (list, tuple)) else []
+        texts = list(raw_texts) if isinstance(raw_texts, (list, tuple)) else []
         listed = [
             {"code": v, "label": texts[i] if i < len(texts) else v}
             for i, v in enumerate(values[:MAX_VALUES_LISTED])
@@ -715,12 +720,15 @@ async def query_psa_dataset(
 
     url = _dataset_url(path)
 
-    try:
-        rows_cap = int(max_rows)
-    except (TypeError, ValueError):
+    if isinstance(max_rows, bool) or not isinstance(max_rows, int):
         return _validation_envelope(
-            url, "max_rows must be an integer", dataset_path=path, rows=[], row_count=0
+            url,
+            f"max_rows must be a whole number, got {type(max_rows).__name__}",
+            dataset_path=path,
+            rows=[],
+            row_count=0,
         )
+    rows_cap = max_rows
     rows_cap = max(MIN_ROWS, min(rows_cap, MAX_ROWS_CEILING))
 
     try:
@@ -779,8 +787,14 @@ async def query_psa_dataset(
     misaligned = 0
     unparseable = 0
     for record in payload.get("data", []):
-        key = record.get("key", [])
-        values = record.get("values", [])
+        if not isinstance(record, dict):
+            misaligned += 1
+            continue
+        key = record.get("key") or []
+        if not isinstance(key, (list, tuple)):
+            misaligned += 1
+            key = []
+        values = record.get("values")
         if len(key) != len(columns):
             misaligned += 1
         keys = {columns[i]: key[i] for i in range(min(len(columns), len(key)))}
