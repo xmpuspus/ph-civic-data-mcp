@@ -7,6 +7,8 @@ https://datahelpdesk.worldbank.org/knowledgebase/articles/898581-api-basic-call-
 
 from __future__ import annotations
 
+import re
+
 from datetime import datetime, timezone
 
 from ph_civic_data_mcp.models.climate import WorldBankIndicator
@@ -52,8 +54,19 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# A World Bank indicator code is letters, digits, dots and hyphens, e.g.
+# NY.GDP.MKTP.CD. Anything else is path syntax, and the code goes straight into
+# the URL after WB_BASE. "../../../country/USA/indicator/SP.POP.TOTL" returned
+# United States figures under this tool's hardcoded "Philippines" label.
+_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
 def _resolve(indicator: str) -> str:
     return INDICATOR_ALIASES.get(indicator.lower().strip(), indicator.strip())
+
+
+def _valid_code(code: str) -> bool:
+    return bool(_CODE_RE.match(code)) and ".." not in code
 
 
 @mcp.tool(
@@ -79,6 +92,22 @@ async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
         per_page: Number of observations to return (latest first, default 20).
     """
     code = _resolve(indicator)
+    if not _valid_code(code):
+        # Never cached, and never fetched: this is a caller mistake.
+        return {
+            "indicator_id": indicator,
+            "indicator_name": None,
+            "country": "Philippines",
+            "country_iso3": "PHL",
+            "observations": [],
+            "validation_error": True,
+            "source": "World Bank Open Data",
+            "data_retrieved_at": _now().isoformat(),
+            "caveats": [
+                f"{indicator!r} is not a World Bank indicator code. Use a code "
+                "like 'NY.GDP.MKTP.CD' or an alias like 'gdp'."
+            ],
+        }
     per_page = max(1, min(int(per_page), 100))
     ckey = cache_key({"tool": "wb", "indicator": code, "per_page": per_page})
     cache = CACHES["world_bank"]

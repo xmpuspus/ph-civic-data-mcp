@@ -80,6 +80,22 @@ explicit limits:
 - A caller mistake returns `validation_error: true`, distinct from
   `upstream_error: true`. Neither is cached.
 
+`get_world_bank_indicator` put its `indicator` argument straight into the URL
+after the Philippines endpoint, so a crafted code walked out of it. Live proof
+before the fix: `"../../../country/USA/indicator/SP.POP.TOTL"` returned United
+States population, 341,784,857, under this tool's hardcoded "Philippines" and
+"PHL" labels. The code now has to match a World Bank indicator shape, and a
+rejected one never reaches the wire.
+
+`get_population_stats` turned a cell it could not parse into a population of
+zero and cached that for 24 hours. It now returns an envelope. `_to_float`
+also rejects "nan" and "inf", which `float()` accepts and which would
+JSON-encode as out-of-spec literals.
+
+The `workflow_dispatch` input in release-smoke was interpolated into the shell
+script body, where GitHub substitutes it before bash runs, so a crafted input
+executed as a command. It now travels through the environment.
+
 `pip-audit` reported 14 known vulnerabilities across 9 transitive packages on
 the v0.5.0 lockfile. The lockfile now resolves clean: `click` 8.3.2 -> 8.4.2,
 `cryptography` 46.0.7 -> 50.0.0, `idna` 3.11 -> 3.18, `pyjwt` 2.12.1 -> 2.13.0,

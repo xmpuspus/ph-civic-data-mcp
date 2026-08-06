@@ -1039,3 +1039,53 @@ def test_to_float_still_reads_a_real_number():
     assert psa_module._to_float("10.9") == pytest.approx(10.9)
     assert psa_module._to_float("-3") == pytest.approx(-3.0)
     assert psa_module._to_float("..") is None
+
+
+@pytest.mark.parametrize(
+    "code,ok",
+    [
+        ("SP.POP.TOTL", True),
+        ("NY.GDP.MKTP.KD.ZG", True),
+        ("EN-ATM-CO2E", True),
+        ("../../../country/USA/indicator/SP.POP.TOTL", False),
+        ("SP.POP.TOTL?x=1", False),
+        ("a/b", False),
+        ("..", False),
+        ("", False),
+        (".hidden", False),
+        ("x" * 100, False),
+    ],
+)
+def test_world_bank_only_accepts_an_indicator_code(code, ok):
+    """The code goes straight into the URL after WB_BASE."""
+    from ph_civic_data_mcp.sources import world_bank as wb
+
+    assert wb._valid_code(code) is ok
+
+
+@pytest.mark.asyncio
+async def test_a_crafted_world_bank_indicator_cannot_leave_the_ph_endpoint(monkeypatch):
+    """This returned United States figures under a 'Philippines' label."""
+    from ph_civic_data_mcp.sources import world_bank as wb
+
+    requested: list[str] = []
+
+    async def _record(client, method, url, **kwargs):
+        requested.append(url)
+        return httpx.Response(
+            200,
+            json=[{"page": 1}, [{"date": "2025", "value": 1.0, "indicator": {"value": "X"}}]],
+            request=httpx.Request(method, url),
+        )
+
+    monkeypatch.setattr(wb, "fetch_with_retry", _record)
+    CACHES["world_bank"].clear()
+
+    escaped = await wb.get_world_bank_indicator("../../../country/USA/indicator/SP.POP.TOTL")
+    assert escaped["validation_error"] is True
+    assert escaped["observations"] == []
+    assert requested == [], "the crafted code must never reach the wire"
+
+    fine = await wb.get_world_bank_indicator("SP.POP.TOTL")
+    assert not fine.get("validation_error")
+    assert requested == [f"{wb.WB_BASE}/SP.POP.TOTL"]
