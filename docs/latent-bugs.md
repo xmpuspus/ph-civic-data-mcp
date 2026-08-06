@@ -87,8 +87,33 @@ hardcodes a vintage when the label does not parse.
 
 Severity: low, but it is a fabricated reference period.
 
+## 9. PAGASA: the list-response fallback is unreachable
+
+`sources/pagasa.py`. `.get()` runs before the branch meant to handle a list
+response, so the fallback never executes.
+
+Severity: low.
+
+## 10. PAGASA: zero rainfall reads as absent
+
+`sources/pagasa.py`. A truthiness check treats `0` rainfall as missing and
+substitutes a different precipitation field, so a genuinely dry day reports
+another number.
+
+Severity: medium. It is a wrong published figure, not a missing one.
+
+## 11. World Bank: a wrong-typed records object caches as an empty success
+
+`sources/world_bank.py`. v0.6.0 added `upstream_error` to the two failure paths
+it has, but a 200 carrying an unexpected type still falls through to a normal
+empty result.
+
+Severity: low.
+
 ## Suggested order
 
-1, then 2, then 6 and 7 together, then 3 and 5, then 4 and 8. Items 1 and 8 are
-data-integrity defects and should lead. Item 2 is the only one with a security
-shape.
+1, then 10, then 2, then 6 and 7 together, then 3 and 5, then 4, 8, 9 and 11.
+Items 1, 8 and 10 are data-integrity defects and should lead. Item 2 is the
+only one with a security shape.
+
+Items 9, 10 and 11 came from the second cross-model pass on 2026-08-06.

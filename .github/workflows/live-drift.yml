@@ -25,8 +25,11 @@ jobs:
       - name: Set up Python 3.12
         run: uv python install 3.12
 
+      # --python is not optional here. Without it uv reads .python-version and
+      # builds the environment on 3.11, so the job's own name lies about what
+      # it exercised.
       - name: Install dependencies
-        run: uv sync --locked --extra dev
+        run: uv sync --locked --extra dev --python 3.12
 
       - name: Run live suite against real upstreams
         run: uv run --no-sync pytest tests/ -q -m live

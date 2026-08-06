@@ -569,3 +569,105 @@ async def test_an_unpublished_poverty_cell_is_not_an_outage(monkeypatch):
     assert not result.get("upstream_error"), "a published '..' is not an outage"
     assert any("'..'" in c for c in result["caveats"]), result["caveats"]
     assert len(CACHES["psa_poverty"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Round-2 review findings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("I", "Region I (Ilocos Region)"),
+        ("i", "Region I (Ilocos Region)"),
+        ("Region I", "Region I (Ilocos Region)"),
+        ("NCR", "National Capital Region (NCR)"),
+        ("ncr", "National Capital Region (NCR)"),
+        ("Ilocos", "Region I (Ilocos Region)"),
+    ],
+)
+def test_a_short_region_code_does_not_match_philippines(query, expected):
+    """A bare `in` let the region code "I" match "philippines"."""
+    meta = {
+        "variables": [
+            {
+                "code": "Geolocation",
+                "values": ["0", "1", "2"],
+                "valueTexts": [
+                    "PHILIPPINES",
+                    "..National Capital Region (NCR)",
+                    "....Region I (Ilocos Region)",
+                ],
+            }
+        ]
+    }
+    hit = psa_module._find_geo_value(meta, query, "Geolocation")
+    assert hit is not None, f"{query!r} resolved to nothing"
+    assert hit[1] == expected, f"{query!r} resolved to {hit[1]!r}"
+
+
+def test_token_match_rejects_a_fragment():
+    assert psa_module._token_match("i", "region i (ilocos)") is True
+    assert psa_module._token_match("i", "philippines") is False
+    assert psa_module._token_match("cor", "cordillera") is True
+    assert psa_module._token_match("", "anything") is False
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cold_browses_hit_the_catalog_once(monkeypatch):
+    import asyncio
+
+    _clear_psa_state()
+    fetches = {"n": 0}
+
+    async def _slow(client, method, url, **kwargs):
+        fetches["n"] += 1
+        await asyncio.sleep(0.01)
+        return _json_response(method, url, ROOT_ENTRIES)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _slow)
+    results = await asyncio.gather(*[psa_module._browse("1F") for _ in range(20)])
+    assert all(r == ROOT_ENTRIES for r in results)
+    assert fetches["n"] == 1, f"browsed {fetches['n']} times, expected 1"
+
+
+def test_the_path_lock_registry_is_bounded():
+    _clear_psa_state()
+    psa_module._PATH_LOCKS.clear()
+    for i in range(psa_module._MAX_PATH_LOCKS + 20):
+        psa_module._browse_lock(f"path-{i}")
+    assert len(psa_module._PATH_LOCKS) <= psa_module._MAX_PATH_LOCKS
+    psa_module._PATH_LOCKS.clear()
+
+
+@pytest.mark.asyncio
+async def test_a_health_table_that_fails_to_load_is_reported(monkeypatch):
+    """Skipping it silently made a fetch failure look like an unpublished set."""
+    _clear_psa_state()
+    CACHES["psa_health"].clear()
+
+    listing = [
+        {"id": "a.px", "type": "t", "text": "Maternal Mortality Ratio"},
+        {"id": "b.px", "type": "t", "text": "Total Fertility Rate"},
+    ]
+
+    async def _one_table_down(client, method, url, **kwargs):
+        if url.endswith("/DB/1D/"):
+            return _json_response(method, url, listing)
+        if url.endswith("a.px"):
+            raise httpx.ConnectError("that table is down")
+        if url.endswith("b.px"):
+            return _json_response(
+                method,
+                url,
+                {"title": "Total Fertility Rate", "variables": [], "data": []},
+            )
+        return httpx.Response(404, text="no", request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _one_table_down)
+
+    result = await psa_module.get_health_indicators()
+    assert result["upstream_error"] is True
+    assert any("did not load" in c for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["psa_health"]) == 0, "a partial answer must not cache"

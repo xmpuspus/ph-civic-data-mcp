@@ -13,6 +13,7 @@ Landmines (from validation log):
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timezone
 
 from ph_civic_data_mcp._mcp import mcp
@@ -255,6 +256,26 @@ async def _discover_subsistence_table() -> tuple[str, dict]:
     )
 
 
+_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
+
+
+def _token_match(needle: str, haystack: str) -> bool:
+    """Substring match that respects word boundaries.
+
+    A bare `needle in haystack` let the region code "I" match "philippines",
+    so a caller asking for Region I received the national figure labelled as
+    their region. Short needles now have to line up with a whole token.
+    """
+    if not needle:
+        return False
+    tokens = [tok for tok in _TOKEN_SPLIT.split(haystack) if tok]
+    if needle in tokens:
+        return True
+    # A multi-word needle still matches a run of text, but never a fragment
+    # shorter than three characters.
+    return len(needle) >= 3 and needle in haystack
+
+
 def _find_geo_value(meta: dict, region: str | None, geo_code: str) -> tuple[str, str] | None:
     """Return (value_code, value_text) matching the requested region in the geo variable.
 
@@ -275,13 +296,20 @@ def _find_geo_value(meta: dict, region: str | None, geo_code: str) -> tuple[str,
         region_norm = region.strip().lower()
         for val, txt in zip(values, texts):
             t_norm = txt.lower().strip(" .")
-            if region_norm == t_norm or region_norm in t_norm:
+            if region_norm == t_norm:
+                return val, txt.strip(" .")
+        # Substring matching only on a token boundary. Plain `in` let the
+        # one-letter region "I" match "philippines" and hand back national
+        # figures under a regional label.
+        for val, txt in zip(values, texts):
+            t_norm = txt.lower().strip(" .")
+            if _token_match(region_norm, t_norm):
                 return val, txt.strip(" .")
         # try matching against region codes (I, II, III, NCR, CAR, BARMM)
         aliases = {"ncr": "national capital", "car": "cordillera", "barmm": "bangsamoro"}
         target = aliases.get(region_norm, region_norm)
         for val, txt in zip(values, texts):
-            if target in txt.lower():
+            if _token_match(target, txt.lower()):
                 return val, txt.strip(" .")
     return None
 
@@ -605,6 +633,23 @@ def _year_max(meta: dict) -> int:
     return best
 
 
+# One lock per catalog path, bounded so a caller cannot grow it without limit.
+# The paths that matter are a couple of dozen subject folders.
+_MAX_PATH_LOCKS = 256
+_PATH_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _browse_lock(subpath: str) -> asyncio.Lock:
+    lock = _PATH_LOCKS.get(subpath)
+    if lock is None:
+        if len(_PATH_LOCKS) >= _MAX_PATH_LOCKS:
+            # Every holder keeps its own reference, so dropping the registry
+            # never frees a lock somebody is inside.
+            _PATH_LOCKS.clear()
+        lock = _PATH_LOCKS.setdefault(subpath, asyncio.Lock())
+    return lock
+
+
 async def _browse(subpath: str) -> list[dict]:
     """List entries under a catalog path. Successes cache 24h; errors never do.
 
@@ -618,11 +663,18 @@ async def _browse(subpath: str) -> list[dict]:
     if key in cache:
         return cache[key]
     url = f"{PSA_API_BASE}/DB/{subpath}/" if subpath else f"{PSA_API_BASE}/DB/"
-    entries = await _get_json_or_raise(url)
-    if not isinstance(entries, list) or not entries:
-        raise PSAUpstreamError(f"PSA browse of {url} returned no entries")
-    cache[key] = entries
-    return entries
+
+    # Single-flight. Without it, concurrent cold browses of one path queue
+    # duplicate GETs behind the rate limiter and the later ones time out while
+    # the first result sits unused.
+    async with _browse_lock(subpath):
+        if key in cache:
+            return cache[key]
+        entries = await _get_json_or_raise(url)
+        if not isinstance(entries, list) or not entries:
+            raise PSAUpstreamError(f"PSA browse of {url} returned no entries")
+        cache[key] = entries
+        return entries
 
 
 async def _pick_latest_table(
@@ -1163,10 +1215,18 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
         caveat = None
 
     indicators: list[dict] = []
+    unavailable: list[str] = []
     for entry in chosen:
         table_url = f"{PSA_API_BASE}/DB/1D/{entry['id']}"
-        meta = await _get_json(table_url)
+        try:
+            meta = await _get_json_or_raise(table_url)
+        except PSAUpstreamError as exc:
+            # Silently skipping made a fetch failure look like an indicator PSA
+            # does not publish, and the short list then cached for 24h.
+            unavailable.append(f"{entry.get('text') or entry['id']}: {exc}")
+            continue
         if not isinstance(meta, dict):
+            unavailable.append(f"{entry.get('text') or entry['id']}: metadata was not an object")
             continue
         value, year_text = await _latest_health_value(table_url, meta)
         title = meta.get("title", entry.get("text", ""))
@@ -1179,14 +1239,24 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
         )
         indicators.append({**model.model_dump(mode="json"), "source_table": table_url})
 
+    caveats = [caveat] if caveat else []
+    if unavailable:
+        caveats.append(
+            f"{len(unavailable)} of {len(chosen)} matched tables did not load: {unavailable}"
+        )
+
     result = {
         "indicators": indicators,
         "available_indicators": available,
-        "caveats": [caveat] if caveat else [],
+        "caveats": caveats,
         "source": "PSA",
         "source_url": f"{PSA_API_BASE}/DB/1D/",
         "license": PSA_LICENSE,
         "data_retrieved_at": _now().isoformat(),
     }
+    if unavailable:
+        # A partial answer is not a success; do not pin it for the 24h TTL.
+        result["upstream_error"] = True
+        return result
     cache[key] = result
     return result

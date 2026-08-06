@@ -762,3 +762,88 @@ async def test_max_rows_ceiling_is_actually_enforced(monkeypatch):
     assert out["row_count"] == cat.MAX_ROWS_CEILING
     assert out["total_rows_available"] == 6000
     assert out["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_response_with_no_data_array_is_an_upstream_error(monkeypatch):
+    """A 200 with a malformed body is drift, not an empty result set."""
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, {"columns": []})
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(DATASET, FULL)
+    assert out["upstream_error"] is True
+    assert out["rows"] == []
+    assert any("no `data` array" in c for c in out["caveats"]), out["caveats"]
+
+
+@pytest.mark.asyncio
+async def test_a_label_survives_past_the_display_cap(monkeypatch):
+    """Validation reads every code, so labels must reach that far too."""
+    n = cat.MAX_VALUES_LISTED + 50
+    wide = {
+        "title": "Wide table",
+        "variables": [
+            {
+                "code": "Year",
+                "text": "Year",
+                "values": [str(i) for i in range(n)],
+                "valueTexts": [str(1500 + i) for i in range(n)],
+            }
+        ],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(
+                method,
+                url,
+                {
+                    "columns": [{"code": "Year", "type": "d"}, {"code": "V", "type": "c"}],
+                    "data": [{"key": ["520"], "values": ["7.5"]}],
+                },
+            )
+        return _resp(method, url, wide)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset("1F/FY/wide.px", {"Year": ["520"]})
+    assert out["rows"][0]["labels"]["Year"] == "2020", out["rows"][0]["labels"]
+    assert out["reference_period"] == "2020", out["reference_period"]
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_typed_values_field_is_not_indexed_as_a_list(monkeypatch):
+    """values as a string would hand back its first character as data."""
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(
+                method,
+                url,
+                {
+                    "columns": [
+                        {"code": "Major Island Group", "type": "d"},
+                        {"code": "Among Families/Population", "type": "d"},
+                        {"code": "Year", "type": "d"},
+                        {"code": "V", "type": "c"},
+                    ],
+                    "data": [{"key": ["0", "0", "2"], "values": "10.9"}],
+                },
+            )
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(DATASET, FULL)
+    assert out["rows"][0]["value"] is None, "must not read '1' out of the string '10.9'"
+    assert any("key count" in c for c in out["caveats"]), out["caveats"]
+
+
+def test_the_metadata_lock_registry_is_bounded():
+    cat._META_LOCKS.clear()
+    for i in range(cat._MAX_META_LOCKS + 20):
+        cat._meta_lock(f"1F/FY/{i}.px")
+    assert len(cat._META_LOCKS) <= cat._MAX_META_LOCKS
+    cat._META_LOCKS.clear()

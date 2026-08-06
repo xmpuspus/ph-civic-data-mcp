@@ -307,7 +307,19 @@ def _upstream_envelope(source_url: str, message: str, **extra: Any) -> dict:
 # One lock per dataset path. Without it, N concurrent cold calls for the same
 # table all miss the cache and queue N identical GETs behind the rate limiter,
 # so the later ones blow their own timeout while the first result sits unused.
+_MAX_META_LOCKS = 256
 _META_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _meta_lock(path: str) -> asyncio.Lock:
+    lock = _META_LOCKS.get(path)
+    if lock is None:
+        if len(_META_LOCKS) >= _MAX_META_LOCKS:
+            # Every waiter holds its own reference, so clearing the registry
+            # never frees a lock somebody is inside.
+            _META_LOCKS.clear()
+        lock = _META_LOCKS.setdefault(path, asyncio.Lock())
+    return lock
 
 
 async def _dataset_meta(path: str) -> dict:
@@ -317,8 +329,7 @@ async def _dataset_meta(path: str) -> dict:
     if key in cache:
         return cache[key]
 
-    lock = _META_LOCKS.setdefault(path, asyncio.Lock())
-    async with lock:
+    async with _meta_lock(path):
         # Re-check: the holder before us may have filled the cache already.
         if key in cache:
             return cache[key]
@@ -357,6 +368,9 @@ def _dimensions(meta: dict) -> list[dict]:
                 # truncated list would wave a bad code through to PXWeb and turn
                 # a caller mistake into a reported upstream error.
                 "_all_codes": frozenset(str(v) for v in values),
+                "_all_labels": {
+                    str(v): (texts[i] if i < len(texts) else str(v)) for i, v in enumerate(values)
+                },
             }
         )
     return dims
@@ -622,7 +636,7 @@ def _reference_period(dims: list[dict], resolved: dict[str, list[str]]) -> str |
     for dim in dims:
         if not dim["is_time_like"]:
             continue
-        by_code = {v["code"]: v["label"] for v in dim["values"]}
+        by_code = dim["_all_labels"]
         labels = [by_code.get(c, c) for c in resolved.get(dim["code"], [])]
         if not labels:
             continue
@@ -728,7 +742,20 @@ async def query_psa_dataset(
             row_count=0,
         )
 
-    label_lookup = {dim["code"]: {v["code"]: v["label"] for v in dim["values"]} for dim in dims}
+    if "data" not in payload or not isinstance(payload.get("data"), list):
+        return _upstream_envelope(
+            url,
+            "PSA returned a response with no `data` array. That is a malformed "
+            "reply, not an empty result.",
+            dataset_path=path,
+            rows=[],
+            row_count=0,
+        )
+
+    # C. Labels come from every declared value, not from the display-capped
+    # list, so a code past MAX_VALUES_LISTED still resolves to its label and
+    # still contributes its reference period.
+    label_lookup = {dim["code"]: dim["_all_labels"] for dim in dims}
     columns = _key_columns(payload)
     rows: list[dict] = []
     misaligned = 0
@@ -739,7 +766,13 @@ async def query_psa_dataset(
         if len(key) != len(columns):
             misaligned += 1
         keys = {columns[i]: key[i] for i in range(min(len(columns), len(key)))}
-        raw = values[0] if values else None
+        if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
+            # PXWeb always sends a list here. Anything else is drift, and
+            # indexing a string would hand back its first character as data.
+            misaligned += 1
+            raw = None
+        else:
+            raw = values[0] if values else None
         parsed = _to_float(raw)
         if parsed is None and raw is not None and str(raw).strip() not in PSA_MISSING_MARKERS:
             unparseable += 1
