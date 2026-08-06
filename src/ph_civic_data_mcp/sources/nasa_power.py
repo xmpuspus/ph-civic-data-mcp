@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date as date_cls, datetime, timedelta, timezone
 
 from ph_civic_data_mcp.models.climate import SolarClimate, SolarClimateDay
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
@@ -41,7 +41,17 @@ def _sanitize(val: float | None) -> float | None:
     return float(val)
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Solar irradiance and climate at a point",
+    tags={"climate", "nasa", "philippines", "solar"},
+    annotations={
+        "title": "Solar irradiance and climate at a point",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_solar_and_climate(
     latitude: float,
     longitude: float,

@@ -108,4 +108,10 @@ async def test_world_bank_gdp_alias() -> None:
 async def test_world_bank_raw_code() -> None:
     result = await get_world_bank_indicator("SP.POP.TOTL", per_page=5)
     assert result["indicator_id"] == "SP.POP.TOTL"
+    # 2026-07/08: the World Bank API returned empty observation lists for
+    # several days. That is an upstream outage, not scraper drift, so it
+    # degrades to a skip. The shape assertions below still run on real data.
+    if result.get("upstream_error"):
+        pytest.skip(f"World Bank unavailable: {result.get('caveats')}")
     assert len(result["observations"]) >= 1
+    assert result["observations"][0]["year"] >= 2000

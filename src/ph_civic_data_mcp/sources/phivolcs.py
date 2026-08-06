@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 
 from ph_civic_data_mcp.models.earthquake import Earthquake
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.http import PHIVOLCS_CLIENT, fetch_with_retry, log_stderr
@@ -129,7 +129,17 @@ async def _fetch_earthquake_list() -> list[dict]:
     return results
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Latest PHIVOLCS earthquakes",
+    tags={"earthquake", "hazard", "philippines", "phivolcs"},
+    annotations={
+        "title": "Latest PHIVOLCS earthquakes",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_latest_earthquakes(
     min_magnitude: float = 1.0,
     limit: int = 20,
@@ -184,7 +194,17 @@ async def get_latest_earthquakes(
     return results
 
 
-@mcp.tool()
+@mcp.tool(
+    title="PHIVOLCS earthquake bulletin",
+    tags={"bulletin", "earthquake", "philippines", "phivolcs"},
+    annotations={
+        "title": "PHIVOLCS earthquake bulletin",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_earthquake_bulletin(bulletin_url: str) -> dict:
     """Get the full bulletin for a PHIVOLCS earthquake event.
 
@@ -362,7 +382,17 @@ async def _fetch_volcano_alert(bulletin_url: str) -> tuple[int | None, str | Non
     return alert_level, status
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Philippine volcano alert levels",
+    tags={"hazard", "philippines", "phivolcs", "volcano"},
+    annotations={
+        "title": "Philippine volcano alert levels",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_volcano_status(volcano_name: str | None = None) -> list[dict] | dict:
     """Get current alert level for Philippine volcanoes.
 

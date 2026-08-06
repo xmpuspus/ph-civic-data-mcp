@@ -3,16 +3,22 @@
 Landmines (from validation log):
 - 6: Never hardcode table paths. Discover via browse API.
 - Table 1A/PO holds population (2020 Census only, no year dimension).
-- Table 1E/FY holds Full-Year poverty statistics (2018/2021/2023).
+- Poverty tables move between subjects. PSA relocated Full-Year Poverty
+  Statistics from `DB/1E/FY` to `DB/1F/FY` some time before 2026-08-06, and
+  `DB/1E/FY` now 404s. So poverty discovery walks the catalog by title:
+  root -> the Poverty subject -> the Full Year subgroup -> the table leaf.
+  Never pin the subject id, the subgroup id, or the `.px` id.
 """
 
 from __future__ import annotations
 
+import asyncio
+from collections import deque
 from datetime import datetime, timezone
 
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.models.population import PopulationStats, PovertyStats
 from ph_civic_data_mcp.models.psa import HealthIndicator, InflationStats, LaborStats
-from ph_civic_data_mcp.server import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
@@ -24,6 +30,37 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# PSA publishes a request cap on its API guide. Keep a rolling window well
+# inside it so a burst of catalog calls never earns a 429. The guide itself
+# sits behind a Cloudflare challenge that no headless client can read, so this
+# window follows the last figure the project recorded: 10 requests / 10s.
+PSA_RATE_LIMIT_REQUESTS = 10
+PSA_RATE_LIMIT_WINDOW_SECONDS = 10.0
+
+_RATE_LOCK = asyncio.Lock()
+_RECENT_CALLS: deque[float] = deque(maxlen=PSA_RATE_LIMIT_REQUESTS)
+
+
+async def _psa_rate_limit() -> None:
+    """Block until another OpenSTAT request fits inside the published window."""
+    async with _RATE_LOCK:
+        loop = asyncio.get_running_loop()
+        while len(_RECENT_CALLS) == PSA_RATE_LIMIT_REQUESTS:
+            wait = PSA_RATE_LIMIT_WINDOW_SECONDS - (loop.time() - _RECENT_CALLS[0])
+            if wait <= 0:
+                break
+            await asyncio.sleep(wait)
+        _RECENT_CALLS.append(loop.time())
+
+
+class PSAUpstreamError(RuntimeError):
+    """An OpenSTAT call failed. The message carries the real error for caveats.
+
+    Raised instead of returning an empty list so no caller can write "no
+    tables" into a 24h TTL cache. See utils/envelope.py for the contract.
+    """
+
+
 async def _get_json(url: str) -> dict | list | None:
     try:
         response = await fetch_with_retry(CLIENT, "GET", url)
@@ -32,6 +69,35 @@ async def _get_json(url: str) -> dict | list | None:
     except Exception as exc:
         log_stderr(f"PSA fetch error for {url}: {exc}")
         return None
+
+
+async def _get_json_or_raise(url: str) -> dict | list:
+    try:
+        await _psa_rate_limit()
+        response = await fetch_with_retry(CLIENT, "GET", url)
+        response.raise_for_status()
+        return response.json()
+    except PSAUpstreamError:
+        raise
+    except Exception as exc:
+        log_stderr(f"PSA fetch error for {url}: {exc}")
+        raise PSAUpstreamError(f"{type(exc).__name__}: {exc}") from exc
+
+
+async def _post_json_or_raise(url: str, query: dict) -> dict:
+    try:
+        await _psa_rate_limit()
+        response = await fetch_with_retry(CLIENT, "POST", url, json=query)
+        response.raise_for_status()
+        payload = response.json()
+    except PSAUpstreamError:
+        raise
+    except Exception as exc:
+        log_stderr(f"PSA POST error for {url}: {exc}")
+        raise PSAUpstreamError(f"{type(exc).__name__}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise PSAUpstreamError(f"PSA query of {url} returned a non-object body")
+    return payload
 
 
 async def _post_json(url: str, query: dict) -> dict | None:
@@ -66,47 +132,93 @@ async def _discover_population_table() -> tuple[str, dict] | None:
     return None
 
 
-async def _discover_fy_poverty_entries() -> list[dict]:
-    """Single browse of 1E/FY cached and reused for poverty + subsistence discovery."""
-    if "fy_entries" in _DISCOVERY_CACHE:
-        return _DISCOVERY_CACHE["fy_entries"][1]  # type: ignore[return-value]
-    tables = await _get_json(f"{PSA_API_BASE}/DB/1E/FY/")
-    if not isinstance(tables, list):
-        return []
-    _DISCOVERY_CACHE["fy_entries"] = ("1E/FY", tables)  # type: ignore[assignment]
-    return tables
+def _pick_folder(entries: list[dict], exact: str, *needles: str) -> dict | None:
+    """Pick a catalog folder by title. An exact title wins over a partial match.
 
-
-async def _discover_poverty_table() -> tuple[str, dict] | None:
-    if "poverty" in _DISCOVERY_CACHE:
-        return _DISCOVERY_CACHE["poverty"]
-    tables = await _discover_fy_poverty_entries()
-    for entry in tables:
-        text = entry.get("text", "").lower()
-        if text.startswith("table 1.") and "poverty incidence" in text and "families" in text:
-            table_id = entry.get("id")
-            table_url = f"{PSA_API_BASE}/DB/1E/FY/{table_id}"
-            meta = await _get_json(table_url)
-            if isinstance(meta, dict):
-                _DISCOVERY_CACHE["poverty"] = (table_url, meta)
-                return table_url, meta
+    The root carries both "Poverty" and "Living Conditions, Poverty and
+    Cross-cutting Social Issues", so a bare substring match picks the wrong one.
+    """
+    folders = [e for e in entries if e.get("type") != "t"]
+    for entry in folders:
+        if (entry.get("text") or "").strip().lower() == exact:
+            return entry
+    for entry in folders:
+        text = (entry.get("text") or "").lower()
+        if all(n in text for n in needles):
+            return entry
     return None
 
 
-async def _discover_subsistence_table() -> tuple[str, dict] | None:
-    if "subsistence" in _DISCOVERY_CACHE:
-        return _DISCOVERY_CACHE["subsistence"]
-    tables = await _discover_fy_poverty_entries()
+async def _discover_fy_poverty_path() -> str:
+    """Walk the live catalog to the Full Year Poverty Statistics folder.
+
+    Returns a relative path such as "1F/FY". PSA moved this subtree once
+    already, so nothing here is hardcoded except the folder titles.
+    """
+    cached = _DISCOVERY_CACHE.get("poverty_fy_path")
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+
+    roots = await _browse("")
+    subject = _pick_folder(roots, "poverty", "poverty")
+    if subject is None:
+        raise PSAUpstreamError(
+            "No Poverty subject in the PSA OpenSTAT root listing; the catalog moved."
+        )
+
+    subject_id = subject["id"]
+    groups = await _browse(subject_id)
+    full_year = _pick_folder(groups, "full year poverty statistics", "full year", "poverty")
+    if full_year is None:
+        raise PSAUpstreamError(
+            f"No Full Year Poverty Statistics folder under PSA subject {subject_id}."
+        )
+
+    path = f"{subject_id}/{full_year['id']}"
+    _DISCOVERY_CACHE["poverty_fy_path"] = path  # type: ignore[assignment]
+    return path
+
+
+async def _discover_fy_poverty_entries() -> tuple[str, list[dict]]:
+    """Browse the Full Year folder once; poverty and subsistence both reuse it."""
+    path = await _discover_fy_poverty_path()
+    return path, await _browse(path)
+
+
+async def _discover_poverty_like_table(
+    cache_slot: str, table_prefix: str, *needles: str
+) -> tuple[str, dict]:
+    cached = _DISCOVERY_CACHE.get(cache_slot)
+    if cached is not None:
+        return cached
+    path, tables = await _discover_fy_poverty_entries()
     for entry in tables:
-        text = entry.get("text", "").lower()
-        if text.startswith("table 3.") and "subsistence incidence" in text and "families" in text:
-            table_id = entry.get("id")
-            table_url = f"{PSA_API_BASE}/DB/1E/FY/{table_id}"
-            meta = await _get_json(table_url)
-            if isinstance(meta, dict):
-                _DISCOVERY_CACHE["subsistence"] = (table_url, meta)
-                return table_url, meta
-    return None
+        text = (entry.get("text") or "").lower()
+        if not text.startswith(table_prefix):
+            continue
+        if not all(n in text for n in needles):
+            continue
+        table_url = f"{PSA_API_BASE}/DB/{path}/{entry.get('id')}"
+        meta = await _get_json_or_raise(table_url)
+        if isinstance(meta, dict):
+            found = (table_url, meta)
+            _DISCOVERY_CACHE[cache_slot] = found
+            return found
+    raise PSAUpstreamError(
+        f"No '{table_prefix.strip()}' table under PSA {path}; the table titles changed."
+    )
+
+
+async def _discover_poverty_table() -> tuple[str, dict]:
+    return await _discover_poverty_like_table(
+        "poverty", "table 1.", "poverty incidence", "families"
+    )
+
+
+async def _discover_subsistence_table() -> tuple[str, dict]:
+    return await _discover_poverty_like_table(
+        "subsistence", "table 3.", "subsistence incidence", "families"
+    )
 
 
 def _find_geo_value(meta: dict, region: str | None, geo_code: str) -> tuple[str, str] | None:
@@ -149,7 +261,17 @@ def _variable_values(meta: dict, code_match: str) -> tuple[str, list[str], list[
     return "", [], []
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Philippine population statistics",
+    tags={"openstat", "philippines", "population", "psa"},
+    annotations={
+        "title": "Philippine population statistics",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_population_stats(
     region: str | None = None,
     year: int | None = None,
@@ -233,7 +355,17 @@ async def get_population_stats(
     return result
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Philippine poverty incidence",
+    tags={"openstat", "philippines", "poverty", "psa"},
+    annotations={
+        "title": "Philippine poverty incidence",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_poverty_stats(region: str | None = None) -> dict:
     """Poverty incidence from PSA (latest: 2023 Full-Year).
 
@@ -245,17 +377,32 @@ async def get_poverty_stats(region: str | None = None) -> dict:
     if key in cache:
         return cache[key]
 
-    poverty = await _discover_poverty_table()
-    subsistence = await _discover_subsistence_table()
-    if poverty is None:
+    def _err(msg: str) -> dict:
+        # Never cached: a transient PXWeb failure must not pin a null poverty
+        # figure for the 24h success TTL.
         return {
             "region": region or "Philippines",
-            "caveats": ["PSA PXWeb poverty table discovery failed"],
+            "poverty_incidence_pct": None,
+            "upstream_error": True,
+            "caveats": [msg],
             "source": "PSA",
+            "source_url": f"{PSA_API_BASE}/DB/",
+            "license": PSA_LICENSE,
             "data_retrieved_at": _now().isoformat(),
         }
 
-    table_url, meta = poverty
+    try:
+        table_url, meta = await _discover_poverty_table()
+    except PSAUpstreamError as exc:
+        return _err(f"PSA poverty table discovery failed: {exc}")
+
+    subsistence: tuple[str, dict] | None
+    try:
+        subsistence = await _discover_subsistence_table()
+    except PSAUpstreamError as exc:
+        subsistence = None
+        log_stderr(f"PSA subsistence discovery failed: {exc}")
+
     geo_hit = _find_geo_value(meta, region, "Geolocation")
     if geo_hit is None:
         return {
@@ -413,15 +560,23 @@ def _year_max(meta: dict) -> int:
 
 
 async def _browse(subpath: str) -> list[dict]:
-    """List entries under a fixed subject path. Cached 24h."""
+    """List entries under a catalog path. Successes cache 24h; errors never do.
+
+    Raises PSAUpstreamError on a transport failure, a non-list body, or an
+    empty listing. An empty listing under a path that normally holds entries
+    means the path moved, which is exactly the failure that pinned "no poverty
+    tables" for 24h before v0.6.0.
+    """
     key = cache_key({"browse": subpath})
     cache = CACHES["psa_browse"]
     if key in cache:
         return cache[key]
-    entries = await _get_json(f"{PSA_API_BASE}/DB/{subpath}/")
-    result = entries if isinstance(entries, list) else []
-    cache[key] = result
-    return result
+    url = f"{PSA_API_BASE}/DB/{subpath}/" if subpath else f"{PSA_API_BASE}/DB/"
+    entries = await _get_json_or_raise(url)
+    if not isinstance(entries, list) or not entries:
+        raise PSAUpstreamError(f"PSA browse of {url} returned no entries")
+    cache[key] = entries
+    return entries
 
 
 async def _pick_latest_table(
@@ -530,7 +685,17 @@ _PERIOD_ORDER = [
 ]
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Philippine consumer-price inflation",
+    tags={"economy", "inflation", "openstat", "philippines", "psa"},
+    annotations={
+        "title": "Philippine consumer-price inflation",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_inflation_stats(area: str | None = None) -> dict:
     """Headline consumer-price inflation (year-on-year, all items) from PSA.
 
@@ -564,11 +729,14 @@ async def get_inflation_stats(area: str | None = None) -> dict:
             "data_retrieved_at": _now().isoformat(),
         }
 
-    discovered = await _pick_latest_table(
-        "2M/PI/CPI/2018NEW",
-        ["year-on-year changes", "by commodity group"],
-        ["core"],
-    )
+    try:
+        discovered = await _pick_latest_table(
+            "2M/PI/CPI/2018NEW",
+            ["year-on-year changes", "by commodity group"],
+            ["core"],
+        )
+    except PSAUpstreamError as exc:
+        return _err(f"PSA CPI table discovery failed: {exc}")
     if discovered is None:
         return _err("PSA CPI table discovery failed")
     table_url, meta = discovered
@@ -664,7 +832,17 @@ async def get_inflation_stats(area: str | None = None) -> dict:
     return _err("PSA CPI query returned no published data")
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Philippine labor-force indicators",
+    tags={"economy", "labor", "openstat", "philippines", "psa"},
+    annotations={
+        "title": "Philippine labor-force indicators",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_labor_stats(region: str | None = None) -> dict:
     """Key labor-force indicators from the PSA Labor Force Survey.
 
@@ -705,7 +883,10 @@ async def get_labor_stats(region: str | None = None) -> dict:
             "data_retrieved_at": _now().isoformat(),
         }
 
-    discovered = await _pick_latest_table("1B/LFS", ["rates", "key employment indicators"], [])
+    try:
+        discovered = await _pick_latest_table("1B/LFS", ["rates", "key employment indicators"], [])
+    except PSAUpstreamError as exc:
+        return _err(f"PSA Labor Force Survey table discovery failed: {exc}")
     if discovered is None:
         return _err("PSA Labor Force Survey table discovery failed")
     table_url, meta = discovered
@@ -866,7 +1047,17 @@ async def _latest_health_value(table_url: str, meta: dict) -> tuple[float | None
     return None, None
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Philippine health indicators",
+    tags={"health", "openstat", "philippines", "psa"},
+    annotations={
+        "title": "Philippine health indicators",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_health_indicators(indicator: str | None = None) -> dict:
     """National health indicators from PSA OpenSTAT (subject 1D).
 
@@ -884,20 +1075,26 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
     if key in cache:
         return cache[key]
 
-    entries = await _browse("1D")
-    tables = [e for e in entries if e.get("type") == "t"]
-    available = [e.get("text", "") for e in tables]
-    if not tables:
+    def _health_err(msg: str) -> dict:
         # Not cached: discovery failure is usually a transient PXWeb error.
         return {
             "indicators": [],
             "upstream_error": True,
-            "caveats": ["PSA Health (1D) table discovery failed"],
+            "caveats": [msg],
             "source": "PSA",
             "source_url": f"{PSA_API_BASE}/DB/1D/",
             "license": PSA_LICENSE,
             "data_retrieved_at": _now().isoformat(),
         }
+
+    try:
+        entries = await _browse("1D")
+    except PSAUpstreamError as exc:
+        return _health_err(f"PSA Health (1D) table discovery failed: {exc}")
+    tables = [e for e in entries if e.get("type") == "t"]
+    available = [e.get("text", "") for e in tables]
+    if not tables:
+        return _health_err("PSA Health (1D) listing carries no tables")
 
     if indicator:
         want = indicator.lower().strip()

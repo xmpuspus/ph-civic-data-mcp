@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.sources.cross_source import assess_area_risk
 from ph_civic_data_mcp.sources.infra import search_infra_projects
 from ph_civic_data_mcp.sources.pagasa import get_weather_forecast
@@ -50,7 +50,17 @@ def _unwrap(result: object, caveats: list[str], label: str) -> dict | list | Non
     return result  # type: ignore[return-value]
 
 
-@mcp.tool()
+@mcp.tool(
+    title="One-call civic profile for a place",
+    tags={"civic", "composite", "philippines", "profile"},
+    annotations={
+        "title": "One-call civic profile for a place",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_area_profile(location: str) -> dict:
     """One-call correlated civic profile for a Philippine location.
 

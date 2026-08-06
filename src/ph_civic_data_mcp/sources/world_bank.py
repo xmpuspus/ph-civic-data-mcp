@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from ph_civic_data_mcp.models.climate import WorldBankIndicator
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
@@ -56,7 +56,17 @@ def _resolve(indicator: str) -> str:
     return INDICATOR_ALIASES.get(indicator.lower().strip(), indicator.strip())
 
 
-@mcp.tool()
+@mcp.tool(
+    title="World Bank indicator for the Philippines",
+    tags={"economy", "open-data", "philippines", "world-bank"},
+    annotations={
+        "title": "World Bank indicator for the Philippines",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
     """World Bank macroeconomic/social indicator for the Philippines.
 
@@ -90,9 +100,10 @@ async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
             "country": "Philippines",
             "country_iso3": "PHL",
             "observations": [],
+            "upstream_error": True,
             "source": "World Bank Open Data",
             "data_retrieved_at": _now().isoformat(),
-            "caveats": [f"World Bank fetch failed: {type(exc).__name__}"],
+            "caveats": [f"World Bank fetch failed: {type(exc).__name__}: {exc}"],
         }
 
     if not isinstance(payload, list) or len(payload) < 2:
@@ -102,6 +113,7 @@ async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
             "country": "Philippines",
             "country_iso3": "PHL",
             "observations": [],
+            "upstream_error": True,
             "source": "World Bank Open Data",
             "data_retrieved_at": _now().isoformat(),
             "caveats": [f"Unexpected WB response shape for indicator '{code}'"],

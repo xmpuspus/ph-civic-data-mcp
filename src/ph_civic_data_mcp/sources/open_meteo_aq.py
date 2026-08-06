@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from ph_civic_data_mcp.models.climate import AirQuality
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.geo import city_to_coords
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
@@ -54,7 +54,17 @@ def _to_int(val: float | int | None) -> int | None:
         return None
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Air quality at a Philippine location",
+    tags={"air-quality", "environment", "open-meteo", "philippines"},
+    annotations={
+        "title": "Air quality at a Philippine location",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_air_quality(location: str) -> dict:
     """Real-time air quality for a Philippine city via Open-Meteo (no API key).
 
