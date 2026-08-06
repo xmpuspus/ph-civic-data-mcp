@@ -9,25 +9,92 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # Exact tag on purpose: setup-uv stopped publishing floating major tags
+      # at v8, so @v9 is a 404 and every job fails at checkout.
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v9.0.0
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
+      # --locked fails the job if uv.lock drifted from pyproject.toml, so a
+      # dependency edit that skipped `uv lock` cannot reach main.
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev --python ${{ matrix.python-version }}
 
       - name: Lint
-        run: |
-          uv run ruff check .
-          uv run ruff format --check .
+        run: uv run --no-sync ruff check .
+
+      - name: Check formatting
+        run: uv run --no-sync ruff format --check .
 
       - name: Run unit tests (no live HTTP)
-        run: uv run pytest tests/ -x -q -m "not live" --ignore=tests/test_v030_live.py
+        run: uv run --no-sync pytest tests/ -x -q -m "not live"
+
+      # `fastmcp inspect` imports server.py and never calls main(). Before
+      # v0.6.0 that showed 1 tool of 29. This pins the whole surface.
+      - name: Check MCP discovery in a fresh process
+        run: |
+          uv run --no-sync python - <<'PY'
+          import asyncio
+          from ph_civic_data_mcp.server import mcp
+          tools = asyncio.run(mcp.list_tools())
+          prompts = asyncio.run(mcp.list_prompts())
+          resources = asyncio.run(mcp.list_resources())
+          print("tools", len(tools), "prompts", len(prompts), "resources", len(resources))
+          assert len(tools) == 32, f"expected 32 tools on a bare import, got {len(tools)}"
+          assert len(prompts) == 3, f"expected 3 prompts, got {len(prompts)}"
+          assert len(resources) == 2, f"expected 2 resources, got {len(resources)}"
+          missing = [t for t in ("browse_psa_catalog", "describe_psa_dataset", "query_psa_dataset")
+                     if t not in {x.name for x in tools}]
+          assert not missing, f"missing OpenSTAT tools: {missing}"
+          for tool in tools:
+              assert tool.title, f"{tool.name} has no title"
+              assert tool.annotations is not None, f"{tool.name} has no annotations"
+          PY
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+
+      - name: Check the lockfile is current
+        run: uv lock --check
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Validate package metadata
+        run: uvx twine check dist/*
+
+      - name: Check the wheel carries every source module
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          for required in (
+              "ph_civic_data_mcp/server.py",
+              "ph_civic_data_mcp/_mcp.py",
+              "ph_civic_data_mcp/sources/psa_catalog.py",
+          ):
+              assert any(n.endswith(required) for n in names), f"{required} missing from {wheel}"
+          print(wheel, "carries", len(names), "entries")
+          PY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/

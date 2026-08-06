@@ -51,9 +51,7 @@ def _render_resolve(payload: dict, note: str | None = None) -> Panel:
     table.add_row("match_score", f"{payload.get('match_score', '?')}")
     alternatives = payload.get("alternatives") or []
     if alternatives:
-        alt_str = "  ".join(
-            f"{a.get('name')} ({a.get('psgc_code')})" for a in alternatives[:3]
-        )
+        alt_str = "  ".join(f"{a.get('name')} ({a.get('psgc_code')})" for a in alternatives[:3])
         table.add_row("alternatives", f"[yellow]{alt_str}[/yellow]")
     return Panel(
         table,

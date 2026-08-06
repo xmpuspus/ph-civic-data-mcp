@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date as date_cls, datetime, timedelta, timezone
 
 from ph_civic_data_mcp.models.climate import VegetationIndex, VegetationSample
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
@@ -57,7 +57,17 @@ async def _fetch_subset(
         return None
 
 
-@mcp.tool()
+@mcp.tool(
+    title="MODIS vegetation index at a point",
+    tags={"modis", "nasa", "philippines", "vegetation"},
+    annotations={
+        "title": "MODIS vegetation index at a point",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_vegetation_index(
     latitude: float,
     longitude: float,

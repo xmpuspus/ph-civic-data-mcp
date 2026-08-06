@@ -13,7 +13,7 @@ import io
 from datetime import datetime, timezone
 
 from ph_civic_data_mcp.models.climate import HistoricalTyphoon
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
@@ -72,7 +72,17 @@ def _in_par(lat: float | None, lng: float | None) -> bool:
     return PAR_MIN_LAT <= lat <= PAR_MAX_LAT and PAR_MIN_LNG <= lng <= PAR_MAX_LNG
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Historical typhoon tracks through the PAR",
+    tags={"ibtracs", "noaa", "philippines", "typhoon"},
+    annotations={
+        "title": "Historical typhoon tracks through the PAR",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_historical_typhoons_ph(year: int | None = None, limit: int = 30) -> list[dict] | dict:
     """Historical tropical cyclone tracks that passed through the Philippine AOR.
 

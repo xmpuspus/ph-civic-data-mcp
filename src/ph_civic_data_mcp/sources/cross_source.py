@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from dateutil import parser as date_parser
 
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.sources.infra import (
     INFRA_DISCLAIMER,
     PHILGEPS_PORTAL,
@@ -146,7 +146,17 @@ def _risk_from_activity(count: int, max_magnitude: float) -> str:
     return "Low"
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Multi-hazard risk snapshot for a place",
+    tags={"composite", "hazard", "philippines", "risk"},
+    annotations={
+        "title": "Multi-hazard risk snapshot for a place",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def assess_area_risk(location: str) -> dict:
     """Multi-hazard risk assessment combining PHIVOLCS + PAGASA.
 
@@ -247,7 +257,17 @@ async def assess_area_risk(location: str) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Flag infrastructure spending anomalies",
+    tags={"accountability", "heuristics", "infrastructure", "philippines"},
+    annotations={
+        "title": "Flag infrastructure spending anomalies",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def flag_infra_anomalies(
     region: str | None = None,
     province: str | None = None,

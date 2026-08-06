@@ -2,8 +2,9 @@ name: Release smoke test
 
 # Triggered when a vN.M.P tag is pushed. Installs the freshly-published wheel
 # from PyPI in a clean venv, imports it, lists every registered MCP tool, and
-# spot-checks four offline-safe tools to catch packaging or import regressions.
-# This is the smoke layer the audit (2026-05-01) flagged as missing.
+# spot-checks the offline-safe surface to catch packaging or import
+# regressions. This is the smoke layer the audit (2026-05-01) flagged as
+# missing.
 
 on:
   push:
@@ -12,28 +13,41 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to smoke test (e.g. 0.3.1). Leave blank to use the tag."
+        description: "Version to smoke test (e.g. 0.6.0). Leave blank to use the tag."
         required: false
         default: ""
 
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve version
         id: ver
+        # The input arrives through env, never interpolated into the script
+        # body. GitHub substitutes ${{ }} into the shell source before bash
+        # ever runs, so a crafted dispatch input would execute as a command.
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
           else
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            VERSION="${GITHUB_REF_NAME#v}"
           fi
+          # On a manual dispatch from a branch, GITHUB_REF_NAME is the branch
+          # name, and pip would try to install a package version called
+          # "main". Fail loudly instead.
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([._-]?[a-z0-9]+)*$'; then
+            echo "::error::'$VERSION' is not a version. Run this on a vN.M.P tag, or pass the version input."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -41,45 +55,117 @@ jobs:
         run: sleep 30
 
       - name: Install from PyPI in fresh venv
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           python -m venv /tmp/smokeenv
           source /tmp/smokeenv/bin/activate
           pip install --upgrade pip
-          pip install ph-civic-data-mcp==${{ steps.ver.outputs.version }}
+          pip install --no-cache-dir "ph-civic-data-mcp==$VERSION"
           python -c "import ph_civic_data_mcp; print('installed', ph_civic_data_mcp.__version__)"
 
-      - name: Smoke import + tool registration
+      - name: Smoke the whole MCP surface on a bare import
+        run: |
+          source /tmp/smokeenv/bin/activate
+          python - <<'PY'
+          import asyncio
+          # No _register_tools() call here on purpose: from v0.6.0 a plain
+          # import must expose everything, the way `fastmcp inspect` sees it.
+          from ph_civic_data_mcp.server import mcp
+
+          tools = asyncio.run(mcp.list_tools())
+          names = sorted(t.name for t in tools)
+          prompts = sorted(p.name for p in asyncio.run(mcp.list_prompts()))
+          resources = {str(r.uri) for r in asyncio.run(mcp.list_resources())}
+          print("registered_tool_count =", len(names))
+          print("tools:", names)
+          assert len(names) == 32, f"expected 32 tools, got {len(names)}: {names}"
+          for required in (
+              "get_data_freshness",
+              "get_poverty_stats",
+              "browse_psa_catalog",
+              "describe_psa_dataset",
+              "query_psa_dataset",
+              "flag_infra_anomalies",
+              "resolve_ph_location",
+              "get_weather_alerts",
+              "get_area_profile",
+          ):
+              assert required in names, f"missing tool: {required}"
+          assert prompts == ["area_briefing", "infra_accountability_scan", "psa_data_explorer"], prompts
+          assert "data://ph-civic/source-catalog" in resources
+          assert "data://ph-civic/civic-framing" in resources
+          for tool in tools:
+              assert tool.title, f"{tool.name} has no title"
+              assert tool.annotations is not None, f"{tool.name} has no annotations"
+              assert tool.annotations.readOnlyHint is True, f"{tool.name} is not read-only"
+          PY
+
+      - name: Smoke _register_tools for older callers
         run: |
           source /tmp/smokeenv/bin/activate
           python - <<'PY'
           import asyncio
           from ph_civic_data_mcp.server import _register_tools, mcp
           _register_tools()
-          tools = asyncio.run(mcp.list_tools())
-          names = sorted(t.name for t in tools)
-          print("registered_tool_count =", len(names))
-          print("tools:", names)
-          assert len(names) >= 25, f"expected >=25 tools, got {len(names)}"
-          for required in (
-              "get_data_freshness",
-              "flag_infra_anomalies",
-              "resolve_ph_location",
-              "get_weather_alerts",
-          ):
-              assert required in names, f"missing tool: {required}"
+          _register_tools()
+          assert len(asyncio.run(mcp.list_tools())) == 32
+          print("_register_tools stays callable and idempotent")
           PY
 
       - name: Smoke offline tools
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           source /tmp/smokeenv/bin/activate
           python - <<'PY'
           import asyncio
-          from ph_civic_data_mcp.server import _register_tools, get_data_freshness
-          _register_tools()
+          from ph_civic_data_mcp.server import get_data_freshness
           fresh = asyncio.run(get_data_freshness())
-          assert fresh["server_version"], "server_version missing"
+          import os
+          assert fresh["server_version"] == os.environ["VERSION"], fresh["server_version"]
+          assert fresh["tool_count"] == 32, fresh["tool_count"]
           assert isinstance(fresh["sources"], list) and len(fresh["sources"]) >= 12
-          print("get_data_freshness OK", fresh["server_version"])
+          print("get_data_freshness OK", fresh["server_version"], fresh["tool_count"], "tools")
+          PY
+
+      - name: Smoke OpenSTAT catalog guards (no network needed)
+        run: |
+          source /tmp/smokeenv/bin/activate
+          python - <<'PY'
+          import asyncio
+          from ph_civic_data_mcp.sources.psa_catalog import browse_psa_catalog, query_psa_dataset
+
+          escaped = asyncio.run(browse_psa_catalog("https://evil.example/x"))
+          assert escaped["validation_error"] is True, escaped
+          traversal = asyncio.run(browse_psa_catalog("1F/../../etc"))
+          assert traversal["validation_error"] is True, traversal
+          folder = asyncio.run(query_psa_dataset("1F/FY", {"Year": ["2"]}))
+          assert folder["validation_error"] is True, folder
+          print("catalog path guards OK")
+          PY
+
+      - name: Smoke stdio transport end to end
+        run: |
+          source /tmp/smokeenv/bin/activate
+          python - <<'PY'
+          import asyncio
+          from fastmcp import Client
+          from fastmcp.client.transports import StdioTransport
+
+          # A bare command name does not infer a transport; name it explicitly.
+          async def main():
+              transport = StdioTransport(command="ph-civic-data-mcp", args=[])
+              async with Client(transport) as client:
+                  tools = await client.list_tools()
+                  assert len(tools) == 32, f"stdio surface has {len(tools)} tools"
+                  prompts = await client.list_prompts()
+                  assert len(prompts) == 3, f"stdio surface has {len(prompts)} prompts"
+                  result = await client.call_tool("get_data_freshness", {})
+                  print("stdio OK:", result.structured_content["server_version"],
+                        result.structured_content["tool_count"], "tools")
+
+          asyncio.run(main())
           PY
 
       - name: Smoke geo helpers (regression guard for v0.3.1 fixes)

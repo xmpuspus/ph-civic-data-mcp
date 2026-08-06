@@ -44,8 +44,12 @@ htmlcov/
 
 # Env / secrets
 .env
-.env.local
+.env.*
 *.key
+*.pem
+*.p12
+.pypirc
+.netrc
 
 # OS
 .DS_Store

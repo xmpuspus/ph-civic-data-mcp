@@ -1,10 +1,11 @@
 name: Live upstream drift check
 
 # Scrapers rot silently: PHIVOLCS/PAGASA/PhilGEPS can change their HTML and
-# every offline test stays green. This weekly run exercises the live-marked
-# suite against the real upstreams so drift shows up here first, not in a
-# user report. Failures mean "go look at the upstream", not "block a PR" —
-# the job is scheduled, never required.
+# every offline test stays green. PSA also moves whole subjects, which is how
+# poverty discovery broke for five weeks in 2026. This weekly run exercises the
+# live-marked suite against the real upstreams so drift shows up here first,
+# not in a user report. Failures mean "go look at the upstream", not "block a
+# PR" — the job is scheduled, never required.
 
 on:
   schedule:
@@ -14,18 +15,23 @@ on:
 jobs:
   live:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # Exact tag on purpose: setup-uv stopped publishing floating major tags
+      # at v8, so @v9 is a 404 and every job fails at checkout.
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v9.0.0
 
       - name: Set up Python 3.12
         run: uv python install 3.12
 
+      # --python is not optional here. Without it uv reads .python-version and
+      # builds the environment on 3.11, so the job's own name lies about what
+      # it exercised.
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev --python 3.12
 
       - name: Run live suite against real upstreams
-        run: uv run pytest tests/ -q -m live
+        run: uv run --no-sync pytest tests/ -q -m live

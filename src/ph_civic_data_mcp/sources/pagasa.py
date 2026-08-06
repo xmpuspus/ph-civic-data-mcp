@@ -17,7 +17,7 @@ from datetime import date as date_cls, datetime, timezone
 from bs4 import BeautifulSoup
 
 from ph_civic_data_mcp.models.weather import DailyForecast, Typhoon, WeatherForecast
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.geo import city_to_coords, resolve_to_coords
@@ -221,7 +221,17 @@ async def _pagasa_api_forecast(location: str, days: int, token: str) -> dict | N
     return forecast.model_dump(mode="json")
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Philippine weather forecast",
+    tags={"forecast", "pagasa", "philippines", "weather"},
+    annotations={
+        "title": "Philippine weather forecast",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_weather_forecast(location: str, days: int = 3) -> dict:
     """Get weather forecast for a Philippine location.
 
@@ -281,7 +291,17 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
     return result
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Active tropical cyclones in the PAR",
+    tags={"hazard", "pagasa", "philippines", "typhoon"},
+    annotations={
+        "title": "Active tropical cyclones in the PAR",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_active_typhoons() -> list[dict] | dict:
     """Get active tropical cyclones in/near the Philippine Area of Responsibility (PAR).
 
@@ -399,7 +419,17 @@ async def get_active_typhoons() -> list[dict] | dict:
     return results
 
 
-@mcp.tool()
+@mcp.tool(
+    title="PAGASA weather alerts",
+    tags={"alert", "pagasa", "philippines", "weather"},
+    annotations={
+        "title": "PAGASA weather alerts",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_weather_alerts(region: str | None = None) -> list[dict] | dict:
     """Get active PAGASA weather alerts and advisories.
 

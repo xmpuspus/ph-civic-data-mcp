@@ -18,7 +18,7 @@ from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 
 from ph_civic_data_mcp.models.procurement import ProcurementRecord
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
@@ -82,7 +82,17 @@ async def _fetch_notices() -> list[ProcurementRecord]:
     return records
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Search PhilGEPS procurement notices",
+    tags={"accountability", "philgeps", "philippines", "procurement"},
+    annotations={
+        "title": "Search PhilGEPS procurement notices",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def search_procurement(
     keyword: str,
     agency: str | None = None,
@@ -158,7 +168,17 @@ async def search_procurement(
     return results
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Summarize PhilGEPS procurement",
+    tags={"accountability", "philgeps", "philippines", "procurement"},
+    annotations={
+        "title": "Summarize PhilGEPS procurement",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_procurement_summary(
     agency: str | None = None,
     region: str | None = None,

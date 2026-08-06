@@ -2,18 +2,18 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.xmpuspus/ph-civic-data-mcp",
   "title": "PH Civic Data",
-  "description": "PH civic data + auto-stitched area profiles (PSGC, PSA economy, infra, hazards). 29 tools.",
+  "description": "PH civic data as MCP tools: the full PSA OpenSTAT catalog, hazards, procurement. 32 tools.",
   "repository": {
     "url": "https://github.com/xmpuspus/ph-civic-data-mcp",
     "source": "github"
   },
-  "version": "0.5.0",
+  "version": "0.6.0",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "ph-civic-data-mcp",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

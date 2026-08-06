@@ -22,7 +22,7 @@ from ph_civic_data_mcp.models.location import (
     PSGCHierarchyLevel,
     PSGCRecord,
 )
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
@@ -373,7 +373,17 @@ async def _resolve_query(query: str) -> dict | None:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Resolve a Philippine place name to PSGC",
+    tags={"geocoding", "location", "philippines", "psgc"},
+    annotations={
+        "title": "Resolve a Philippine place name to PSGC",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def resolve_ph_location(query: str) -> dict:
     """Fuzzy-resolve a Philippine place name to its canonical PSGC record.
 
@@ -430,7 +440,17 @@ async def resolve_ph_location(query: str) -> dict:
     return result
 
 
-@mcp.tool()
+@mcp.tool(
+    title="List Philippine administrative units",
+    tags={"location", "philippines", "psgc"},
+    annotations={
+        "title": "List Philippine administrative units",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def list_admin_units(
     parent_code: str | None = None,
     level: str | None = None,
@@ -619,7 +639,17 @@ async def _walk_hierarchy(record: dict[str, Any], level_hint: str) -> list[PSGCH
     return list(reversed(chain))
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Full PSGC hierarchy for a place",
+    tags={"location", "philippines", "psgc"},
+    annotations={
+        "title": "Full PSGC hierarchy for a place",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_location_hierarchy(psgc_code: str) -> dict:
     """Return the full chain region -> province -> city/municipality -> barangay
     for one PSGC code.

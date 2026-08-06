@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date as date_cls, datetime, timedelta, timezone
 
 from ph_civic_data_mcp.models.climate import USGSEarthquake
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import failure_envelope
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
@@ -65,7 +65,17 @@ def _parse_event(feature: dict) -> USGSEarthquake | None:
     )
 
 
-@mcp.tool()
+@mcp.tool(
+    title="USGS earthquakes near the Philippines",
+    tags={"earthquake", "hazard", "philippines", "usgs"},
+    annotations={
+        "title": "USGS earthquakes near the Philippines",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_usgs_earthquakes_ph(
     start_date: str | None = None,
     end_date: str | None = None,

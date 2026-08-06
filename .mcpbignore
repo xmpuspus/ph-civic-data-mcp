@@ -31,6 +31,16 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Secrets. .gitignore has these; a bundle is a published artifact, so an
+# untracked .env or key in a working tree must never reach one.
+.env
+.env.*
+*.key
+*.pem
+*.p12
+.pypirc
+.netrc
+
 # Local-only audit / scratch (must never leak into a public artifact)
 tmp/
 .claude/
@@ -45,10 +55,16 @@ uv.lock
 uv.lock.backup
 .python-version
 
-# Demo recording sources (already shipped via README on GitHub)
+# Demo recordings and their sources. GitHub already serves these through the
+# README, and a bundle has no runtime use for them. Excluding the GIFs also
+# keeps an untracked working-tree recording out of a published artifact.
 docs/*.tape
-docs/live_demo.py
-docs/live_demo_single.py
-docs/live_demo_v030.py
-docs/live_probe_v020.py
-docs/live_probe_v030.py
+docs/*.gif
+docs/live_demo*.py
+docs/live_probe*.py
+docs/record_all.sh
+
+# Docs that only matter in the repository
+docs/archive/
+docs/latent-bugs.md
+docs/SUBMISSIONS.md

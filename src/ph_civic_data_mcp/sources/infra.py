@@ -19,7 +19,7 @@ from collections import Counter, defaultdict
 from datetime import date as date_cls, datetime, timezone
 
 from ph_civic_data_mcp.models.infra import InfraProject, InfraSpendingSummary
-from ph_civic_data_mcp.server import mcp
+from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.sources.philgeps import _fetch_notices  # type: ignore
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import failure_envelope
@@ -257,7 +257,17 @@ async def _load_infra_records() -> list[object]:
     return infra
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Search infrastructure notices",
+    tags={"accountability", "infrastructure", "philgeps", "philippines"},
+    annotations={
+        "title": "Search infrastructure notices",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def search_infra_projects(
     keyword: str | None = None,
     region: str | None = None,
@@ -353,7 +363,17 @@ async def search_infra_projects(
     return results
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Infrastructure notice detail",
+    tags={"accountability", "infrastructure", "philgeps", "philippines"},
+    annotations={
+        "title": "Infrastructure notice detail",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def get_infra_project(project_id: str) -> dict:
     """Return the full record for one infrastructure project by project_id.
 
@@ -415,7 +435,17 @@ async def get_infra_project(project_id: str) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Summarize infrastructure spending",
+    tags={"accountability", "infrastructure", "philgeps", "philippines"},
+    annotations={
+        "title": "Summarize infrastructure spending",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+)
 async def summarize_infra_spending(
     region: str | None = None,
     year: int | None = None,

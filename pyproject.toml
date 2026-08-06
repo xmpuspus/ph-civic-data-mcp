@@ -1,12 +1,12 @@
 [project]
 name = "ph-civic-data-mcp"
 dynamic = ["version"]
-description = "MCP server for Philippine civic data: PSGC, infra spending accountability, PSA economy (inflation, labor, poverty, population), one-call area profiles, earthquakes, weather, typhoons, procurement, solar/climate, air quality, vegetation"
+description = "MCP server for Philippine civic data: the full PSA OpenSTAT statistical catalog, PSGC locations, infra spending accountability, PSA economy (inflation, labor, poverty, population), one-call area profiles, earthquakes, weather, typhoons, procurement, solar/climate, air quality, vegetation"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Xavier Puspus" }]
-keywords = ["mcp", "philippines", "phivolcs", "pagasa", "philgeps", "psa", "psgc", "nasa", "modis", "usgs", "ibtracs", "world-bank", "civic-tech", "accountability"]
+keywords = ["mcp", "philippines", "phivolcs", "pagasa", "philgeps", "psa", "openstat", "psgc", "nasa", "modis", "usgs", "ibtracs", "world-bank", "civic-tech", "open-data", "accountability"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -15,6 +15,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Information Analysis",
 ]
 dependencies = [
