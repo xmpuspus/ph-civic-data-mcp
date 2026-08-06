@@ -351,8 +351,10 @@ async def _dataset_meta(path: str) -> dict:
 
 
 def _is_time_like(var: dict) -> bool:
-    code = (var.get("code") or "").lower()
-    text = (var.get("text") or "").lower()
+    # str() on purpose: a numeric code from PSA raised AttributeError on
+    # .lower() and took the whole tool down.
+    code = str(var.get("code") or "").lower()
+    text = str(var.get("text") or "").lower()
     return bool(var.get("time")) or "year" in code or "period" in code or text == "year"
 
 
@@ -367,13 +369,13 @@ def _dimensions(meta: dict) -> list[dict]:
         values = list(raw_values) if isinstance(raw_values, (list, tuple)) else []
         texts = list(raw_texts) if isinstance(raw_texts, (list, tuple)) else []
         listed = [
-            {"code": v, "label": texts[i] if i < len(texts) else v}
+            {"code": str(v), "label": str(texts[i] if i < len(texts) else v)}
             for i, v in enumerate(values[:MAX_VALUES_LISTED])
         ]
         dims.append(
             {
-                "code": var.get("code") or var.get("text") or "",
-                "label": var.get("text") or var.get("code") or "",
+                "code": str(var.get("code") or var.get("text") or ""),
+                "label": str(var.get("text") or var.get("code") or ""),
                 "value_count": len(values),
                 "values": listed,
                 "values_truncated": len(values) > MAX_VALUES_LISTED,
@@ -384,7 +386,7 @@ def _dimensions(meta: dict) -> list[dict]:
                 # a caller mistake into a reported upstream error.
                 "_all_codes": frozenset(str(v) for v in values),
                 "_all_labels": {
-                    str(v): (texts[i] if i < len(texts) else str(v)) for i, v in enumerate(values)
+                    str(v): str(texts[i] if i < len(texts) else v) for i, v in enumerate(values)
                 },
             }
         )
@@ -808,8 +810,13 @@ async def query_psa_dataset(
             # indexing a string would hand back its first character as data.
             misaligned += 1
             raw = None
+        elif not values:
+            # An empty array is a row with no cell at all, which is drift, not
+            # the '..' PSA writes for a value it does not publish.
+            misaligned += 1
+            raw = None
         else:
-            raw = values[0] if values else None
+            raw = values[0]
         parsed = _to_float(raw)
         if parsed is None and raw is not None and str(raw).strip() not in PSA_MISSING_MARKERS:
             unparseable += 1

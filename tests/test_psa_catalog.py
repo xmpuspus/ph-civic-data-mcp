@@ -985,3 +985,55 @@ async def test_non_list_variables_is_an_upstream_error(monkeypatch, variables):
     out = await cat.describe_psa_dataset("1F/FY/broken.px")
     assert out["upstream_error"] is True, f"{variables!r} was accepted"
     assert out["dimensions"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "variable",
+    [
+        {"code": 123, "values": ["0"], "valueTexts": ["x"]},
+        {"code": "A", "text": 7, "values": ["0"], "valueTexts": [None]},
+        {"code": "A", "values": [1, 2], "valueTexts": [3, 4]},
+        {"code": None, "text": None, "values": ["0"], "valueTexts": ["x"]},
+    ],
+)
+async def test_non_string_metadata_does_not_crash_describe(monkeypatch, variable):
+    """A numeric code raised AttributeError on .lower() and killed the tool."""
+
+    async def _fake(client, method, url, **kwargs):
+        return _resp(method, url, {"title": "t", "variables": [variable]})
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.describe_psa_dataset("1F/FY/x.px")
+    assert len(out["dimensions"]) == 1
+    dim = out["dimensions"][0]
+    assert isinstance(dim["code"], str)
+    assert isinstance(dim["label"], str)
+    for value in dim["values"]:
+        assert isinstance(value["code"], str)
+        assert isinstance(value["label"], str)
+
+
+@pytest.mark.asyncio
+async def test_an_empty_values_array_is_drift_not_a_psa_missing_marker(monkeypatch):
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(
+                method,
+                url,
+                {
+                    "columns": [
+                        {"code": "Major Island Group", "type": "d"},
+                        {"code": "Among Families/Population", "type": "d"},
+                        {"code": "Year", "type": "d"},
+                        {"code": "V", "type": "c"},
+                    ],
+                    "data": [{"key": ["0", "0", "2"], "values": []}],
+                },
+            )
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(DATASET, FULL)
+    assert out["rows"][0]["value"] is None
+    assert any("key count" in c for c in out["caveats"]), out["caveats"]

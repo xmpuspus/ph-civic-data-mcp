@@ -175,6 +175,29 @@ parser attaches UTC, so every reading is off by eight hours.
 
 Severity: medium. It is a wrong published time on every air-quality result.
 
+## 19. An empty health-query data array becomes a cached null indicator
+
+`sources/psa.py`, in `_latest_health_value`. When a year's query returns an
+empty `data` array the loop moves on, and if every year is empty the indicator
+reports a null value on the success path and caches for 24 hours.
+
+Severity: medium, same fail-soft class as the rest of this list.
+
+## 20. Curated-table discovery has no single-flight guard
+
+`sources/psa.py`, in `_pick_latest_table`. v0.6.0 added single-flight to
+`_browse` and to the catalog metadata fetch, but concurrent cold calls to the
+curated tools still queue duplicate metadata GETs.
+
+Severity: low. It costs duplicate fetches, never a wrong answer.
+
+## 21. A non-integral population value truncates
+
+`sources/psa.py`. `int()` on a float population silently drops the fraction
+rather than reporting the unexpected type.
+
+Severity: low.
+
 ## Suggested order
 
 1, then 10, then 2, then 6 and 7 together, then 3 and 5, then 4, 8, 9 and 11.
@@ -182,6 +205,6 @@ Items 1, 8 and 10 are data-integrity defects and should lead. Item 2 is the
 only one with a security shape.
 
 Items 9, 10 and 11 came from the second cross-model pass on 2026-08-06.
-Items 12 to 16 came from rounds 5 and 6, and 17 and 18 from round 8, the
-same day. 12 and 13 are the most
+Items 12 to 16 came from rounds 5 and 6, 17 and 18 from round 8, and 19 to
+21 from round 9, the same day. Nine review rounds ran against this branch. 12 and 13 are the most
 urgent of the whole list: both publish a wrong vintage without saying so.
