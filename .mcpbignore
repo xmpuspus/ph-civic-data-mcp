@@ -31,6 +31,16 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Secrets. .gitignore has these; a bundle is a published artifact, so an
+# untracked .env or key in a working tree must never reach one.
+.env
+.env.*
+*.key
+*.pem
+*.p12
+.pypirc
+.netrc
+
 # Local-only audit / scratch (must never leak into a public artifact)
 tmp/
 .claude/

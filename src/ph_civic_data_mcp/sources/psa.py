@@ -260,20 +260,23 @@ _TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 
 
 def _token_match(needle: str, haystack: str) -> bool:
-    """Substring match that respects word boundaries.
+    """Match on whole tokens only, never on a fragment.
 
-    A bare `needle in haystack` let the region code "I" match "philippines",
-    so a caller asking for Region I received the national figure labelled as
-    their region. Short needles now have to line up with a whole token.
+    Two failures this closes. A bare `needle in haystack` let the region code
+    "I" match "philippines", so a caller asking for Region I got the national
+    figure under their region's name. Falling back to a raw substring for a
+    multi-word needle let "region i" match "region ii" the same way.
+
+    Both queries are now compared token by token, so "region i" matches
+    ["region", "i"] and never ["region", "ii"].
     """
     if not needle:
         return False
-    tokens = [tok for tok in _TOKEN_SPLIT.split(haystack) if tok]
-    if needle in tokens:
-        return True
-    # A multi-word needle still matches a run of text, but never a fragment
-    # shorter than three characters.
-    return len(needle) >= 3 and needle in haystack
+    want = [tok for tok in _TOKEN_SPLIT.split(needle) if tok]
+    have = [tok for tok in _TOKEN_SPLIT.split(haystack) if tok]
+    if not want or len(want) > len(have):
+        return False
+    return any(have[i : i + len(want)] == want for i in range(len(have) - len(want) + 1))
 
 
 def _find_geo_value(meta: dict, region: str | None, geo_code: str) -> tuple[str, str] | None:
@@ -459,11 +462,15 @@ async def get_poverty_stats(region: str | None = None) -> dict:
         return _err(f"PSA poverty table discovery failed: {exc}")
 
     subsistence: tuple[str, dict] | None
+    partial: list[str] = []
     try:
         subsistence = await _discover_subsistence_table()
     except PSAUpstreamError as exc:
         subsistence = None
         log_stderr(f"PSA subsistence discovery failed: {exc}")
+        # Surfaced, not swallowed. A null subsistence figure otherwise reads as
+        # "PSA does not publish this" and caches that for 24h.
+        partial.append(f"Subsistence table unavailable: {exc}")
 
     geo_hit = _find_geo_value(meta, region, "Geolocation")
     if geo_hit is None:
@@ -578,8 +585,15 @@ async def get_poverty_stats(region: str | None = None) -> dict:
     result = {
         **stats.model_dump(mode="json"),
         "source_table": table_url,
+        "license": PSA_LICENSE,
+        "caveats": partial,
         "data_retrieved_at": _now().isoformat(),
     }
+    if partial:
+        # A partial answer never enters the 24h cache. The poverty figure is
+        # right; the subsistence null is an outage, not a published absence.
+        result["upstream_error"] = True
+        return result
     cache[key] = result
     return result
 
@@ -641,13 +655,19 @@ _PATH_LOCKS: dict[str, asyncio.Lock] = {}
 
 def _browse_lock(subpath: str) -> asyncio.Lock:
     lock = _PATH_LOCKS.get(subpath)
-    if lock is None:
+    if lock is not None:
+        return lock
+    if len(_PATH_LOCKS) >= _MAX_PATH_LOCKS:
+        # Only drop entries nobody is holding. Clearing the whole registry
+        # would let a second caller build a fresh lock for a path someone is
+        # already inside, which silently un-does single-flight.
+        for path in [p for p, held in _PATH_LOCKS.items() if not held.locked()]:
+            del _PATH_LOCKS[path]
         if len(_PATH_LOCKS) >= _MAX_PATH_LOCKS:
-            # Every holder keeps its own reference, so dropping the registry
-            # never frees a lock somebody is inside.
-            _PATH_LOCKS.clear()
-        lock = _PATH_LOCKS.setdefault(subpath, asyncio.Lock())
-    return lock
+            # Every remaining lock is in use. Serve this call an unshared lock
+            # rather than evict one; it costs one duplicate fetch, not a bug.
+            return asyncio.Lock()
+    return _PATH_LOCKS.setdefault(subpath, asyncio.Lock())
 
 
 async def _browse(subpath: str) -> list[dict]:
@@ -734,6 +754,11 @@ def _rows(payload: dict) -> list[tuple[dict[str, str], float | None]]:
         key = row.get("key", [])
         values = row.get("values", [])
         mapping = {cols[i]: key[i] for i in range(min(len(cols), len(key)))}
+        if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
+            # PXWeb always sends a list. Indexing a string here would hand back
+            # its first character as a statistic.
+            out.append((mapping, None))
+            continue
         out.append((mapping, _to_float(values[0] if values else None)))
     return out
 
@@ -1101,7 +1126,9 @@ def _unit_from_title(title: str) -> str | None:
     return None
 
 
-async def _latest_health_value(table_url: str, meta: dict) -> tuple[float | None, str | None]:
+async def _latest_health_value(
+    table_url: str, meta: dict
+) -> tuple[float | None, str | None, str | None]:
     """Latest numeric cell + its reference year for a (small) 1D health table.
 
     1D tables are tiny (≤ a few hundred cells). We select the single newest year
@@ -1114,7 +1141,7 @@ async def _latest_health_value(table_url: str, meta: dict) -> tuple[float | None
     )
     year_codes = year_var.get("values", [])
     if not year_codes:
-        return None, None
+        return None, None, None
     query_dims: list[dict] = []
     for var in meta.get("variables", []):
         code = var.get("code", "")
@@ -1136,13 +1163,18 @@ async def _latest_health_value(table_url: str, meta: dict) -> tuple[float | None
             ],
             "response": {"format": "json"},
         }
-        payload = await _post_json(table_url, query)
-        if not payload or not payload.get("data"):
+        try:
+            payload = await _post_json_or_raise(table_url, query)
+        except PSAUpstreamError as exc:
+            # A failed POST is not "PSA publishes nothing for this year". Say so,
+            # so the caller does not cache a null as a real indicator value.
+            return None, None, f"{table_url}: {exc}"
+        if not payload.get("data"):
             continue
         for _, val in _rows(payload):
             if val is not None:
-                return val, _value_text(meta, year_var.get("code", "Year"), year_code)
-    return None, None
+                return val, _value_text(meta, year_var.get("code", "Year"), year_code), None
+    return None, None, None
 
 
 @mcp.tool(
@@ -1228,7 +1260,10 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
         if not isinstance(meta, dict):
             unavailable.append(f"{entry.get('text') or entry['id']}: metadata was not an object")
             continue
-        value, year_text = await _latest_health_value(table_url, meta)
+        value, year_text, fetch_error = await _latest_health_value(table_url, meta)
+        if fetch_error:
+            unavailable.append(fetch_error)
+            continue
         title = meta.get("title", entry.get("text", ""))
         model = HealthIndicator(
             indicator=title,

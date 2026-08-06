@@ -610,8 +610,30 @@ def test_a_short_region_code_does_not_match_philippines(query, expected):
 def test_token_match_rejects_a_fragment():
     assert psa_module._token_match("i", "region i (ilocos)") is True
     assert psa_module._token_match("i", "philippines") is False
-    assert psa_module._token_match("cor", "cordillera") is True
+    assert psa_module._token_match("cor", "cordillera") is False, "a prefix is not a token"
+    assert psa_module._token_match("cordillera", "cordillera administrative region") is True
     assert psa_module._token_match("", "anything") is False
+
+
+def test_region_i_does_not_match_region_ii():
+    """Whichever the catalog lists first, each must resolve to itself."""
+    meta = {
+        "variables": [
+            {
+                "code": "Geolocation",
+                "values": ["0", "1", "2"],
+                "valueTexts": [
+                    "PHILIPPINES",
+                    "..Region II (Cagayan Valley)",
+                    "....Region I (Ilocos Region)",
+                ],
+            }
+        ]
+    }
+    assert psa_module._find_geo_value(meta, "Region I", "Geolocation")[1].startswith("Region I ")
+    assert psa_module._find_geo_value(meta, "Region II", "Geolocation")[1].startswith("Region II")
+    assert psa_module._find_geo_value(meta, "I", "Geolocation")[1].startswith("Region I ")
+    assert psa_module._find_geo_value(meta, "II", "Geolocation")[1].startswith("Region II")
 
 
 @pytest.mark.asyncio

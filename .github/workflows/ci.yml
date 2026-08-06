@@ -17,8 +17,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Exact tag on purpose: setup-uv stopped publishing floating major tags
+      # at v8, so @v9 is a 404 and every job fails at checkout.
       - name: Install uv
-        uses: astral-sh/setup-uv@v9
+        uses: astral-sh/setup-uv@v9.0.0
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
@@ -66,7 +68,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v9
+        uses: astral-sh/setup-uv@v9.0.0
 
       - name: Check the lockfile is current
         run: uv lock --check

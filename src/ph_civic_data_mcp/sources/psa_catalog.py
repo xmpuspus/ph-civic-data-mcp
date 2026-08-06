@@ -313,13 +313,17 @@ _META_LOCKS: dict[str, asyncio.Lock] = {}
 
 def _meta_lock(path: str) -> asyncio.Lock:
     lock = _META_LOCKS.get(path)
-    if lock is None:
+    if lock is not None:
+        return lock
+    if len(_META_LOCKS) >= _MAX_META_LOCKS:
+        # Only drop entries nobody is holding. Clearing the whole registry
+        # would hand a second caller a fresh lock for a path someone is
+        # already inside, which silently un-does single-flight.
+        for key in [k for k, held in _META_LOCKS.items() if not held.locked()]:
+            del _META_LOCKS[key]
         if len(_META_LOCKS) >= _MAX_META_LOCKS:
-            # Every waiter holds its own reference, so clearing the registry
-            # never frees a lock somebody is inside.
-            _META_LOCKS.clear()
-        lock = _META_LOCKS.setdefault(path, asyncio.Lock())
-    return lock
+            return asyncio.Lock()
+    return _META_LOCKS.setdefault(path, asyncio.Lock())
 
 
 async def _dataset_meta(path: str) -> dict:
