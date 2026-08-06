@@ -13,6 +13,7 @@ Landmines (from validation log):
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 from datetime import datetime, timezone
 
@@ -455,10 +456,24 @@ async def get_population_stats(
             "data_retrieved_at": _now().isoformat(),
         }
 
-    try:
-        population = int(payload["data"][0]["values"][0])
-    except (KeyError, IndexError, ValueError):
-        population = 0
+    raw_population = _first_cell(payload)
+    if raw_population is None:
+        # This used to fall back to 0 and follow the success path into the 24h
+        # cache, reporting the Philippines as having no people.
+        return {
+            "region": geo_text,
+            "population": None,
+            "upstream_error": True,
+            "caveats": [
+                "PSA returned a population cell this server could not read as a "
+                "number. That is a parse failure, never a population of zero."
+            ],
+            "source": "PSA",
+            "source_url": f"{PSA_API_BASE}/DB/1A/PO/",
+            "license": PSA_LICENSE,
+            "data_retrieved_at": _now().isoformat(),
+        }
+    population = int(raw_population)
 
     stats = PopulationStats(
         region=geo_text,
@@ -686,16 +701,21 @@ _MISSING = {"..", "...", "-", "", "n.a.", "na", "*"}
 
 
 def _to_float(raw: object) -> float | None:
-    """PSA encodes missing cells as the literal string '..' (and friends)."""
+    """PSA encodes missing cells as the literal string '..' (and friends).
+
+    float("nan") and float("inf") both succeed, so a bare float() would publish
+    either as a statistic and JSON-encode it as an out-of-spec literal.
+    """
     if raw is None:
         return None
     s = str(raw).strip()
     if s.lower() in _MISSING:
         return None
     try:
-        return float(s)
+        value = float(s)
     except ValueError:
         return None
+    return value if math.isfinite(value) else None
 
 
 def _year_max(meta: dict) -> int:

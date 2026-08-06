@@ -983,3 +983,59 @@ def test_a_short_value_texts_list_does_not_raise():
     assert psa_module._find_geo_value(meta, None, "Geolocation") is None
     partial = {"variables": [{"code": "Geolocation", "values": ["0", "1"], "valueTexts": ["A"]}]}
     assert psa_module._find_geo_value(partial, None, "Geolocation") == ("0", "A")
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_population_cell_is_never_a_population_of_zero(monkeypatch):
+    """The old fallback reported the Philippines as having no people."""
+    _clear_psa_state()
+    CACHES["psa_population"].clear()
+
+    pop_listing = [{"id": "p.px", "type": "t", "text": "Total population by region and household"}]
+    pop_meta = {
+        "title": "Total population",
+        "variables": [
+            {
+                "code": "Geographic Location",
+                "values": ["0"],
+                "valueTexts": ["PHILIPPINES"],
+            },
+            {"code": "Parameter", "values": ["0"], "valueTexts": ["Total Population"]},
+        ],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _json_response(
+                method,
+                url,
+                {
+                    "columns": [{"code": "Geographic Location", "type": "d"}],
+                    "data": [{"key": ["0"], "values": ["not-a-number"]}],
+                },
+            )
+        if url.endswith("/DB/1A/PO/"):
+            return _json_response(method, url, pop_listing)
+        if url.endswith("p.px"):
+            return _json_response(method, url, pop_meta)
+        return httpx.Response(404, text="no", request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+
+    result = await psa_module.get_population_stats()
+    assert result.get("population") != 0, "a parse failure became a population of zero"
+    assert result.get("population") is None
+    assert result["upstream_error"] is True
+    assert len(CACHES["psa_population"]) == 0
+
+
+@pytest.mark.parametrize("raw", ["nan", "NaN", "inf", "-inf", "Infinity"])
+def test_to_float_refuses_a_non_finite_value(raw):
+    """float('nan') succeeds and would JSON-encode as an out-of-spec literal."""
+    assert psa_module._to_float(raw) is None
+
+
+def test_to_float_still_reads_a_real_number():
+    assert psa_module._to_float("10.9") == pytest.approx(10.9)
+    assert psa_module._to_float("-3") == pytest.approx(-3.0)
+    assert psa_module._to_float("..") is None

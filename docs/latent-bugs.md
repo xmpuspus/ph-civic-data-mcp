@@ -1,6 +1,6 @@
 # Latent bugs found but not fixed in v0.6.0
 
-> Items 4 and 8 were fixed during the review rounds and are marked below.
+> Items 1, 4 and 8 were fixed during the review rounds and are marked below.
 > Items 12 to 16 came from rounds 5 and 6. Everything else still stands.
 
 Found by an adversarial and a cross-model review of the v0.6.0 branch on
@@ -13,7 +13,7 @@ a normal-looking answer. That contradicts the failure-envelope contract in
 CLAUDE.md, which v0.5.0 applied to list tools but never swept through the
 single-value tools.
 
-## 1. A malformed population cell becomes a population of zero
+## 1. FIXED in v0.6.0. A malformed population cell becomes a population of zero
 
 `sources/psa.py`, in `get_population_stats`. The parse handler assigns
 `population = 0` on a `ValueError`, then follows the success path into the 24h
@@ -27,6 +27,9 @@ parse. Do not cache it.
 
 Severity: high. This is a fabricated public figure, which the project's own
 data-integrity rule forbids.
+
+Fixed: `_first_cell` reads the cell with a type check at every level, and an
+unreadable cell returns an envelope with `upstream_error` that never caches.
 
 ## 2. The volcano bulletin path fetches an absolute URL on the TLS-relaxed client
 
@@ -158,6 +161,20 @@ The 429 backoff covers the practical case.
 
 Severity: low.
 
+## 17. NASA POWER accepts an empty or invalid date and uses the default window
+
+`sources/nasa_power.py`. A present but unusable date argument silently selects
+the default window rather than telling the caller the argument was wrong.
+
+Severity: medium.
+
+## 18. Open-Meteo air-quality timestamps are labelled UTC but are Manila-local
+
+`sources/open_meteo_aq.py`. The API returns naive local timestamps and the
+parser attaches UTC, so every reading is off by eight hours.
+
+Severity: medium. It is a wrong published time on every air-quality result.
+
 ## Suggested order
 
 1, then 10, then 2, then 6 and 7 together, then 3 and 5, then 4, 8, 9 and 11.
@@ -165,5 +182,6 @@ Items 1, 8 and 10 are data-integrity defects and should lead. Item 2 is the
 only one with a security shape.
 
 Items 9, 10 and 11 came from the second cross-model pass on 2026-08-06.
-Items 12 to 16 came from rounds 5 and 6 the same day. 12 and 13 are the most
+Items 12 to 16 came from rounds 5 and 6, and 17 and 18 from round 8, the
+same day. 12 and 13 are the most
 urgent of the whole list: both publish a wrong vintage without saying so.
