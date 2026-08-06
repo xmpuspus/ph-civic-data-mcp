@@ -49,8 +49,13 @@ name, parameter name, or successful response field changed.
   values.
 - **`psa_data_explorer` prompt** drives browse -> describe -> query and tells
   an agent to read the vintage from the table's own time dimension.
-- **A rolling rate limiter** on every OpenSTAT request, matching the
-  10-per-10-seconds cap PSA publishes.
+- **A token-bucket rate limiter** on every OpenSTAT request, holding the
+  10-per-10-seconds cap PSA publishes. A bucket, not a sliding window: a cold
+  `get_area_profile` makes about 11 OpenSTAT calls in one `asyncio.gather`, and
+  a strict window stalled that whole fan-out for a full 10 seconds. The bucket
+  keeps the same sustained rate and lets the burst through, so the same cold
+  profile costs about 1 second. A 429 now backs off past the window and honors
+  `Retry-After`.
 - **MCP metadata on every tool:** a human-readable title, domain tags, and
   annotations. All 32 are read-only and idempotent; the 31 that call an
   upstream declare `openWorldHint`. The three new tools also declare output
@@ -101,6 +106,9 @@ suite passes on Python 3.11 through 3.14 after the bump.
   described 12 tools.
 - The `test_world_bank_raw_code` live test skips on an upstream outage rather
   than failing on one. It still asserts shape when data arrives.
+- `docs/latent-bugs.md` records eight pre-existing fail-soft paths that two
+  independent reviews of this branch surfaced. They predate v0.6.0 and are
+  logged rather than bundled into a release.
 
 ## [0.5.0] — 2026-06-11
 

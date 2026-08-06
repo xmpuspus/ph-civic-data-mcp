@@ -106,10 +106,14 @@ Live-checked 2026-08-06. Do not re-learn these.
 - **The response `updated` field is server wall clock, not data recency.** Read
   the vintage from the table's Year or time dimension. A 1D health table's
   `Year` is not `time`-typed.
-- **The rate limit is 10 requests per 10 seconds.** `psa._psa_rate_limit`
-  enforces a rolling window. The API guide itself sits behind a Cloudflare
-  challenge that no headless client can read, so that figure comes from the
-  project's own record, not a live quote.
+- **The rate limit is 10 requests per 10 seconds.** `psa._psa_rate_limit` is a
+  token bucket, not a sliding window, and that choice is load-bearing. A cold
+  `get_area_profile` makes about 11 OpenSTAT calls in one `asyncio.gather`, so a
+  strict window stalls the flagship tool for a full 10 seconds. The bucket holds
+  the same sustained rate and lets that burst through, and it sleeps outside its
+  lock so gathered calls do not serialize. The API guide sits behind a
+  Cloudflare challenge that no headless client can read, so the 10-per-10s
+  figure comes from the project's own record, not a live quote.
 - **Responses carry a UTF-8 BOM.** `httpx.Response.json()` handles it; a
   hand-rolled `json.loads` on raw bytes would not.
 - Hardcoding a stable subject path prefix is fine for the curated tools
