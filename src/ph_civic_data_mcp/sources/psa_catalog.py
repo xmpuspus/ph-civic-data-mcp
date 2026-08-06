@@ -21,11 +21,13 @@ returns `upstream_error: true`. Neither is ever cached.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.sources.psa import (
+    _MISSING as PSA_MISSING_MARKERS,
     PSA_API_BASE,
     PSA_LICENSE,
     PSAUpstreamError,
@@ -302,17 +304,29 @@ def _upstream_envelope(source_url: str, message: str, **extra: Any) -> dict:
 # ---------------------------------------------------------------------------
 
 
+# One lock per dataset path. Without it, N concurrent cold calls for the same
+# table all miss the cache and queue N identical GETs behind the rate limiter,
+# so the later ones blow their own timeout while the first result sits unused.
+_META_LOCKS: dict[str, asyncio.Lock] = {}
+
+
 async def _dataset_meta(path: str) -> dict:
     """Fetch and cache `.px` metadata. Successes only; errors stay retryable."""
     key = cache_key({"psa_meta": path})
     cache = CACHES["psa_browse"]
     if key in cache:
         return cache[key]
-    meta = await _get_json_or_raise(_dataset_url(path))
-    if not isinstance(meta, dict) or not meta.get("variables"):
-        raise PSAUpstreamError(f"PSA dataset {path} returned no variable metadata")
-    cache[key] = meta
-    return meta
+
+    lock = _META_LOCKS.setdefault(path, asyncio.Lock())
+    async with lock:
+        # Re-check: the holder before us may have filled the cache already.
+        if key in cache:
+            return cache[key]
+        meta = await _get_json_or_raise(_dataset_url(path))
+        if not isinstance(meta, dict) or not meta.get("variables"):
+            raise PSAUpstreamError(f"PSA dataset {path} returned no variable metadata")
+        cache[key] = meta
+        return meta
 
 
 def _is_time_like(var: dict) -> bool:
@@ -338,9 +352,19 @@ def _dimensions(meta: dict) -> list[dict]:
                 "values": listed,
                 "values_truncated": len(values) > MAX_VALUES_LISTED,
                 "is_time_like": _is_time_like(var),
+                # The reported list is capped for readability, but validation
+                # checks against every code PSA declares. Validating against the
+                # truncated list would wave a bad code through to PXWeb and turn
+                # a caller mistake into a reported upstream error.
+                "_all_codes": frozenset(str(v) for v in values),
             }
         )
     return dims
+
+
+def _public_dimensions(dims: list[dict]) -> list[dict]:
+    """Drop the internal validation set before a dimension leaves the server."""
+    return [{k: v for k, v in dim.items() if not k.startswith("_")} for dim in dims]
 
 
 def _total_cells(dims: list[dict]) -> int:
@@ -494,7 +518,7 @@ async def describe_psa_dataset(dataset_path: str) -> dict:
         {
             "dataset_path": path,
             "title": meta.get("title") or path,
-            "dimensions": dims,
+            "dimensions": _public_dimensions(dims),
             "time_dimensions": [d["code"] for d in dims if d["is_time_like"]],
             "total_cells": _total_cells(dims),
             "max_cells_per_query": MAX_CELLS,
@@ -542,7 +566,18 @@ def _validate_selections(dims: list[dict], selections: Any) -> tuple[dict[str, l
             raise CatalogPathError(
                 f"dimension {dim['code']!r} needs a non-empty list of value codes"
             )
-        valid = {v["code"] for v in dim["values"]}
+        # Reject on length BEFORE converting and copying. A caller-supplied list
+        # of a hundred million codes would otherwise build a second list that
+        # size before the cell check below ever runs.
+        if len(raw_values) > MAX_CELLS:
+            raise CatalogPathError(
+                f"dimension {dim['code']!r} lists {len(raw_values)} values; one query "
+                f"is capped at {MAX_CELLS} cells. Narrow the selection."
+            )
+        if dim["code"] in resolved:
+            raise CatalogPathError(f"dimension {dim['code']!r} selected twice")
+
+        valid = dim["_all_codes"]
         chosen: list[str] = []
         for value in raw_values:
             value = str(value)
@@ -551,19 +586,12 @@ def _validate_selections(dims: list[dict], selections: Any) -> tuple[dict[str, l
                     f"dimension {dim['code']!r}: 'all' and '*' are not allowed. "
                     "PSA rejects full-cube requests. Select explicit value codes."
                 )
-            if dim["values_truncated"]:
-                # Cannot prove membership against a truncated list; accept and
-                # let PXWeb reject an unknown code.
-                chosen.append(value)
-                continue
             if value not in valid:
                 sample = [v["code"] for v in dim["values"][:10]]
                 raise CatalogPathError(
                     f"dimension {dim['code']!r} has no value {value!r}. Valid codes start: {sample}"
                 )
             chosen.append(value)
-        if dim["code"] in resolved:
-            raise CatalogPathError(f"dimension {dim['code']!r} selected twice")
         resolved[dim["code"]] = chosen
 
     missing = [d["code"] for d in dims if d["code"] not in resolved]
@@ -585,17 +613,25 @@ def _validate_selections(dims: list[dict], selections: Any) -> tuple[dict[str, l
 
 
 def _reference_period(dims: list[dict], resolved: dict[str, list[str]]) -> str | None:
-    labels: list[str] = []
+    """Human-readable vintage, read from the table's own time dimensions.
+
+    A range only spans ONE dimension. Joining two different time dimensions
+    into "first to last" would invent a period neither of them covers.
+    """
+    parts: list[str] = []
     for dim in dims:
         if not dim["is_time_like"]:
             continue
         by_code = {v["code"]: v["label"] for v in dim["values"]}
-        labels.extend(by_code.get(c, c) for c in resolved.get(dim["code"], []))
-    if not labels:
+        labels = [by_code.get(c, c) for c in resolved.get(dim["code"], [])]
+        if not labels:
+            continue
+        parts.append(labels[0] if len(labels) == 1 else f"{labels[0]} to {labels[-1]}")
+    if not parts:
         return None
-    if len(labels) == 1:
-        return labels[0]
-    return f"{labels[0]} to {labels[-1]}"
+    if len(parts) == 1:
+        return parts[0]
+    return "; ".join(parts)
 
 
 @mcp.tool(
@@ -695,10 +731,18 @@ async def query_psa_dataset(
     label_lookup = {dim["code"]: {v["code"]: v["label"] for v in dim["values"]} for dim in dims}
     columns = _key_columns(payload)
     rows: list[dict] = []
+    misaligned = 0
+    unparseable = 0
     for record in payload.get("data", []):
         key = record.get("key", [])
         values = record.get("values", [])
+        if len(key) != len(columns):
+            misaligned += 1
         keys = {columns[i]: key[i] for i in range(min(len(columns), len(key)))}
+        raw = values[0] if values else None
+        parsed = _to_float(raw)
+        if parsed is None and raw is not None and str(raw).strip() not in PSA_MISSING_MARKERS:
+            unparseable += 1
         rows.append(
             {
                 "keys": keys,
@@ -706,7 +750,7 @@ async def query_psa_dataset(
                     code: label_lookup.get(code, {}).get(value, value)
                     for code, value in keys.items()
                 },
-                "value": _to_float(values[0] if values else None),
+                "value": parsed,
             }
         )
 
@@ -734,5 +778,16 @@ async def query_psa_dataset(
         )
     if any(row["value"] is None for row in out["rows"]):
         caveats.append("Some cells are null: PSA publishes '..' for a missing value.")
+    if unparseable:
+        caveats.append(
+            f"{unparseable} cell(s) held a value this server could not read as a "
+            "number and reported as null. That is a parse failure, not a PSA "
+            "missing-value marker."
+        )
+    if misaligned:
+        caveats.append(
+            f"{misaligned} row(s) carried a key count that does not match the "
+            f"{len(columns)} dimension columns; those rows are partially mapped."
+        )
     out["caveats"] = caveats
     return out

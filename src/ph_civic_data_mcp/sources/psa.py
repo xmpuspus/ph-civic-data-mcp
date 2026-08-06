@@ -13,7 +13,6 @@ Landmines (from validation log):
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 from datetime import datetime, timezone
 
 from ph_civic_data_mcp._mcp import mcp
@@ -30,27 +29,60 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# PSA publishes a request cap on its API guide. Keep a rolling window well
-# inside it so a burst of catalog calls never earns a 429. The guide itself
-# sits behind a Cloudflare challenge that no headless client can read, so this
-# window follows the last figure the project recorded: 10 requests / 10s.
+# PSA publishes a request cap on its API guide: 10 requests per 10 seconds.
+# The guide sits behind a Cloudflare challenge that no headless client can
+# read, so that figure comes from the project's own record, not a live quote.
+#
+# A token bucket, not a sliding window. A cold get_area_profile makes about 11
+# OpenSTAT calls in one asyncio.gather, and a strict window stalls that whole
+# fan-out for a full 10 seconds on the flagship tool. The bucket holds the same
+# sustained rate of one request per second, but it lets a burst of 10 through
+# at once, so the same cold profile pays about 1 second instead of 10.
 PSA_RATE_LIMIT_REQUESTS = 10
 PSA_RATE_LIMIT_WINDOW_SECONDS = 10.0
+PSA_REFILL_PER_SECOND = PSA_RATE_LIMIT_REQUESTS / PSA_RATE_LIMIT_WINDOW_SECONDS
 
 _RATE_LOCK = asyncio.Lock()
-_RECENT_CALLS: deque[float] = deque(maxlen=PSA_RATE_LIMIT_REQUESTS)
+_TOKENS = float(PSA_RATE_LIMIT_REQUESTS)
+_LAST_REFILL: float | None = None
+
+
+def _reset_rate_limiter() -> None:
+    """Refill the bucket. For tests, and for a fresh process."""
+    global _TOKENS, _LAST_REFILL
+    _TOKENS = float(PSA_RATE_LIMIT_REQUESTS)
+    _LAST_REFILL = None
 
 
 async def _psa_rate_limit() -> None:
-    """Block until another OpenSTAT request fits inside the published window."""
+    """Hold an OpenSTAT request back until the bucket has a token for it."""
+    global _TOKENS, _LAST_REFILL
+    loop = asyncio.get_running_loop()
+
     async with _RATE_LOCK:
-        loop = asyncio.get_running_loop()
-        while len(_RECENT_CALLS) == PSA_RATE_LIMIT_REQUESTS:
-            wait = PSA_RATE_LIMIT_WINDOW_SECONDS - (loop.time() - _RECENT_CALLS[0])
-            if wait <= 0:
-                break
-            await asyncio.sleep(wait)
-        _RECENT_CALLS.append(loop.time())
+        now = loop.time()
+        if _LAST_REFILL is None:
+            _LAST_REFILL = now
+        _TOKENS = min(
+            float(PSA_RATE_LIMIT_REQUESTS),
+            _TOKENS + (now - _LAST_REFILL) * PSA_REFILL_PER_SECOND,
+        )
+        _LAST_REFILL = now
+        if _TOKENS >= 1.0:
+            _TOKENS -= 1.0
+            wait = 0.0
+        else:
+            # Reserve the token this call will consume, and push the refill
+            # clock forward, so a concurrent caller queues behind it instead of
+            # racing for the same token.
+            wait = (1.0 - _TOKENS) / PSA_REFILL_PER_SECOND
+            _TOKENS = 0.0
+            _LAST_REFILL = now + wait
+
+    # Sleep outside the lock. Holding it here would serialize every gathered
+    # PSA call behind one wait and defeat the fan-out in the composites.
+    if wait > 0:
+        await asyncio.sleep(wait)
 
 
 class PSAUpstreamError(RuntimeError):
@@ -444,19 +476,31 @@ async def get_poverty_stats(region: str | None = None) -> dict:
         ],
         "response": {"format": "json"},
     }
-    payload = await _post_json(table_url, query)
+    try:
+        payload = await _post_json_or_raise(table_url, query)
+    except PSAUpstreamError as exc:
+        return _err(f"PSA poverty query failed: {exc}")
+
     poverty_pct: float | None = None
-    if payload and payload.get("data"):
+    if payload.get("data"):
         try:
-            poverty_pct = float(payload["data"][0]["values"][0])
-        except (KeyError, IndexError, ValueError):
+            poverty_pct = _to_float(payload["data"][0]["values"][0])
+        except (KeyError, IndexError):
             poverty_pct = None
 
     if poverty_pct is None:
+        # The call worked, so this is a real gap in PSA's data, not an outage.
+        # _err would say upstream_error and send the agent back to retry.
         return {
             "region": geo_text,
-            "caveats": ["PSA PXWeb poverty query returned no usable data"],
+            "poverty_incidence_pct": None,
+            "caveats": [
+                "PSA published no poverty figure for this area and year "
+                f"({year_text}). PSA writes '..' for a cell it does not publish."
+            ],
             "source": "PSA",
+            "source_table": table_url,
+            "license": PSA_LICENSE,
             "data_retrieved_at": _now().isoformat(),
         }
 

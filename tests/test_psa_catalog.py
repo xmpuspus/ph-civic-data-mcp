@@ -561,3 +561,204 @@ async def test_successful_responses_pass_the_declared_output_schema(monkeypatch)
         )
         assert queried.structured_content["row_count"] == 2
         assert queried.structured_content["rows"][1]["value"] is None
+
+
+# ---------------------------------------------------------------------------
+# Hardening found by the cross-model review
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_huge_value_list_is_rejected_before_it_is_copied(monkeypatch):
+    """The ceiling used to fire only after building a second list that size."""
+    _install(monkeypatch)
+    out = await cat.query_psa_dataset(
+        DATASET,
+        {
+            "Major Island Group": ["0"] * (cat.MAX_CELLS + 1),
+            "Among Families/Population": ["0"],
+            "Year": ["2"],
+        },
+    )
+    assert out["validation_error"] is True
+    assert "1001 values" in out["caveats"][0]
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_dimension_still_validates_every_code(monkeypatch):
+    """Value lists are capped for display, never for validation."""
+    wide = {
+        "title": "Wide table",
+        "variables": [
+            {
+                "code": "Area",
+                "text": "Area",
+                "values": [str(i) for i in range(cat.MAX_VALUES_LISTED + 50)],
+                "valueTexts": [f"Area {i}" for i in range(cat.MAX_VALUES_LISTED + 50)],
+            }
+        ],
+    }
+    posted = {"n": 0}
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            posted["n"] += 1
+            return _resp(method, url, DATA)
+        return _resp(method, url, wide)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+
+    described = await cat.describe_psa_dataset("1F/FY/wide.px")
+    assert described["dimensions"][0]["values_truncated"] is True
+    assert "_all_codes" not in described["dimensions"][0], "internal field leaked"
+
+    # A code past the display cap is real, so it must be accepted.
+    ok = await cat.query_psa_dataset("1F/FY/wide.px", {"Area": ["520"]})
+    assert not ok.get("validation_error"), ok.get("caveats")
+
+    # A code that does not exist is a caller mistake, never an upstream error.
+    bad = await cat.query_psa_dataset("1F/FY/wide.px", {"Area": ["99999"]})
+    assert bad["validation_error"] is True
+    assert not bad.get("upstream_error")
+    assert posted["n"] == 1, "the bad code must not reach PSA"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cold_calls_fetch_the_metadata_once(monkeypatch):
+    """Twenty callers for one uncached table used to queue twenty GETs."""
+    import asyncio
+
+    fetches = {"n": 0}
+
+    async def _slow(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, DATA)
+        fetches["n"] += 1
+        await asyncio.sleep(0.01)
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _slow)
+
+    results = await asyncio.gather(*[cat.describe_psa_dataset(DATASET) for _ in range(20)])
+    assert all(r["total_cells"] == 18 for r in results)
+    assert fetches["n"] == 1, f"metadata fetched {fetches['n']} times, expected 1"
+
+
+@pytest.mark.asyncio
+async def test_two_time_dimensions_do_not_become_one_false_range(monkeypatch):
+    two_time = {
+        "title": "Two time dims",
+        "variables": [
+            {
+                "code": "Year",
+                "text": "Year",
+                "values": ["0", "1"],
+                "valueTexts": ["2018", "2023"],
+            },
+            {
+                "code": "Period",
+                "text": "Period",
+                "values": ["0", "1"],
+                "valueTexts": ["Q1", "Q4"],
+            },
+        ],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(
+                method,
+                url,
+                {
+                    "columns": [
+                        {"code": "Year", "type": "d"},
+                        {"code": "Period", "type": "d"},
+                        {"code": "V", "type": "c"},
+                    ],
+                    "data": [{"key": ["0", "0"], "values": ["1.0"]}],
+                },
+            )
+        return _resp(method, url, two_time)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset("1F/FY/two.px", {"Year": ["0", "1"], "Period": ["0", "1"]})
+    assert out["reference_period"] == "2018 to 2023; Q1 to Q4", out["reference_period"]
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_cell_is_flagged_apart_from_a_psa_missing_marker(monkeypatch):
+    payload = {
+        "columns": [
+            {"code": "Major Island Group", "type": "d"},
+            {"code": "Among Families/Population", "type": "d"},
+            {"code": "Year", "type": "d"},
+            {"code": "V", "type": "c"},
+        ],
+        "data": [
+            {"key": ["0", "0", "2"], "values": [".."]},
+            {"key": ["1", "0", "2"], "values": ["not-a-number"]},
+        ],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, payload)
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(
+        DATASET,
+        {"Major Island Group": ["0", "1"], "Among Families/Population": ["0"], "Year": ["2"]},
+    )
+    assert out["rows"][0]["value"] is None
+    assert out["rows"][1]["value"] is None
+    joined = " ".join(out["caveats"])
+    assert "missing value" in joined, joined
+    assert "could not read as a number" in joined, "a parse failure must not read as PSA's '..'"
+
+
+@pytest.mark.asyncio
+async def test_a_misaligned_row_is_reported_not_silently_truncated(monkeypatch):
+    payload = {
+        "columns": [
+            {"code": "Major Island Group", "type": "d"},
+            {"code": "Among Families/Population", "type": "d"},
+            {"code": "Year", "type": "d"},
+            {"code": "V", "type": "c"},
+        ],
+        "data": [{"key": ["0", "0"], "values": ["10.9"]}],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, payload)
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(DATASET, FULL)
+    assert any("key count" in c for c in out["caveats"]), out["caveats"]
+
+
+@pytest.mark.asyncio
+async def test_max_rows_ceiling_is_actually_enforced(monkeypatch):
+    """MAX_ROWS_CEILING was never exercised: the fixture only had 2 rows."""
+    big = {
+        "columns": [
+            {"code": "Major Island Group", "type": "d"},
+            {"code": "Among Families/Population", "type": "d"},
+            {"code": "Year", "type": "d"},
+            {"code": "V", "type": "c"},
+        ],
+        "data": [{"key": ["0", "0", "2"], "values": ["1.0"]} for _ in range(6000)],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, big)
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(DATASET, FULL, max_rows=10**6)
+    assert out["row_count"] == cat.MAX_ROWS_CEILING
+    assert out["total_rows_available"] == 6000
+    assert out["truncated"] is True

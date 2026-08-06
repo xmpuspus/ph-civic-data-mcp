@@ -355,6 +355,26 @@ async def test_labor_survives_a_browse_failure(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def _fake_clock(monkeypatch, psa_mod):
+    """Drive the limiter on a fake clock so no test pays a real sleep."""
+    import asyncio
+
+    clock = {"t": 1000.0}
+    waits: list[float] = []
+
+    class _Loop:
+        def time(self):
+            return clock["t"]
+
+    async def _sleep(seconds):
+        waits.append(seconds)
+        clock["t"] += seconds
+
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: _Loop())
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    return waits
+
+
 def test_a_429_backs_off_past_the_psa_window():
     """The 1/2/4s ladder burns all three tries inside one 10s window."""
     from ph_civic_data_mcp.utils import http
@@ -391,28 +411,71 @@ def test_retry_after_wins_when_the_server_sends_one():
 
 
 @pytest.mark.asyncio
-async def test_psa_rate_limiter_holds_the_published_window(monkeypatch):
-    """10 requests per 10 seconds: the 11th waits for the window to roll."""
+async def test_a_cold_burst_of_ten_never_waits(monkeypatch):
+    """The bucket starts full so one composite's fan-out goes straight out."""
+    from ph_civic_data_mcp.sources import psa as psa_mod
+
+    psa_mod._reset_rate_limiter()
+    waits = _fake_clock(monkeypatch, psa_mod)
+
+    for _ in range(psa_mod.PSA_RATE_LIMIT_REQUESTS):
+        await psa_mod._psa_rate_limit()
+    assert waits == [], f"a burst of 10 must not wait, waited {waits}"
+
+
+@pytest.mark.asyncio
+async def test_the_eleventh_call_waits_one_second_not_a_whole_window(monkeypatch):
+    """The regression this replaced stalled get_area_profile for 10 seconds."""
+    from ph_civic_data_mcp.sources import psa as psa_mod
+
+    psa_mod._reset_rate_limiter()
+    waits = _fake_clock(monkeypatch, psa_mod)
+
+    for _ in range(psa_mod.PSA_RATE_LIMIT_REQUESTS + 1):
+        await psa_mod._psa_rate_limit()
+
+    assert len(waits) == 1, f"only the 11th call waits, got {waits}"
+    assert waits[0] == pytest.approx(1.0, abs=0.01), waits
+    assert waits[0] < psa_mod.PSA_RATE_LIMIT_WINDOW_SECONDS / 2
+
+
+@pytest.mark.asyncio
+async def test_sustained_rate_matches_the_published_cap(monkeypatch):
+    """30 back-to-back calls must not beat 10 per 10 seconds over the tail."""
+    from ph_civic_data_mcp.sources import psa as psa_mod
+
+    psa_mod._reset_rate_limiter()
+    waits = _fake_clock(monkeypatch, psa_mod)
+
+    total = 30
+    for _ in range(total):
+        await psa_mod._psa_rate_limit()
+
+    # The bucket lets the first 10 through free; the other 20 pay 1s each.
+    beyond_burst = total - psa_mod.PSA_RATE_LIMIT_REQUESTS
+    assert sum(waits) == pytest.approx(beyond_burst / psa_mod.PSA_REFILL_PER_SECOND, abs=0.05)
+
+
+@pytest.mark.asyncio
+async def test_the_limiter_does_not_hold_its_lock_while_it_sleeps(monkeypatch):
+    """Holding it would serialize every gathered PSA call behind one wait."""
     import asyncio
 
     from ph_civic_data_mcp.sources import psa as psa_mod
 
-    psa_mod._RECENT_CALLS.clear()
-    slept: list[float] = []
+    psa_mod._reset_rate_limiter()
+    locked_during_sleep = []
 
-    async def _record(seconds):
-        slept.append(seconds)
+    async def _watch(seconds):
+        locked_during_sleep.append(psa_mod._RATE_LOCK.locked())
 
-    monkeypatch.setattr(asyncio, "sleep", _record)
-
-    for _ in range(psa_mod.PSA_RATE_LIMIT_REQUESTS):
+    monkeypatch.setattr(asyncio, "sleep", _watch)
+    for _ in range(psa_mod.PSA_RATE_LIMIT_REQUESTS + 2):
         await psa_mod._psa_rate_limit()
-    assert slept == [], "the first 10 calls must not wait"
 
-    await psa_mod._psa_rate_limit()
-    assert slept, "the 11th call must wait for the window"
-    assert slept[0] <= psa_mod.PSA_RATE_LIMIT_WINDOW_SECONDS
-    psa_mod._RECENT_CALLS.clear()
+    assert locked_during_sleep, "expected at least one wait"
+    assert not any(locked_during_sleep), "the lock must be free during the sleep"
+    psa_mod._reset_rate_limiter()
 
 
 @pytest.mark.asyncio
@@ -435,3 +498,74 @@ async def test_every_psa_fetch_helper_passes_the_rate_limiter(monkeypatch):
     await psa_mod._post_json("https://example.test/c", {})
     await psa_mod._post_json_or_raise("https://example.test/d", {})
     assert hits["n"] == 4, "all four PSA helpers must go through the limiter"
+
+
+@pytest.mark.asyncio
+async def test_a_poverty_query_outage_says_upstream_error(monkeypatch):
+    """A failed POST used to come back as a plain no-data domain answer."""
+    _clear_psa_state()
+    calls = {"n": 0}
+
+    async def _fail_on_post(client, method, url, **kwargs):
+        if method == "POST":
+            calls["n"] += 1
+            raise httpx.ConnectError("openstat dropped the query")
+        if url.endswith("/DB/"):
+            return _json_response(method, url, ROOT_ENTRIES)
+        if url.endswith("/DB/1F/"):
+            return _json_response(method, url, POVERTY_SUBJECT_ENTRIES)
+        if url.endswith("/DB/1F/FY/"):
+            return _json_response(method, url, FY_TABLE_ENTRIES)
+        if url.endswith("0011F3DF010.px"):
+            return _json_response(method, url, POVERTY_META)
+        if url.endswith("0051F3DF030.px"):
+            return _json_response(method, url, SUBSISTENCE_META)
+        return httpx.Response(404, text="no", request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fail_on_post)
+
+    result = await psa_module.get_poverty_stats()
+    assert result["upstream_error"] is True
+    assert any("ConnectError" in c for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["psa_poverty"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_an_unpublished_poverty_cell_is_not_an_outage(monkeypatch):
+    """PSA writes '..' for a cell it does not publish. That is data, not a fault."""
+    _clear_psa_state()
+
+    async def _missing_cell(client, method, url, **kwargs):
+        if method == "POST":
+            return _json_response(
+                method,
+                url,
+                {
+                    "columns": [
+                        {"code": "Geolocation", "type": "d"},
+                        {"code": "Threshold/Incidence/Measures of Precision", "type": "d"},
+                        {"code": "Year", "type": "d"},
+                        {"code": "Poverty", "type": "c"},
+                    ],
+                    "data": [{"key": ["0", "1", "2"], "values": [".."]}],
+                },
+            )
+        if url.endswith("/DB/"):
+            return _json_response(method, url, ROOT_ENTRIES)
+        if url.endswith("/DB/1F/"):
+            return _json_response(method, url, POVERTY_SUBJECT_ENTRIES)
+        if url.endswith("/DB/1F/FY/"):
+            return _json_response(method, url, FY_TABLE_ENTRIES)
+        if url.endswith("0011F3DF010.px"):
+            return _json_response(method, url, POVERTY_META)
+        if url.endswith("0051F3DF030.px"):
+            return _json_response(method, url, SUBSISTENCE_META)
+        return httpx.Response(404, text="no", request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _missing_cell)
+
+    result = await psa_module.get_poverty_stats()
+    assert result["poverty_incidence_pct"] is None
+    assert not result.get("upstream_error"), "a published '..' is not an outage"
+    assert any("'..'" in c for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["psa_poverty"]) == 0
