@@ -4,6 +4,96 @@ All notable changes to `ph-civic-data-mcp` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-06
+
+Opens the whole PSA OpenSTAT catalog, repairs two production defects, and
+modernizes the toolchain. 29 -> 32 tools, 2 -> 3 prompts. No existing tool
+name, parameter name, or successful response field changed.
+
+### Fixed
+
+- **PSA poverty discovery.** PSA moved Full-Year Poverty Statistics out of
+  `DB/1E/FY`, which now returns 404. `get_poverty_stats` returned a
+  discovery-failed `caveats` entry from early July, and five consecutive
+  weekly live-drift runs failed on it. Discovery now walks the live catalog by
+  title (root -> the Poverty subject -> the Full Year folder -> the table
+  leaf), so a future renumber costs nothing. A live check on 2026-08-06
+  returns 10.9 percent national poverty incidence for 2023 from
+  `DB/1F/FY/0011F3DF010.px`.
+- **A plain import registered 1 tool of 29.** Only `main()` called
+  `_register_tools()`, so `fastmcp inspect`, `fastmcp dev inspector`, and any
+  library import saw just `get_data_freshness`. The shared `FastMCP` instance
+  moves to `_mcp.py` and `server.py` registers at import time. `inspect` now
+  reports 32 tools, 3 prompts, 2 resources. `_register_tools()` stays public
+  and idempotent, because release-smoke calls it on already published wheels.
+- **`_browse` cached an OpenSTAT error as an empty list** for 24 hours, which
+  contradicted the v0.5.0 no-error-cache contract. It now raises
+  `PSAUpstreamError`, caches successes only, and treats an empty listing as a
+  moved path. Every PSA tool catches it and returns `upstream_error` with the
+  real error text.
+- **`python -m build` never worked in a clean checkout.** `build` was not a
+  dependency. The documented flow is now `uv build` plus `uvx twine check`,
+  and CI runs both.
+- **`ruff format --check` failed** on `docs/live_demo_v050.py`.
+- **World Bank failures** now carry `upstream_error` and the real error text
+  rather than a bare exception class name.
+
+### Added
+
+- **`browse_psa_catalog(path)`** walks the OpenSTAT hierarchy one level at a
+  time. No argument lists the 27 subjects; an entry's `path` goes deeper.
+- **`describe_psa_dataset(dataset_path)`** returns a `.px` dataset's
+  dimensions, value codes, labels, time dimensions, and full-cube cell count.
+- **`query_psa_dataset(dataset_path, selections, max_rows)`** runs one bounded
+  query and returns normalized rows with codes, labels, and numeric or null
+  values.
+- **`psa_data_explorer` prompt** drives browse -> describe -> query and tells
+  an agent to read the vintage from the table's own time dimension.
+- **A rolling rate limiter** on every OpenSTAT request, matching the
+  10-per-10-seconds cap PSA publishes.
+- **MCP metadata on every tool:** a human-readable title, domain tags, and
+  annotations. All 32 are read-only and idempotent; the 31 that call an
+  upstream declare `openWorldHint`. The three new tools also declare output
+  schemas and timeouts.
+- **Server metadata:** `version` from `__version__` and `website_url`.
+- **`docs/tool-reference.md`** holds the full 32-tool reference.
+
+### Security
+
+The three catalog tools take a generic path and a generic query, so they carry
+explicit limits:
+
+- The tool rebuilds every path under the configured OpenSTAT base. It rejects
+  a scheme, a host, a query string, a fragment, `..`, an empty segment, a
+  control character, and an unexpected character before any request.
+- Every dimension needs an explicit list of value codes. PXWeb expands an
+  unnamed dimension to all of its values, and PSA answers the resulting
+  full-cube request with an HTTP 403 from its WAF.
+- The tool refuses `"all"` and `"*"` for the same reason.
+- The tool computes the cell product before the POST, and caps it at 1000.
+- The tool clamps `max_rows` to 1..5000.
+- A caller mistake returns `validation_error: true`, distinct from
+  `upstream_error: true`. Neither is cached.
+
+### Changed
+
+- FastMCP 3.2.4 -> 3.4.6, inside the existing `>=3.0.0,<4.0.0` pin. No other
+  dependency floor moved.
+- Python 3.13 and 3.14 gain classifiers and CI legs. The minimum stays 3.11.
+- GitHub Actions pins move off Node20-era versions: `checkout` v4 -> v7,
+  `setup-python` v5 -> v7, `setup-uv` v3 -> v9.
+- CI runs four Python versions with `uv sync --locked`, adds a build job with
+  `uv lock --check`, `uv build`, `twine check`, and a wheel-contents check,
+  and asserts a bare import exposes 32 tools, 3 prompts, and 2 resources.
+- release-smoke asserts the same on the published wheel, runs a real stdio
+  round trip, and checks the catalog path guards.
+- README is now a landing page. The tool table lives in
+  `docs/tool-reference.md`, and per-version essays live here.
+- `docs/SUBMISSIONS.md` rewritten against a live directory inventory; it
+  described 12 tools.
+- The `test_world_bank_raw_code` live test skips on an upstream outage rather
+  than failing on one. It still asserts shape when data arrives.
+
 ## [0.5.0] — 2026-06-11
 
 Reliability + agent-UX pass driven by a full 8-dimension product audit of the
