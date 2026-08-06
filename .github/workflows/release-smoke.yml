@@ -133,11 +133,16 @@ jobs:
           python - <<'PY'
           import asyncio
           from fastmcp import Client
+          from fastmcp.client.transports import StdioTransport
 
+          # A bare command name does not infer a transport; name it explicitly.
           async def main():
-              async with Client("ph-civic-data-mcp") as client:
+              transport = StdioTransport(command="ph-civic-data-mcp", args=[])
+              async with Client(transport) as client:
                   tools = await client.list_tools()
                   assert len(tools) == 32, f"stdio surface has {len(tools)} tools"
+                  prompts = await client.list_prompts()
+                  assert len(prompts) == 3, f"stdio surface has {len(prompts)} prompts"
                   result = await client.call_tool("get_data_freshness", {})
                   print("stdio OK:", result.structured_content["server_version"],
                         result.structured_content["tool_count"], "tools")

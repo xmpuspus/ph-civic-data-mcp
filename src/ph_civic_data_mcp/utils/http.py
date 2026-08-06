@@ -52,6 +52,7 @@ def _retry_delay(response: httpx.Response, attempt: int) -> float:
             pass
     return delay
 
+
 CLIENT = httpx.AsyncClient(
     timeout=httpx.Timeout(30.0, connect=10.0),
     headers={

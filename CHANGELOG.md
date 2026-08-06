@@ -75,6 +75,14 @@ explicit limits:
 - A caller mistake returns `validation_error: true`, distinct from
   `upstream_error: true`. Neither is cached.
 
+`pip-audit` reported 14 known vulnerabilities across 9 transitive packages on
+the v0.5.0 lockfile. The lockfile now resolves clean: `click` 8.3.2 -> 8.4.2,
+`cryptography` 46.0.7 -> 50.0.0, `idna` 3.11 -> 3.18, `pyjwt` 2.12.1 -> 2.13.0,
+`python-multipart` 0.0.26 -> 0.0.32, `soupsieve` 2.8.3 -> 2.9.1, `certifi`
+2026.2.25 -> 2026.7.22, `joserfc` 1.6.4 -> 1.7.4, `mcp` 1.27.0 -> 1.29.0, and
+`pydantic-settings` 2.13.1 -> 2.14.2. No direct dependency floor moved, and the
+suite passes on Python 3.11 through 3.14 after the bump.
+
 ### Changed
 
 - FastMCP 3.2.4 -> 3.4.6, inside the existing `>=3.0.0,<4.0.0` pin. No other
