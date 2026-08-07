@@ -1,7 +1,8 @@
 # Directory listings
 
 Where `ph-civic-data-mcp` is listed, how each listing updates, and what a
-release still needs a human to click. Inventory taken live on 2026-08-06.
+release still needs a human to click. Inventory taken live on 2026-08-06, then
+updated the same day after the v0.6.0 release shipped.
 
 Identifiers, so every form gets the same values:
 
@@ -53,19 +54,23 @@ accountability
 
 ## Where it is listed today
 
-| Destination | Listed | How it updates | Human action per release |
+State after the v0.6.0 release on 2026-08-06.
+
+| Destination | v0.6.0 status | How it updates | What is left |
 |---|---|---|---|
-| [PyPI](https://pypi.org/project/ph-civic-data-mcp/) | Yes | `twine upload` | None, the release runs it |
-| [MCP Registry](https://registry.modelcontextprotocol.io) | Yes | `mcp-publisher publish server.json` | Only if the login token expired |
-| [Glama](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp) | Yes | Auto-crawls GitHub and PyPI | Optional: claim the server, and click rebuild to re-introspect the tool count |
-| [PulseMCP](https://www.pulsemcp.com/servers/xmpuspus-ph-civic-data) | Yes | Tracks the registry record | None |
-| [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers) | Yes, stale | Pull request | Push the new copy to the open PR rather than opening a duplicate |
-| [TensorBlock/awesome-mcp-servers](https://github.com/TensorBlock/awesome-mcp-servers) | Yes | Pull request to `docs/science--research.md`, or an issue form | Update the tool count. Its metadata also carries `auth.type: api-key`, which is wrong; this server needs no key |
-| [Smithery](https://smithery.ai) | No | Connect the repo from a logged-in dashboard | New submission, needs a login |
-| [MCP.so](https://mcp.so/submit) | No | Web form | New submission |
-| [mcpservers.org](https://mcpservers.org/submit) | No | Web form | New submission |
-| [LobeHub](https://lobehub.com/mcp/xmpuspus-ph-civic-data-mcp) | Yes, showing 0.1.2 | Unknown, the page is behind bot protection | Needs a real browser to find the update path |
-| [Vibehackers](https://vibehackers.io/mcp/ph-civic-data-mcp) | Yes, tool count stale | "Submit Project" link | Needs a real browser |
+| [PyPI](https://pypi.org/project/ph-civic-data-mcp/) | active | `twine upload` | Nothing |
+| [GitHub Release](https://github.com/xmpuspus/ph-civic-data-mcp/releases/tag/v0.6.0) | active | `gh release create` on the merge SHA | Nothing |
+| Repository description and topics | active | `gh repo edit` | Nothing |
+| [MCP Registry](https://registry.modelcontextprotocol.io) | pending a login | `mcp-publisher publish server.json` | The token expired. Run `mcp-publisher login github`, then publish from the repository root |
+| [Glama](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp) | auto-indexed, unverified | Auto-crawls GitHub and PyPI | Check the page shows 0.6.0 and 32 tools. Claiming the server is a separate one-time step |
+| [PulseMCP](https://www.pulsemcp.com/servers/xmpuspus-ph-civic-data) | auto-indexed, unverified | Tracks the registry record | Waits on the registry |
+| [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers/pull/6824) | submitted, pending review | Pull request | Their merge |
+| [TensorBlock/awesome-mcp-servers](https://github.com/TensorBlock/awesome-mcp-servers/pull/1597) | submitted, pending review | Pull request | Their merge. The same PR corrects `auth.type` from `api-key` to `none` |
+| [Smithery](https://smithery.ai) | not listed | Connect the repository from a logged-in dashboard | New submission, needs a login |
+| [MCP.so](https://mcp.so/submit) | not listed | Web form | New submission, JS form |
+| [mcpservers.org](https://mcpservers.org/submit) | not listed | Web form | New submission, JS form |
+| [LobeHub](https://lobehub.com/mcp/xmpuspus-ph-civic-data-mcp) | listed, showing 0.1.2 | Unknown, the page sits behind bot protection | Needs a real browser to find the update path |
+| [Vibehackers](https://vibehackers.io/mcp/ph-civic-data-mcp) | listed, tool count stale | "Submit Project" link | Needs a real browser |
 
 Two lists closed a submission without a review comment:
 `brandonhimpfen/awesome-civic-tech` (PR 7) and
