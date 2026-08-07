@@ -61,9 +61,9 @@ State after the v0.6.0 release on 2026-08-06.
 | [PyPI](https://pypi.org/project/ph-civic-data-mcp/) | active | `twine upload` | Nothing |
 | [GitHub Release](https://github.com/xmpuspus/ph-civic-data-mcp/releases/tag/v0.6.0) | active | `gh release create` on the merge SHA | Nothing |
 | Repository description and topics | active | `gh repo edit` | Nothing |
-| [MCP Registry](https://registry.modelcontextprotocol.io) | pending a login | `mcp-publisher publish server.json` | The token expired. Run `mcp-publisher login github`, then publish from the repository root |
+| [MCP Registry](https://registry.modelcontextprotocol.io) | active | `mcp-publisher publish server.json` | Nothing. The JWT expires between releases; run `mcp-publisher login github` on a 401 |
 | [Glama](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp) | auto-indexed, unverified | Auto-crawls GitHub and PyPI | Check the page shows 0.6.0 and 32 tools. Claiming the server is a separate one-time step |
-| [PulseMCP](https://www.pulsemcp.com/servers/xmpuspus-ph-civic-data) | auto-indexed, unverified | Tracks the registry record | Waits on the registry |
+| [PulseMCP](https://www.pulsemcp.com/servers/xmpuspus-ph-civic-data) | auto-indexed, unverified | Tracks the registry record | Check the page shows 0.6.0 once its crawler catches up |
 | [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers/pull/6824) | submitted, pending review | Pull request | Their merge |
 | [TensorBlock/awesome-mcp-servers](https://github.com/TensorBlock/awesome-mcp-servers/pull/1597) | submitted, pending review | Pull request | Their merge. The same PR corrects `auth.type` from `api-key` to `none` |
 | [Smithery](https://smithery.ai) | not listed | Connect the repository from a logged-in dashboard | New submission, needs a login |
