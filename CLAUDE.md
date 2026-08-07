@@ -57,6 +57,37 @@ that never happened.
 **Every analytics response carries the disclaimer** and defensible language.
 Never "fraud", "guilty", or a direct accusation.
 
+**Never fall back to a default when a parse fails.** Return an envelope. Two
+real ones: an unreadable population cell became `population = 0` and cached for
+24 hours, and an unreadable year label became a hardcoded 2023. Both published
+a figure nobody measured. Use `_first_cell` and `_year_from_label`.
+
+**Never index a PXWeb `values` field without a type check.** PXWeb sends a
+list. When it sent the string `"10.9"`, `values[0]` handed back `"1"` and that
+went out as a statistic. Same for `variables`, `valueTexts`, and a row that is
+not a dict. Coerce every published code and label with `str()`; a numeric
+`code` raised AttributeError on `.lower()` and killed the whole tool.
+
+**Match a place name on token boundaries, never on a bare substring.** The
+region code `"I"` matched `"philippines"`, so `get_poverty_stats(region="I")`
+returned the national 10.9 percent labelled as Region I. A later fix that fell
+back to a raw substring let `"region i"` match `"region ii"`. Use
+`_token_match`, and live-probe the real 108-entry geolocation list after any
+change.
+
+**Validate a caller-supplied string before it reaches a URL.**
+`get_world_bank_indicator` appended its argument to the Philippines endpoint,
+and httpx normalizes a path, so
+`"../../../country/USA/indicator/SP.POP.TOTL"` returned United States
+population under this server's hardcoded "Philippines" label. Every
+caller-supplied path or code needs a shape check first.
+
+**Single-flight any cache-check-then-await-fetch.** Twenty concurrent cold
+calls for one table queued twenty identical GETs, and the later ones blew their
+own timeout while the first result sat unused. See `psa._browse_lock` and
+`psa_catalog._meta_lock`. Both registries are bounded, and eviction spares a
+lock somebody holds.
+
 ## Registration and module layout
 
 `src/ph_civic_data_mcp/_mcp.py` holds the single shared `FastMCP` instance.
@@ -150,6 +181,12 @@ Live-checked 2026-08-06. Do not re-learn these.
   `_skip_if_upstream_down` shape in `tests/test_v060_live.py`. Never weaken an
   assertion to turn a red green; fix the drift or classify the outage.
 - **Read the tests before editing tested code.**
+- **A test that drives a timer runs on a fake clock.** The first rate-limiter
+  test monkeypatched `asyncio.sleep` to a no-op that never advanced anything,
+  so the limiter busy-looped for 10 seconds of real CPU while asserting the
+  wrong thing. See `_fake_clock` in `tests/test_v060_fixes.py`.
+- **A ceiling nobody exercises is not tested.** `MAX_ROWS_CEILING` is 5000 and
+  the fixture had 2 rows, so the truncation assertion passed for free.
 
 ## Version surfaces
 
@@ -175,6 +212,33 @@ version behind, which hid the flagship tool from agents.
 Every tool carries a `title`, `tags`, and `annotations`. All are read-only and
 idempotent. Everything that calls an upstream declares `openWorldHint: true`;
 `get_data_freshness` is the only one with `false`.
+
+## CI and packaging landmines
+
+- **Check that every action ref exists before you push a workflow.**
+  `gh api repos/<owner>/<repo>/git/ref/tags/<ref>`. `astral-sh/setup-uv`
+  stopped publishing floating major tags at v8, so `@v9` is a 404 and every job
+  fails at the install step. Pin `@v9.0.0`. `checkout@v7`, `setup-python@v7`
+  and `upload-artifact@v7` do resolve.
+- **Never interpolate `${{ }}` into a `run:` body.** GitHub substitutes it into
+  the shell source before bash runs, so a validation check below it cannot
+  help; a crafted `workflow_dispatch` input executes as a command. Pass the
+  value through `env:` and read the variable.
+- **`uv sync` reads `.python-version` unless you pass `--python`.** The
+  live-drift job installed 3.12 and then built its environment on 3.11, so its
+  own name lied about what it exercised.
+- **`.mcpbignore` carries the secret patterns and excludes `docs/*.gif`.** It
+  claimed to mirror `.gitignore` and carried none of them, so an untracked
+  `.env` or demo recording in a working tree would land in a published bundle.
+  Excluding the GIFs also took the bundle from 5.0 MB to 148 KB.
+- **Run `pip-audit` every release.** A two-month-old lockfile carried 14 known
+  vulnerabilities across 9 transitive packages. Three rounds of
+  `uv lock --upgrade-package` cleared it.
+- **`Client("ph-civic-data-mcp")` does not infer a transport.** FastMCP raises
+  `ValueError`. Build `StdioTransport(command=..., args=[])` explicitly.
+- **PyPI lags its own upload.** `twine` prints the release URL, and the JSON
+  API and the pip index need about a minute more. Poll until the version
+  appears rather than calling the upload failed.
 
 ## Release pipeline
 
