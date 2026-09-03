@@ -19,7 +19,11 @@ from bs4 import BeautifulSoup
 from ph_civic_data_mcp.models.weather import DailyForecast, Typhoon, WeatherForecast
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.envelope import failure_envelope, failure_result
+from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_INDETERMINATE,
+    failure_envelope,
+    failure_result,
+)
 from ph_civic_data_mcp.utils.geo import city_to_coords, resolve_to_coords
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
@@ -357,7 +361,10 @@ async def get_active_typhoons() -> list[dict] | dict:
         When the PAGASA bulletin page is unreachable, this tool returns
         data_status "unavailable", upstream_error: true, results: [], and
         the real error in caveats. That shape never matches a genuine "no
-        active typhoons" answer, which is a bare empty list.
+        active typhoons" answer, which is a bare empty list. When the page
+        loads but neither the "no active cyclone" marker nor a cyclone name
+        matches, this tool returns data_status "indeterminate" instead of
+        guessing at "no active typhoons".
 
     Returns: list of typhoons, each with local_name, international_name,
     category, max_winds_kph, within_par, signal_numbers, bulletin_number,
@@ -404,8 +411,18 @@ async def get_active_typhoons() -> list[dict] | dict:
             local_names.append(name)
 
     if not local_names:
-        cache[key] = []
-        return []
+        # Neither the "No Active Tropical Cyclone" marker nor a cyclone name
+        # matched. A wording or markup change would look identical to this,
+        # so caching [] here would read as "no typhoon" for the cache TTL.
+        return failure_result(
+            "PAGASA",
+            PAGASA_TC_BULLETIN_URL,
+            "PAGASA tropical cyclone bulletin format was not recognized: "
+            "neither the 'no active cyclone' marker nor a cyclone name matched.",
+            data_status=DATA_STATUS_INDETERMINATE,
+            license=PAGASA_LICENSE,
+            results=[],
+        )
 
     seen = set()
     unique_names: list[str] = []

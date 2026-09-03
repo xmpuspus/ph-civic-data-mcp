@@ -261,6 +261,47 @@ async def test_poverty_unknown_region_keeps_the_headline_key_and_is_invalid_requ
     assert any("Wakanda" in c for c in result["caveats"])
 
 
+@pytest.mark.asyncio
+async def test_poverty_no_matching_incidence_measure_is_indeterminate_not_a_guess(monkeypatch):
+    """Falling back to measure_values[0] once published a standard error, or a
+    population rate, as poverty_incidence_pct. No match must not guess."""
+    meta = {
+        "variables": [
+            {
+                "code": "Geolocation",
+                "text": "Geolocation",
+                "values": ["0"],
+                "valueTexts": ["Philippines"],
+            },
+            {
+                "code": "Incidence",
+                "text": "Incidence",
+                "values": ["0", "1"],
+                "valueTexts": ["Standard Error", "Poverty Incidence among Population"],
+            },
+            {"code": "Year", "text": "Year", "values": ["0"], "valueTexts": ["2023"]},
+        ]
+    }
+
+    async def _fake_discover():
+        return "https://example.test/poverty.px", meta
+
+    async def _fake_subsistence():
+        return "https://example.test/subsistence.px", meta
+
+    monkeypatch.setattr(psa_module, "_discover_poverty_table", _fake_discover)
+    monkeypatch.setattr(psa_module, "_discover_subsistence_table", _fake_subsistence)
+
+    result = await psa_module.get_poverty_stats()
+
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert result["poverty_incidence_pct"] is None
+    joined = " ".join(result["caveats"])
+    assert "Standard Error" in joined
+    assert "Poverty Incidence among Population" in joined
+
+
 HEALTH_META = {
     "title": "Maternal Mortality Ratio",
     "variables": [

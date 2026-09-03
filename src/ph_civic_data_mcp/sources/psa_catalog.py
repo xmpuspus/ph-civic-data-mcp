@@ -951,6 +951,16 @@ async def query_psa_dataset(
             f"{misaligned} row(s) carried a key count that does not match the "
             f"{len(columns)} dimension columns; those rows are partially mapped."
         )
+    if 0 < total_rows < cells:
+        # PXWeb answers every requested cell, writing ".." for one it does not
+        # publish. Fewer rows than cells means a partial or degenerate reply,
+        # not a genuine full answer.
+        out["data_status"] = DATA_STATUS_INDETERMINATE
+        out["upstream_error"] = True
+        caveats.append(
+            f"PSA returned {total_rows} row(s) for a {cells}-cell selection. "
+            "That is fewer rows than requested and may be a partial reply."
+        )
     out["caveats"] = caveats
     return out
 

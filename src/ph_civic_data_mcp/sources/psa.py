@@ -1103,11 +1103,26 @@ async def get_poverty_stats(region: str | None = None) -> dict:
     if not measure_values:
         # Indexing [0] here raised IndexError and killed the whole call.
         return _err("PSA poverty table declares no Incidence dimension; its schema changed.")
-    incidence_val = measure_values[0]
+    incidence_val = None
     for val, txt in zip(measure_values, measure_texts):
         if "poverty incidence" in txt.lower() and "famil" in txt.lower():
             incidence_val = val
             break
+    if incidence_val is None:
+        # Falling back to measure_values[0] here once published a standard
+        # error or a population rate as poverty_incidence_pct. No match
+        # means the table schema changed; never guess which measure to use.
+        offered = ", ".join(repr(t) for t in measure_texts)
+        return failure_result(
+            "PSA",
+            table_url,
+            "PSA poverty table offers no 'poverty incidence among families' "
+            f"measure. Measures found: {offered}.",
+            data_status=DATA_STATUS_INDETERMINATE,
+            license=PSA_LICENSE,
+            region=geo_text,
+            poverty_incidence_pct=None,
+        )
 
     year_code, year_values, year_texts = _variable_values(meta, "Year")
     year_val = year_values[-1] if year_values else "0"
