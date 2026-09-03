@@ -284,10 +284,11 @@ def _one_lock(code: str) -> asyncio.Lock:
 async def _fetch_one(code: str) -> dict[str, Any] | None:
     """Try each level endpoint to retrieve one PSGC record by code.
 
-    Raises PSGCFetchError only when every endpoint failed on a transport
-    error and none answered cleanly (a 200 or a 404). A clean "not found at
-    any level" still returns None. A malformed code returns None straight
-    away; no endpoint is ever called with it.
+    Raises PSGCFetchError when an endpoint fails on a transport error or
+    answers with a status other than 200 or 404, and no endpoint returns a
+    clean 200 record. A 404 from every endpoint still returns None: that is
+    a genuine "not found at any level". A malformed code returns None
+    straight away; no endpoint is ever called with it.
     """
     if not _valid_psgc_code(code):
         return None
@@ -317,6 +318,13 @@ async def _fetch_one(code: str) -> dict[str, Any] | None:
                     if isinstance(payload, dict) and payload.get("code"):
                         cache[key] = payload
                         return payload
+                elif response.status_code != 404:
+                    # A 429, 401, 403 or 5xx is an outage, not a verdict that
+                    # the code is missing at this level. Falling through here
+                    # used to cache a false "not found" for 24 hours.
+                    had_errors = True
+                    last_exc = RuntimeError(f"HTTP {response.status_code}")
+                    continue
             except Exception as exc:
                 log_stderr(f"PSGC code fetch error ({endpoint}/{code}): {exc}")
                 had_errors = True
@@ -333,8 +341,9 @@ async def _fetch_one(code: str) -> dict[str, Any] | None:
 async def _fetch_barangay_by_code(code: str) -> dict[str, Any] | None:
     """Barangay lookup endpoint exists separately.
 
-    Raises PSGCFetchError on a transport failure. Returns None only for a
-    clean non-200 response, which means the code is not a barangay. A
+    Raises PSGCFetchError on a transport failure, and also on a status other
+    than 200 or 404, since that means the mirror could not answer. Returns
+    None only for a clean 404, which means the code is not a barangay. A
     malformed code returns None straight away, with no request sent.
     """
     if not _valid_psgc_code(code):
@@ -347,6 +356,12 @@ async def _fetch_barangay_by_code(code: str) -> dict[str, Any] | None:
         payload = response.json()
         if isinstance(payload, dict) and payload.get("code"):
             return payload
+    elif response.status_code != 404:
+        # A 429, 401, 403 or 5xx means the mirror could not answer, not that
+        # this code is not a barangay. Must raise, never fall through to None.
+        raise PSGCFetchError(
+            f"PSGC mirror returned HTTP {response.status_code} for barangay '{code}'"
+        )
     return None
 
 
