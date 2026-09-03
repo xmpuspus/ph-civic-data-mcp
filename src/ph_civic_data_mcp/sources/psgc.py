@@ -158,6 +158,13 @@ async def _record_to_psgc(item: dict[str, Any], level_hint: str | None = None) -
     )
     region_code = item.get("regionCode")
     level = _classify_level(item, level_hint)
+    # The cities-municipalities endpoint hands every record the hint
+    # "city-municipality", which the PSGCRecord level set does not carry.
+    # The old fallback mapped every unknown level to "city", so a plain
+    # municipality such as Adams, Ilocos Norte read as a city. Split it on
+    # the mirror's own isCity flag instead.
+    if level == "city-municipality":
+        level = "city" if _is_city_record(item) else "municipality"
     # A region record has no parent region to name; skip the extra fetch.
     region_name = None if level == "region" else await _region_name_for_code(region_code)
     island_group = item.get("islandGroupCode")

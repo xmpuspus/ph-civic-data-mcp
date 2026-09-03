@@ -56,6 +56,34 @@ async def test_a_real_zero_rainfall_reading_survives_as_zero(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_real_zero_temperature_reading_survives_as_zero(monkeypatch):
+    """Same falsy-zero bug as rainfall: `min_temp or tmin` dropped a real 0."""
+    payload = {
+        "days": [
+            {
+                "date": "2026-08-13",
+                "rainfall": 1.0,
+                "min_temp": 0,
+                "tmin": 7,
+                "max_temp": 0,
+                "tmax": 15,
+            }
+        ]
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        return _json_response(method, url, payload)
+
+    monkeypatch.setattr(pagasa_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_module._pagasa_api_forecast("Mount Pulag", 1, TOKEN)
+    assert result is not None
+    day = result["days"][0]
+    assert day["temp_min_c"] == 0, "a real 0 degree low must not become 7"
+    assert day["temp_max_c"] == 0, "a real 0 degree high must not become 15"
+
+
+@pytest.mark.asyncio
 async def test_a_missing_rainfall_key_falls_back_to_precip(monkeypatch):
     payload = {"days": [{"date": "2026-08-13", "precip": 9.0, "min_temp": 24, "max_temp": 31}]}
 

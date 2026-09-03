@@ -55,6 +55,22 @@ CITIES_PAYLOAD = [
         "islandGroupCode": "luzon",
         "psgc10DigitCode": "1339000000",
     },
+    # Shaped like the live mirror: isCity/isMunicipality booleans, no `type`.
+    # Adams is a real municipality in Ilocos Norte, the first record the live
+    # cities-municipalities endpoint returns.
+    {
+        "code": "012801000",
+        "name": "Adams",
+        "oldName": "",
+        "isCapital": False,
+        "isCity": False,
+        "isMunicipality": True,
+        "provinceCode": "012800000",
+        "districtCode": False,
+        "regionCode": "010000000",
+        "islandGroupCode": "luzon",
+        "psgc10DigitCode": "0102801000",
+    },
     {
         "code": "072217000",
         "name": "Cebu City",
@@ -138,6 +154,24 @@ async def test_resolve_ph_location_fills_region_name_from_region_code():
     result = await psgc_module.resolve_ph_location("Cebu City")
     assert result["region_code"] == "070000000"
     assert result["region_name"] == "Central Visayas"
+
+
+@pytest.mark.asyncio
+async def test_resolve_ph_location_labels_a_plain_municipality_as_municipality():
+    """v0.7.0: the cities-municipalities hint fell through `_record_to_psgc`'s
+    level fallback and every municipality read as `level: "city"`. The live
+    mirror's isMunicipality flag now splits the two."""
+    result = await psgc_module.resolve_ph_location("Adams")
+    assert result["psgc_code"] == "012801000"
+    assert result["level"] == "municipality"
+
+
+@pytest.mark.asyncio
+async def test_list_admin_units_labels_cities_and_municipalities_apart():
+    result = await psgc_module.list_admin_units(level="city-municipality")
+    by_name = {r["name"]: r["level"] for r in result}
+    assert by_name["City of Manila"] == "city"
+    assert by_name["Adams"] == "municipality"
 
 
 @pytest.mark.asyncio

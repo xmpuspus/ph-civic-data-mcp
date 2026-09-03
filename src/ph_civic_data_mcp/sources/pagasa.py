@@ -213,11 +213,19 @@ async def _pagasa_api_forecast(location: str, days: int, token: str) -> dict | N
         rainfall = entry.get("rainfall")
         if rainfall is None:
             rainfall = entry.get("precip")
+        # Same falsy-zero bug for temperature: a real 0 degree reading (rare
+        # in the lowlands, real on Mount Pulag) fell through to the fallback.
+        temp_min = entry.get("min_temp")
+        if temp_min is None:
+            temp_min = entry.get("tmin")
+        temp_max = entry.get("max_temp")
+        if temp_max is None:
+            temp_max = entry.get("tmax")
         daily_forecasts.append(
             DailyForecast(
                 date=d,
-                temp_min_c=entry.get("min_temp") or entry.get("tmin"),
-                temp_max_c=entry.get("max_temp") or entry.get("tmax"),
+                temp_min_c=temp_min,
+                temp_max_c=temp_max,
                 rainfall_mm=rainfall,
                 wind_speed_kph=entry.get("wind_speed"),
                 wind_direction=entry.get("wind_direction"),
