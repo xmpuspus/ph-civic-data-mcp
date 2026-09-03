@@ -166,10 +166,38 @@ async def get_area_profile(location: str) -> dict:
         "weather": asyncio.create_task(get_weather_forecast(location, days=3)),
         "labor": asyncio.create_task(get_labor_stats()),
     }
-    if region_name:
+
+    # A resolved city or province must report its own numbers, not the
+    # containing region's total. Before this fix, Tacloban, a city, showed
+    # Region VIII's multi-million total. Population now uses the PSGC code
+    # directly (v0.6.1 added that parameter to get_population_stats). Poverty
+    # has no psgc_code parameter, so it falls back to the containing
+    # province, the most specific level its PXWeb table carries. A
+    # region-level query, or a match with no province node in the chain,
+    # keeps the region-name path for both.
+    place_more_specific_than_region = matched and (resolved.get("level") or "") not in (
+        "",
+        "region",
+    )
+    if place_more_specific_than_region and resolved.get("psgc_code"):
+        tasks["population"] = asyncio.create_task(
+            get_population_stats(psgc_code=resolved["psgc_code"])
+        )
+    elif region_name:
         tasks["population"] = asyncio.create_task(get_population_stats(region=region_name))
-        tasks["poverty"] = asyncio.create_task(get_poverty_stats(region=region_name))
+
+    poverty_area = (province_name if place_more_specific_than_region else None) or region_name
+    if poverty_area:
+        tasks["poverty"] = asyncio.create_task(get_poverty_stats(region=poverty_area))
+
+    # Regional CPI stays on region_name. PSA's public contract for
+    # get_inflation_stats is region-level: "area: Region or Philippines". A
+    # few designated price-monitoring cities, such as City of Tacloban,
+    # appear in the underlying table too. Matching those select cities would
+    # be inconsistent, not a general fix.
+    if region_name:
         tasks["inflation"] = asyncio.create_task(get_inflation_stats(area=region_name))
+
     infra_filter = province_name or (locality_name if matched else None)
     tasks["infra"] = asyncio.create_task(
         search_infra_projects(province=infra_filter, region=region_name, limit=100)
