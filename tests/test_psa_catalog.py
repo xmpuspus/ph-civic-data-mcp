@@ -771,6 +771,39 @@ async def test_max_rows_ceiling_is_actually_enforced(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_partial_row_count_is_indeterminate_not_a_quiet_success(monkeypatch):
+    """A 4-cell selection that returns 1 row must not report plain success."""
+    four_cell_meta = {
+        "title": "Four cells",
+        "variables": [
+            {
+                "code": "Year",
+                "text": "Year",
+                "values": ["0", "1", "2", "3"],
+                "valueTexts": ["2020", "2021", "2022", "2023"],
+            }
+        ],
+    }
+    one_row = {
+        "columns": [{"code": "Year", "type": "d"}, {"code": "V", "type": "c"}],
+        "data": [{"key": ["0"], "values": ["1.0"]}],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, one_row)
+        return _resp(method, url, four_cell_meta)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset("1F/FY/four.px", {"Year": ["0", "1", "2", "3"]})
+    assert out["data_status"] == DATA_STATUS_INDETERMINATE
+    assert out["upstream_error"] is True
+    assert out["row_count"] == 1
+    assert out["requested_cells"] == 4
+    assert any("1 row(s) for a 4-cell selection" in c for c in out["caveats"]), out["caveats"]
+
+
+@pytest.mark.asyncio
 async def test_a_response_with_no_data_array_is_an_upstream_error(monkeypatch):
     """A 200 with a malformed body is drift, not an empty result set."""
 

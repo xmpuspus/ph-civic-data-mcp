@@ -1,4 +1,5 @@
-"""Offline fixtures for the PAGASA TenDay API path (_pagasa_api_forecast).
+"""Offline fixtures for the PAGASA TenDay API path (_pagasa_api_forecast) and
+the get_active_typhoons bulletin parser.
 
 tests/test_v031_fixes.py and tests/test_v050_fixes.py already mock
 get_weather_alerts and get_active_typhoons offline; tests/test_pagasa.py is
@@ -7,7 +8,8 @@ coverage before v0.7.0.
 
 Covers: a real 0mm rainfall reading surviving as 0 (not falling through to
 'precip'), a bare list of non-dict items not crashing the parser, a real
-success, an upstream failure with fallback, and a schema-drift 'days' field.
+success, an upstream failure with fallback, a schema-drift 'days' field, and
+an unrecognized bulletin page that must not be read as "no active typhoons".
 """
 
 from __future__ import annotations
@@ -179,6 +181,48 @@ async def test_a_tenday_outage_falls_back_to_open_meteo(monkeypatch):
     assert result["data_source"] == "open_meteo"
     assert not result.get("upstream_error")
     assert len(result["days"]) == 1
+
+
+def _html_response(method: str, url: str, text: str) -> httpx.Response:
+    return httpx.Response(200, text=text, request=httpx.Request(method, url))
+
+
+@pytest.mark.asyncio
+async def test_an_unrecognized_bulletin_page_is_indeterminate_not_cached_empty(monkeypatch):
+    """Neither the 'no active cyclone' marker nor a cyclone name matches, so
+    this must not be read as, and cached as, 'no active typhoons'."""
+    CACHES["pagasa_typhoons"].clear()
+
+    async def _fake(client, method, url, **kwargs):
+        return _html_response(
+            method, url, "<html><body>Typhoon bulletin format changed</body></html>"
+        )
+
+    monkeypatch.setattr(pagasa_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_module.get_active_typhoons()
+    assert isinstance(result, dict)
+    assert result["upstream_error"] is True
+    assert result["data_status"] == "indeterminate"
+    assert any("not recognized" in c for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["pagasa_typhoons"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_the_explicit_no_active_marker_still_returns_and_caches_empty(monkeypatch):
+    """The confirmed 'no active cyclone' state must keep returning a bare []."""
+    CACHES["pagasa_typhoons"].clear()
+
+    async def _fake(client, method, url, **kwargs):
+        return _html_response(
+            method, url, "<html><body>No Active Tropical Cyclone in the PAR</body></html>"
+        )
+
+    monkeypatch.setattr(pagasa_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_module.get_active_typhoons()
+    assert result == []
+    assert len(CACHES["pagasa_typhoons"]) == 1
 
 
 @pytest.mark.asyncio
