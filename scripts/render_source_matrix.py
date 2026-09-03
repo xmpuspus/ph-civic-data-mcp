@@ -24,6 +24,7 @@ WHAT_IT_GIVES: dict[str, str] = {
     "Area profile (auto-stitch)": "One place profile composed live from every source below",
     "NASA POWER": "Daily solar irradiance and climate at any point",
     "Open-Meteo air quality": "PM2.5, PM10, NO2, SO2, O3, CO, and AQI",
+    "Open-Meteo flood forecast": "Daily river discharge forecast (GloFAS model) for the nearest river cell",
     "NASA MODIS NDVI": "NDVI and EVI vegetation indices at any point",
     "USGS FDSN": "Philippine-region earthquakes, cross-checked against PHIVOLCS",
     "NOAA IBTrACS": "Historical tropical cyclone tracks through the Philippine AOR",

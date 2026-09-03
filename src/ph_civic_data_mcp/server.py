@@ -92,6 +92,13 @@ SOURCE_CATALOG: list[dict] = [
         "license": "Open-Meteo CC-BY 4.0",
     },
     {
+        "source": "Open-Meteo flood forecast",
+        "source_url": "https://flood-api.open-meteo.com/v1/flood",
+        "freshness": "Daily GloFAS model run",
+        "cache_ttl_seconds": 3600,
+        "license": "Open-Meteo CC-BY 4.0",
+    },
+    {
         "source": "NASA MODIS NDVI",
         "source_url": "https://modis.ornl.gov/rst/api/v1/",
         "freshness": "16-day composite, ~14-day latency",
@@ -326,6 +333,7 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import autostitch  # noqa: F401
     from ph_civic_data_mcp.sources import nasa_power  # noqa: F401
     from ph_civic_data_mcp.sources import open_meteo_aq  # noqa: F401
+    from ph_civic_data_mcp.sources import open_meteo_flood  # noqa: F401
     from ph_civic_data_mcp.sources import modis_ndvi  # noqa: F401
     from ph_civic_data_mcp.sources import usgs  # noqa: F401
     from ph_civic_data_mcp.sources import ibtracs  # noqa: F401

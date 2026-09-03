@@ -1,6 +1,6 @@
 # Tool reference
 
-All 34 tools in `ph-civic-data-mcp` 0.7.0. Every tool is read-only and
+All 35 tools in `ph-civic-data-mcp` 0.7.0. Every tool is read-only and
 idempotent, and every one that calls an upstream service declares
 `openWorldHint`.
 
@@ -373,6 +373,27 @@ Returns: peak intensity, minimum pressure, and track period per storm, from
 NOAA IBTrACS. No `year` returns the last three years.
 
 On failure: an ERDDAP outage returns `upstream_error: true`.
+
+### get_flood_forecast
+
+Daily river discharge forecast for a Philippine place, from Open-Meteo's
+GloFAS flood model.
+
+```python
+get_flood_forecast(location: str, forecast_days: int = 7, past_days: int = 0) -> dict
+```
+
+Returns: `location`, `latitude`, `longitude`, `days` (a list of `date`,
+`river_discharge_m3s`, `river_discharge_max_m3s`, `river_discharge_min_m3s`),
+`units`, `forecast_days`, `past_days`, `note` (the reading is a model value
+for the nearest river cell, not a gauge). `forecast_days` runs 1 to 30.
+`past_days` runs 0 to 30.
+
+On failure: an unresolved `location`, or a `forecast_days` or `past_days`
+outside its range, returns `data_status: "invalid_request"`. A PSGC outage
+during location lookup, or an Open-Meteo fetch failure, returns
+`data_status: "unavailable"`. A response with no readable daily dates
+returns `data_status: "indeterminate"` and is never cached.
 
 `get_earthquake_bulletin` only accepts a PHIVOLCS host. PHIVOLCS serves a
 broken certificate chain, so it is the one source behind a dedicated client

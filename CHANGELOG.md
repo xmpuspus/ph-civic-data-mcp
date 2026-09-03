@@ -4,6 +4,14 @@ All notable changes to `ph-civic-data-mcp` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `get_flood_forecast`: daily river discharge forecast from the Open-Meteo
+  Flood API (GloFAS model) for a resolved place, up to 30 days ahead and 30
+  days back, CC BY 4.0.
+
 ## [0.7.0] - 2026-09-04
 
 `v0.7.0` adds two tools, `compare_areas` and `search_psa_catalog`, and raises
