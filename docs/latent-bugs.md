@@ -207,7 +207,7 @@ rather than reporting the unexpected type.
 
 Severity: low.
 
-Fixed: the value rounds to the nearest whole person and a `caveats` entry
+Fixed. The value rounds to the nearest whole person, and a `caveats` entry
 names the non-integral cell.
 
 ## Suggested order

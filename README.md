@@ -240,7 +240,7 @@ Architecture notes: Python 3.11+, `fastmcp>=3.0.0,<4.0.0`, stdio only,
 in-memory TTL caches and no disk writes, and two HTTP clients. The second one
 exists because PHIVOLCS serves a broken certificate chain. This server never
 disables TLS checks globally or for any other host, and that client never
-follows a redirect on its own: every hop is checked against the PHIVOLCS host
+follows a redirect on its own. Every hop is checked against the PHIVOLCS host
 allowlist first.
 
 ## Related projects
