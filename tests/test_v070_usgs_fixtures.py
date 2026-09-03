@@ -306,3 +306,37 @@ async def test_a_body_with_no_features_key_returns_the_failure_envelope(monkeypa
     assert result["results"] == []
     assert any("unexpected payload shape" in c for c in result["caveats"]), result["caveats"]
     assert not CACHES["usgs_events"], "a body with no features key must never be cached"
+
+
+@pytest.mark.asyncio
+async def test_all_features_failing_to_parse_is_indeterminate_not_cached(monkeypatch):
+    """A nonempty features list where every feature fails to parse (for
+    example mag: null on all of them) must not read as a real absence of
+    earthquakes. Codex cross-model finding: the old code returned a bare []
+    here and cached it as a genuine empty result."""
+    feature = _feature("us_null_mag")
+    feature["properties"]["mag"] = None
+    _install_fake_fetch(monkeypatch, _payload([feature]))
+
+    result = await usgs_module.get_usgs_earthquakes_ph(min_magnitude=1.0, limit=10)
+
+    assert isinstance(result, dict)
+    assert result["upstream_error"] is True
+    assert result["data_status"] == "indeterminate"
+    assert result["results"] == []
+    assert not CACHES["usgs_events"], "an all-fail parse must never be cached"
+
+
+@pytest.mark.asyncio
+async def test_a_bad_magnitude_skips_that_feature_not_the_whole_query(monkeypatch):
+    """Codex cross-model finding: mag: "bad" raised ValueError out of
+    _parse_event and lost every event in the batch, not just the bad one."""
+    bad_feature = _feature("us_bad_mag")
+    bad_feature["properties"]["mag"] = "bad"
+    good_feature = _feature("us_good")
+    _install_fake_fetch(monkeypatch, _payload([bad_feature, good_feature]))
+
+    results = await usgs_module.get_usgs_earthquakes_ph(min_magnitude=1.0, limit=10)
+
+    assert len(results) == 1
+    assert results[0]["usgs_event_id"] == "us_good"

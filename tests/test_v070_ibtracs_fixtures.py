@@ -96,6 +96,26 @@ async def test_stream_upstream_failure_returns_envelope(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stream_header_units_and_one_empty_row_is_no_data_not_cached(monkeypatch):
+    """A header, a units row, and one empty data row must not read as real
+    data. Codex cross-model finding: line_count counted physical CSV lines,
+    so these three lines passed the old `< 3` check and cached a bare []."""
+    empty_row = ",,,,,,,,,,,,"
+    body = "\n".join([CSV_HEADER, CSV_UNITS, empty_row]) + "\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    monkeypatch.setattr(ibtracs_module, "CLIENT", _mock_client(handler))
+
+    result = await ibtracs_module.get_historical_typhoons_ph(year=2024, limit=10)
+
+    assert result["upstream_error"] is True
+    assert result["results"] == []
+    assert len(CACHES["ibtracs_tracks"]) == 0
+
+
+@pytest.mark.asyncio
 async def test_stream_schema_drift_missing_sid_column_is_upstream_error(monkeypatch):
     """Codex cross-model finding: a header carrying "storm_id" instead of
     "sid" parsed every row to nothing, and the old code read that as a

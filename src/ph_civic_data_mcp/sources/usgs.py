@@ -12,7 +12,11 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 from ph_civic_data_mcp.models.climate import USGSEarthquake
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.envelope import failure_envelope, failure_result
+from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_INDETERMINATE,
+    failure_envelope,
+    failure_result,
+)
 from ph_civic_data_mcp.utils.geo import haversine_km
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
@@ -77,13 +81,25 @@ def _parse_event(feature: dict) -> USGSEarthquake | None:
     if mag is None:
         return None
 
+    # A magnitude, depth, or coordinate that will not convert to a float
+    # skips this one feature, the same way a missing mag does. Codex
+    # cross-model finding: mag: "bad" used to raise ValueError out of the
+    # whole query, so one malformed feature lost every event in the batch.
+    try:
+        magnitude = float(mag)
+        depth_km = float(coords[2]) if len(coords) >= 3 and coords[2] is not None else None
+        latitude = float(coords[1])
+        longitude = float(coords[0])
+    except (TypeError, ValueError):
+        return None
+
     return USGSEarthquake(
         datetime_utc=dt,
-        magnitude=float(mag),
+        magnitude=magnitude,
         magnitude_type=props.get("magType"),
-        depth_km=float(coords[2]) if len(coords) >= 3 and coords[2] is not None else None,
-        latitude=float(coords[1]),
-        longitude=float(coords[0]),
+        depth_km=depth_km,
+        latitude=latitude,
+        longitude=longitude,
         place=props.get("place") or "Philippine region",
         usgs_event_id=feature.get("id", ""),
         felt_reports=props.get("felt"),
@@ -131,7 +147,10 @@ async def get_usgs_earthquakes_ph(
     The same happens for a start_date or end_date that is not YYYY-MM-DD. An
     unreachable USGS API, or a payload that is not a GeoJSON
     FeatureCollection, gives upstream_error true and data_status
-    "unavailable". Both return results: [] with the real error in caveats.
+    "unavailable". A nonempty features list where every feature fails to
+    parse gives upstream_error true and data_status "indeterminate", and is
+    never cached. All three return results: [] with the real error in
+    caveats.
 
     Args:
         start_date: ISO date (YYYY-MM-DD). Defaults to 30 days ago.
@@ -294,10 +313,12 @@ async def get_usgs_earthquakes_ph(
         )
     features = payload["features"]
     events: list[dict] = []
+    parsed_count = 0
     for feature in features:
         event = _parse_event(feature)
         if event is None:
             continue
+        parsed_count += 1
         data = event.model_dump(mode="json")
         if use_radius:
             distance_km = haversine_km(center_lat, center_lon, event.latitude, event.longitude)
@@ -307,6 +328,22 @@ async def get_usgs_earthquakes_ph(
         events.append(data)
         if use_radius and len(events) >= limit:
             break
+
+    # Codex cross-model finding: a nonempty features list where every
+    # feature failed to parse (for example mag: null on all of them)
+    # returned a bare [] and cached it as a real absence of earthquakes.
+    # Zero features is still a genuine empty; zero parses from a nonempty
+    # list is not, so it must never enter the cache.
+    if features and parsed_count == 0:
+        return failure_result(
+            "USGS",
+            USGS_URL,
+            f"USGS sent {len(features)} feature(s) but none parsed "
+            "(missing or malformed mag, time, or coordinates).",
+            license="Public domain (USGS)",
+            data_status=DATA_STATUS_INDETERMINATE,
+            results=[],
+        )
 
     cache[ckey] = events
     return events

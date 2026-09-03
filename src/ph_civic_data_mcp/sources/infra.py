@@ -14,6 +14,7 @@ single integration point to swap in.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import Counter, defaultdict
 from datetime import date as date_cls, datetime, timezone
@@ -264,7 +265,11 @@ def _record_id(record: object) -> str:
     agency = getattr(record, "agency", "")
     published = getattr(record, "date_published", "")
     fallback_key = f"{title}|{agency}|{published}"
-    return f"PHILGEPS-{abs(hash(fallback_key)) % 10**10}"
+    # Codex cross-model finding: Python's hash() is salted per process
+    # (PYTHONHASHSEED), so the same record got a different fallback id after
+    # every restart. sha1 is stable across processes, so the id is stable too.
+    digest = hashlib.sha1(fallback_key.encode("utf-8")).hexdigest()
+    return f"PHILGEPS-{int(digest, 16) % 10**10}"
 
 
 def _to_infra_project(record: object) -> InfraProject:

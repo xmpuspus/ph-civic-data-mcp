@@ -20,6 +20,10 @@ NDVI_BAND = "_250m_16_days_NDVI"
 EVI_BAND = "_250m_16_days_EVI"
 NDVI_SCALE = 0.0001  # MOD13Q1 scale factor
 
+# Same cap nasa_power.py uses. With no cap, a 45-year span went to both band
+# queries at once, one request each holding the full ORNL time series.
+MAX_SPAN_DAYS = 366
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -142,12 +146,15 @@ async def get_vegetation_index(
     numeric value counts as that band failing. A pixel with no composite in
     range, such as one over water, is a real success with samples []. A
     latitude or longitude out of range returns data_status "invalid_request",
-    with validation_error true and samples [].
+    with validation_error true and samples []. A start_date or end_date that
+    does not parse as YYYY-MM-DD, or a span over 366 days, also returns
+    data_status "invalid_request", checked before any fetch.
 
     Args:
         latitude: Decimal degrees, WGS84.
         longitude: Decimal degrees, WGS84.
-        start_date: ISO date (YYYY-MM-DD). Defaults to ~90 days ago.
+        start_date: ISO date (YYYY-MM-DD). Defaults to ~90 days ago. The
+                    span from start_date to end_date cannot exceed 366 days.
         end_date: ISO date (YYYY-MM-DD). Defaults to today.
     """
     if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
@@ -165,16 +172,62 @@ async def get_vegetation_index(
         )
 
     today = _now().date()
-    try:
-        sd = date_cls.fromisoformat(start_date) if start_date else today - timedelta(days=90)
-    except ValueError:
+    # Codex cross-model finding: a start_date or end_date that failed
+    # date.fromisoformat used to fall back to the default window and cache a
+    # normal-looking result for dates nobody asked for. Reject it instead,
+    # before any fetch, the way nasa_power.py does.
+    if start_date is not None:
+        try:
+            sd = date_cls.fromisoformat(start_date)
+        except ValueError:
+            return failure_result(
+                "NASA MODIS via ORNL DAAC",
+                f"{ORNL_BASE}/{PRODUCT}/subset",
+                f"start_date {start_date!r} is not a valid YYYY-MM-DD date.",
+                validation_error=True,
+                latitude=latitude,
+                longitude=longitude,
+                product=PRODUCT,
+                band="NDVI+EVI (250m, 16-day composite)",
+                samples=[],
+            )
+    else:
         sd = today - timedelta(days=90)
-    try:
-        ed = date_cls.fromisoformat(end_date) if end_date else today
-    except ValueError:
+    if end_date is not None:
+        try:
+            ed = date_cls.fromisoformat(end_date)
+        except ValueError:
+            return failure_result(
+                "NASA MODIS via ORNL DAAC",
+                f"{ORNL_BASE}/{PRODUCT}/subset",
+                f"end_date {end_date!r} is not a valid YYYY-MM-DD date.",
+                validation_error=True,
+                latitude=latitude,
+                longitude=longitude,
+                product=PRODUCT,
+                band="NDVI+EVI (250m, 16-day composite)",
+                samples=[],
+            )
+    else:
         ed = today
     if sd > ed:
         sd, ed = ed, sd
+
+    # Same 366-day cap nasa_power.py uses, checked before any band fetch.
+    span_days = (ed - sd).days
+    if span_days > MAX_SPAN_DAYS:
+        return failure_result(
+            "NASA MODIS via ORNL DAAC",
+            f"{ORNL_BASE}/{PRODUCT}/subset",
+            f"Requested span is {span_days} days. The cap is {MAX_SPAN_DAYS} days. "
+            "Narrow start_date and end_date.",
+            validation_error=True,
+            latitude=latitude,
+            longitude=longitude,
+            product=PRODUCT,
+            band="NDVI+EVI (250m, 16-day composite)",
+            samples=[],
+        )
 
     ckey = cache_key(
         {

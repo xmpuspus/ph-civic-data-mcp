@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from datetime import date
 
 import pytest
@@ -400,3 +403,37 @@ async def test_get_infra_project_fallback_id_distinguishes_same_title_by_agency(
     result_b = await infra_module.get_infra_project(id_b)
     assert result_b["matched"] is True
     assert result_b["agency"] == "Agency B"
+
+
+def test_record_id_fallback_is_stable_across_hash_seeds():
+    """The fallback id must not depend on Python's per-process hash seed.
+
+    Codex cross-model finding: hash() is salted by PYTHONHASHSEED, so the
+    same record got a different fallback id after every process restart.
+    A subprocess run with a fixed PYTHONHASHSEED must always return the
+    same id for the same record, whatever that seed is.
+    """
+    record = ProcurementRecord(
+        reference_number=None,
+        title="Road Rehabilitation",
+        agency="Agency A",
+        date_published=date(2025, 1, 10),
+    )
+    expected_id = "PHILGEPS-3144645480"
+
+    assert infra_module._record_id(record) == expected_id
+
+    script = (
+        "from datetime import date; "
+        "from ph_civic_data_mcp.models.procurement import ProcurementRecord; "
+        "from ph_civic_data_mcp.sources import infra as infra_module; "
+        "r = ProcurementRecord(reference_number=None, title='Road Rehabilitation', "
+        "agency='Agency A', date_published=date(2025, 1, 10)); "
+        "print(infra_module._record_id(r))"
+    )
+    for seed in ("0", "1"):
+        env = dict(os.environ, PYTHONHASHSEED=seed)
+        out = subprocess.run(
+            [sys.executable, "-c", script], env=env, capture_output=True, text=True, check=True
+        )
+        assert out.stdout.strip() == expected_id
