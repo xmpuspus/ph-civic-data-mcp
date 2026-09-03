@@ -96,8 +96,21 @@ async def get_usgs_earthquakes_ph(
     """Philippine-region earthquakes from USGS, cross-reference to PHIVOLCS.
 
     Returns events inside the PH bounding box (lat 4..22, lng 115..130) that
-    USGS has catalogued, including international-standard Mww/Mwc magnitudes
-    and depth solutions. Complements PHIVOLCS with global-network analysis.
+    USGS catalogs, including international-standard Mww/Mwc magnitudes and
+    depth solutions. Complements PHIVOLCS with global-network analysis. Give
+    center_lat, center_lon, and radius_km together to filter to one place,
+    and each matched event then carries a distance_km field. Give all three
+    together, or leave out all three. Examples:
+
+      get_usgs_earthquakes_ph()                              last 30 days, magnitude 4.0+
+      get_usgs_earthquakes_ph(start_date="2026-08-01", end_date="2026-08-31")
+      get_usgs_earthquakes_ph(center_lat=14.5995, center_lon=120.9842, radius_km=50)  near Manila
+
+    On failure: an invalid trio, or a radius_km at or below zero, gives
+    validation_error true and data_status "invalid_request". An unreachable
+    USGS API, or a payload that is not a GeoJSON FeatureCollection, gives
+    upstream_error true and data_status "unavailable". Both return
+    results: [] with the real error in caveats.
 
     Args:
         start_date: ISO date (YYYY-MM-DD). Defaults to 30 days ago.

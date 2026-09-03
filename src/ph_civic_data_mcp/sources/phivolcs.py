@@ -192,6 +192,21 @@ async def get_latest_earthquakes(
 ) -> list[dict] | dict:
     """Get the latest earthquake events from PHIVOLCS.
 
+    Reads the live PHIVOLCS earthquake list, the same table shown at
+    earthquake.phivolcs.dost.gov.ph. Give center_lat, center_lon, and
+    radius_km together to filter events near one place, and each matched
+    event then carries a distance_km field. Give all three together, or
+    leave out all three. Examples:
+
+      get_latest_earthquakes()                             latest events, default filters
+      get_latest_earthquakes(min_magnitude=4.0, limit=10)   strong events only
+      get_latest_earthquakes(center_lat=14.5995, center_lon=120.9842, radius_km=50)  near Manila
+
+    On failure: an invalid trio, or a radius_km at or below zero, gives
+    validation_error true and data_status "invalid_request". An unreachable
+    or unparsable PHIVOLCS list gives upstream_error true and data_status
+    "unavailable". Both return results: [] with the real error in caveats.
+
     Args:
         min_magnitude: Minimum magnitude to include (default 1.0).
         limit: Max events to return (default 20, max 100).
@@ -290,6 +305,19 @@ async def get_latest_earthquakes(
 )
 async def get_earthquake_bulletin(bulletin_url: str) -> dict:
     """Get the full bulletin for a PHIVOLCS earthquake event.
+
+    Parses the bulletin page PHIVOLCS publishes for one event: magnitude,
+    depth, location, date and time, and per-municipality intensity reports.
+    Give the bulletin_url a prior get_latest_earthquakes call returned. A
+    hand-built or off-host URL is refused before any fetch is attempted. Examples:
+
+      get_earthquake_bulletin("https://phivolcs.dost.gov.ph/index.php")  # real bulletin URL shape
+
+    On failure: an empty, malformed, or non-PHIVOLCS bulletin_url, or a 404
+    on the page itself, returns a dict with url, source, caveats, and
+    data_retrieved_at only, with no magnitude or location fields. A fetch
+    that raises an exception also sets upstream_error true. This tool has
+    no data_status field.
 
     Args:
         bulletin_url: Full URL returned by get_latest_earthquakes.bulletin_url.
@@ -489,6 +517,21 @@ async def _fetch_volcano_alert(bulletin_url: str) -> tuple[int | None, str | Non
 )
 async def get_volcano_status(volcano_name: str | None = None) -> list[dict] | dict:
     """Get current alert level for Philippine volcanoes.
+
+    Reads the WOVODAT bulletin list PHIVOLCS publishes for its monitored
+    volcanoes: Mayon, Taal, Kanlaon, Bulusan, Pinatubo, Hibok-Hibok, and
+    Parker. When one volcano's bulletin fetch fails, that entry carries
+    upstream_error true and a caveat with the real error, not a null
+    alert_level. Examples:
+
+      get_volcano_status()          all monitored volcanoes, one call
+      get_volcano_status("Mayon")   one volcano by name
+      get_volcano_status("Taal")
+
+    On failure: WOVODAT list unreachable or empty gives data_status
+    "unavailable", upstream_error true, results: [], and the real error in
+    caveats. An unmatched volcano_name gives a one-item list with
+    alert_level null and a caveat, not a failure envelope.
 
     Args:
         volcano_name: e.g. "Mayon", "Taal", "Kanlaon", "Bulusan".

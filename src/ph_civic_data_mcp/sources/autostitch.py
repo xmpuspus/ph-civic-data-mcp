@@ -104,7 +104,17 @@ async def get_area_profile(location: str) -> dict:
     labor), procurement activity, multi-hazard risk, and the short-range
     weather outlook — in a single agent turn instead of eight. Adds derived
     cross-source context (e.g. infrastructure notices per 100k residents) so
-    the caller does not have to normalize raw counts itself.
+    the caller does not have to normalize raw counts itself. Examples:
+
+      get_area_profile("Cebu City")   city-level demographics, hazard, weather
+      get_area_profile("NCR")         region-level, no province in the chain
+      get_area_profile("Tacloban")    city under a resolved province
+
+    On failure: each block (population, poverty, inflation, labor, hazard,
+    weather, infra, resolve) gets its own status in blocks. A failed sibling
+    appears there and in caveats, never as a silent null. The top-level
+    upstream_error is true only when a block is genuinely unreachable, not
+    when a sibling rejected an argument or returned a real empty answer.
 
     Args:
         location: Municipality, city, province, or region name.
