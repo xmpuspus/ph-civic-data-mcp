@@ -62,3 +62,6 @@ uv.lock.backup
 tmp/
 .claude/notepad.json
 *.mcpb
+
+# Harness-created agent worktrees nest inside a checkout. Never commit them.
+.claude/worktrees/
