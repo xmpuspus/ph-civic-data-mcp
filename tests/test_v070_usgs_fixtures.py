@@ -171,3 +171,18 @@ async def test_radius_km_result_count_is_capped_at_limit(monkeypatch):
     )
 
     assert len(results) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_non_object_json_body_returns_the_failure_envelope(monkeypatch):
+    """Codex cross-model finding: a 200 whose body is a bare list crashed on
+    `.get()` instead of returning the failure envelope."""
+    _install_fake_fetch(monkeypatch, payload=["not", "a", "feature", "collection"])
+
+    result = await usgs_module.get_usgs_earthquakes_ph()
+
+    assert isinstance(result, dict)
+    assert result["upstream_error"] is True
+    assert result["results"] == []
+    assert any("unexpected payload shape" in c for c in result["caveats"]), result["caveats"]
+    assert not CACHES["usgs_events"], "a malformed body must never be cached"

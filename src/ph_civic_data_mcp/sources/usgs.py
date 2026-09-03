@@ -199,6 +199,18 @@ async def get_usgs_earthquakes_ph(
             license="Public domain (USGS)",
         )
 
+    # Codex cross-model finding: a 200 with a non-object body (a bare list, a
+    # string) reached `.get()` outside the except block and crashed the tool
+    # instead of returning the failure envelope.
+    if not isinstance(payload, dict) or not isinstance(payload.get("features", []), list):
+        log_stderr(f"USGS returned an unexpected payload shape: {type(payload).__name__}")
+        return failure_envelope(
+            "USGS",
+            USGS_URL,
+            f"USGS returned an unexpected payload shape ({type(payload).__name__}), "
+            "not a GeoJSON FeatureCollection.",
+            license="Public domain (USGS)",
+        )
     features = payload.get("features") or []
     events: list[dict] = []
     for feature in features:
