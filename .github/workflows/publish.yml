@@ -1,0 +1,132 @@
+# Publish a tagged release to PyPI through trusted publishing (OIDC), then
+# attach build provenance and an SBOM to the GitHub Release.
+#
+# This workflow cannot run until a PyPI maintainer registers the trusted
+# publisher for this repository at https://pypi.org/manage/project/ph-civic-data-mcp/settings/publishing/
+# with workflow name `publish.yml` and environment name `pypi`. Until then,
+# the `id-token: write` exchange gets a 403 from PyPI and the job fails at
+# the upload step. Nothing else in this file needs a secret.
+#
+# Triggers on a published GitHub Release, never on a bare tag push, so the
+# release notes and the merge SHA both exist before anything reaches PyPI.
+# Every action is pinned to a full commit SHA. The tag stays as a trailing
+# comment for Dependabot, which updates both together.
+
+name: publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist and wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Check the lockfile is current
+        run: uv lock --check
+
+      - name: Build
+        run: uv build
+
+      - name: Check the built version matches the release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os, pathlib, re, sys
+          tag = os.environ["RELEASE_TAG"].lstrip("v")
+          init = pathlib.Path("src/ph_civic_data_mcp/__init__.py").read_text()
+          version = re.search(r'__version__\s*=\s*"([^"]+)"', init).group(1)
+          if version != tag:
+              sys.exit(f"tag {tag} does not match __version__ {version}")
+          print("version", version, "matches tag")
+          PY
+
+      - name: Write checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ph-civic-data-mcp/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dist
+          path: dist/
+
+      - name: Drop the checksum file, PyPI accepts only sdist and wheel
+        run: rm -f dist/SHA256SUMS.txt
+
+      - name: Upload to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          attestations: true
+          print-hash: true
+
+  provenance:
+    name: Attest provenance and attach SBOM
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dist
+          path: dist/
+
+      - name: Attest build provenance for every artifact
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+
+      - name: Generate an SPDX SBOM from the wheel
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          file: dist/ph_civic_data_mcp-*.whl
+          format: spdx-json
+          output-file: dist/ph-civic-data-mcp.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attach wheel, sdist, checksums, and SBOM to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            dist/*.whl dist/*.tar.gz dist/SHA256SUMS.txt dist/ph-civic-data-mcp.spdx.json \
+            --clobber

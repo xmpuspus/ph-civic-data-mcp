@@ -69,7 +69,7 @@ jobs:
           prompts = asyncio.run(mcp.list_prompts())
           resources = asyncio.run(mcp.list_resources())
           print("tools", len(tools), "prompts", len(prompts), "resources", len(resources))
-          assert len(tools) == 32, f"expected 32 tools on a bare import, got {len(tools)}"
+          assert len(tools) == 33, f"expected 33 tools on a bare import, got {len(tools)}"
           assert len(prompts) == 3, f"expected 3 prompts, got {len(prompts)}"
           assert len(resources) == 2, f"expected 2 resources, got {len(resources)}"
           missing = [t for t in ("browse_psa_catalog", "describe_psa_dataset", "query_psa_dataset")
