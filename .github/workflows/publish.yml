@@ -85,11 +85,15 @@ jobs:
       - name: Drop the checksum file, PyPI accepts only sdist and wheel
         run: rm -f dist/SHA256SUMS.txt
 
+      # skip-existing makes this step a no-op when the version is already on
+      # PyPI, so a release cut with twine first (the path v0.7.0 uses while the
+      # trusted publisher is not registered) does not fail here.
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           attestations: true
           print-hash: true
+          skip-existing: true
 
   provenance:
     name: Attest provenance and attach SBOM
@@ -122,9 +126,12 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
 
+      # This job never checks out the repository, so gh needs GH_REPO to know
+      # which release to attach to. Without it, gh exits "not a git repository".
       - name: Attach wheel, sdist, checksums, and SBOM to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           gh release upload "$RELEASE_TAG" \

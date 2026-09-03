@@ -255,9 +255,15 @@ release-smoke installs from PyPI on a version tag, so the order matters:
 
 1. Merge the pull request, and capture the real merge SHA.
 2. Build from that SHA in a clean worktree: `uv build`, then `twine check`.
-3. `twine upload` to PyPI, then confirm PyPI serves the version.
+3. `twine upload` to PyPI, then confirm PyPI serves the version. This step
+   stays manual until a PyPI maintainer registers the trusted publisher for
+   `publish.yml`.
 4. `gh release create vX.Y.Z` on the merge SHA. That creates the tag and
    triggers release-smoke against the now-live wheel. Attach the `.mcpb`.
+   The release event also starts `publish.yml`, which skips its PyPI upload
+   when the version already exists (`skip-existing: true`) and then attaches
+   the provenance attestation and SBOM. So the twine path and the workflow do
+   not collide.
 5. `mcp-publisher publish server.json`. The token in
    `~/.config/mcp-publisher/token.json` expires; on a 401 the user runs
    `mcp-publisher login github`.
