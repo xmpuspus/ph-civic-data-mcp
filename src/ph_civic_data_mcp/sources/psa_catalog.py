@@ -41,6 +41,7 @@ from ph_civic_data_mcp.sources.psa import (
 )
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_INDETERMINATE,
     DATA_STATUS_SUCCESS,
     DATA_STATUS_VALUES,
     failure_result,
@@ -831,6 +832,22 @@ async def query_psa_dataset(
             url,
             "PSA returned a response with no `data` array. That is a malformed "
             "reply, not an empty result.",
+            dataset_path=path,
+            rows=[],
+            row_count=0,
+        )
+
+    if cells > 0 and not payload["data"]:
+        # PXWeb writes a missing cell as ".." inside a row. It never answers a
+        # nonzero selection with zero rows, so an empty array here is a
+        # degenerate reply, not a genuine empty result. Never cache this.
+        return failure_result(
+            SOURCE_NAME,
+            url,
+            f"PSA returned zero rows for a {cells}-cell selection. PXWeb writes "
+            "a missing cell as '..' inside a row, never as zero rows.",
+            license=PSA_LICENSE,
+            data_status=DATA_STATUS_INDETERMINATE,
             dataset_path=path,
             rows=[],
             row_count=0,

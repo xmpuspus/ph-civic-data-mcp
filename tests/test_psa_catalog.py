@@ -13,6 +13,7 @@ import pytest
 from ph_civic_data_mcp.sources import psa as psa_module
 from ph_civic_data_mcp.sources import psa_catalog as cat
 from ph_civic_data_mcp.utils.cache import CACHES
+from ph_civic_data_mcp.utils.envelope import DATA_STATUS_INDETERMINATE
 
 ROOT = [
     {"id": "1A", "type": "l", "text": "Population and Vital Statistics"},
@@ -778,6 +779,24 @@ async def test_a_response_with_no_data_array_is_an_upstream_error(monkeypatch):
     assert out["upstream_error"] is True
     assert out["rows"] == []
     assert any("no `data` array" in c for c in out["caveats"]), out["caveats"]
+
+
+@pytest.mark.asyncio
+async def test_a_nonzero_selection_with_zero_rows_is_indeterminate(monkeypatch):
+    """PSA writes a missing cell as '..' inside a row, never as zero rows."""
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, {"columns": [], "data": []})
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    one_cell = {"Major Island Group": ["0"], "Among Families/Population": ["0"], "Year": ["2"]}
+    out = await cat.query_psa_dataset(DATASET, one_cell)
+    assert out["data_status"] == DATA_STATUS_INDETERMINATE
+    assert out["upstream_error"] is True
+    assert out["rows"] == []
+    assert any("1-cell" in c for c in out["caveats"]), out["caveats"]
 
 
 @pytest.mark.asyncio
