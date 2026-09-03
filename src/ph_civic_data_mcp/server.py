@@ -326,6 +326,7 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import ibtracs  # noqa: F401
     from ph_civic_data_mcp.sources import world_bank  # noqa: F401
     from ph_civic_data_mcp.sources import psa_catalog  # noqa: F401
+    from ph_civic_data_mcp.sources import compare  # noqa: F401
 
 
 def main() -> None:
