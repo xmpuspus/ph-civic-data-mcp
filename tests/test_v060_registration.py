@@ -86,9 +86,9 @@ async def test_every_tool_carries_title_and_read_only_annotations():
         assert tool.title, f"{tool.name} has no title"
         assert tool.tags, f"{tool.name} has no tags"
         assert tool.annotations is not None, f"{tool.name} has no annotations"
-        assert tool.annotations.readOnlyHint is True, f"{tool.name} is not read-only"
-        assert tool.annotations.idempotentHint is True, f"{tool.name} is not idempotent"
-        assert tool.annotations.destructiveHint is False
+        assert tool.annotations.read_only_hint is True, f"{tool.name} is not read-only"
+        assert tool.annotations.idempotent_hint is True, f"{tool.name} is not idempotent"
+        assert tool.annotations.destructive_hint is False
 
 
 @pytest.mark.asyncio
@@ -96,7 +96,7 @@ async def test_only_the_in_process_tool_is_closed_world():
     """A tool that calls an upstream service must declare openWorldHint."""
     from ph_civic_data_mcp.server import mcp
 
-    closed = {t.name for t in await mcp.list_tools() if t.annotations.openWorldHint is False}
+    closed = {t.name for t in await mcp.list_tools() if t.annotations.open_world_hint is False}
     assert closed == {"get_data_freshness"}, closed
 
 

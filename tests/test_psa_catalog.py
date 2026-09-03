@@ -513,8 +513,8 @@ async def test_catalog_tools_are_registered_with_metadata():
         assert tool.title, f"{name} has no title"
         assert tool.tags, f"{name} has no tags"
         assert tool.annotations is not None
-        assert tool.annotations.readOnlyHint is True
-        assert tool.annotations.openWorldHint is True
+        assert tool.annotations.read_only_hint is True
+        assert tool.annotations.open_world_hint is True
         schema = tool.output_schema or {}
         assert schema.get("type") == "object"
         assert "upstream_error" in schema.get("properties", {})
