@@ -339,7 +339,9 @@ async def search_infra_projects(
         keyword: Title/agency substring (e.g. 'flood control', 'bridge').
         region: PH region filter (partial match against agency text).
         province: Province name filter (partial match).
-        year: Filter publish date to this calendar year.
+        year: Filter publish date to this calendar year. Excludes records
+              with no publish date, so a year filter never returns an
+              undated record.
         min_cost_php: Minimum approved cost in PHP. The open notice listing
                       does not publish approved budget for almost any
                       record, so setting this today returns few or no
@@ -373,6 +375,7 @@ async def search_infra_projects(
     status_lc = (status or "").lower().strip() or None
 
     results: list[dict] = []
+    undated_dropped = 0
     for record in records:
         title = (getattr(record, "title", None) or "").lower()
         agency = (getattr(record, "agency", None) or "").lower()
@@ -394,7 +397,10 @@ async def search_infra_projects(
             haystack = f"{title} {agency} {record_region}"
             if not any(term in haystack for term in province_terms):
                 continue
-        if year and date_pub and date_pub.year != year:
+        if year and date_pub is None:
+            undated_dropped += 1
+            continue
+        if year and date_pub.year != year:
             continue
         if status_lc and status_lc not in record_status:
             continue
@@ -410,6 +416,12 @@ async def search_infra_projects(
         )
         if len(results) >= limit:
             break
+
+    if year and undated_dropped:
+        log_stderr(
+            f"search_infra_projects: year={year} filter dropped {undated_dropped} "
+            "record(s) with no publish date."
+        )
 
     return results
 
