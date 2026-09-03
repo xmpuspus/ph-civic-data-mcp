@@ -458,9 +458,20 @@ def _total_cells(dims: list[dict]) -> int:
 async def browse_psa_catalog(path: str | None = None) -> dict:
     """List one level of the PSA OpenSTAT statistical catalog.
 
-    OpenSTAT publishes roughly 2,900 tables across 27 subjects. This walks that
-    tree one level at a time so an agent can find a dataset without guessing a
-    table id.
+    OpenSTAT publishes roughly 2,900 tables across 27 subjects. This walks
+    that tree one level at a time, so an agent can find a dataset without
+    guessing a table id. A `dataset` entry is a `.px` table. Pass its `path`
+    to describe_psa_dataset before calling query_psa_dataset. Folder depth
+    varies by subject, so keep browsing until entries come back as datasets. Examples:
+
+      browse_psa_catalog()          the 27 top-level subjects
+      browse_psa_catalog("1F")      one level into the Poverty subject
+      browse_psa_catalog("1F/FY")   the Full Year Poverty Statistics tables
+
+    On failure: this tool does not set data_status. A bad path sets
+    validation_error true before any request goes out. An unreachable
+    catalog sets upstream_error true, with the real error in caveats. Both
+    return an empty entries list, which never means an empty folder.
 
     Args:
         path: Relative catalog path such as "1F" or "1F/FY". None or ""
@@ -470,14 +481,6 @@ async def browse_psa_catalog(path: str | None = None) -> dict:
     Returns: path, parent_path, entries (each with id, title, type
     "folder"/"dataset", and the `path` to pass back), folder_count,
     dataset_count, source, source_url, license, data_retrieved_at, caveats.
-
-    A `dataset` entry is a `.px` table. Pass its `path` to
-    describe_psa_dataset before calling query_psa_dataset. Folder depth varies
-    by subject, so keep browsing until entries come back as datasets.
-
-    On upstream failure this returns upstream_error: true with an empty
-    entries list. That means the catalog was unreachable, never that the
-    folder is empty.
     """
     try:
         safe = _normalize_path(path)
@@ -545,21 +548,27 @@ async def browse_psa_catalog(path: str | None = None) -> dict:
 async def describe_psa_dataset(dataset_path: str) -> dict:
     """Read the dimensions and valid value codes of one PSA OpenSTAT dataset.
 
-    Call this before query_psa_dataset. The query tool needs an explicit value
-    code for every dimension, and those codes live here.
+    Call this before query_psa_dataset. The query tool needs an explicit
+    value code for every dimension, and those codes live here. total_cells is
+    the size of the full cube. A query must select down to
+    max_cells_per_query or fewer, so pick explicit codes per dimension. Examples:
+
+      describe_psa_dataset("1F/FY/0241F3DF013.px")   dimensions and value codes for one table
+
+    On failure: this tool does not set data_status. A path that is not a
+    `.px` dataset sets validation_error true before any request goes out. An
+    unreadable dataset sets upstream_error true, with the real error in
+    caveats. Both return an empty dimensions list.
 
     Args:
-        dataset_path: Relative path to a `.px` dataset, e.g.
-                      "1F/FY/0011F3DF010.px". Take it from the `path` field of
-                      a browse_psa_catalog dataset entry.
+        dataset_path: Relative path to a `.px` dataset, for example
+                      "1F/FY/0241F3DF013.px". Take it from the `path` field
+                      of a browse_psa_catalog dataset entry.
 
     Returns: dataset_path, title, dimensions (each with code, label,
     value_count, values [{code, label}], values_truncated, is_time_like),
     total_cells, max_cells_per_query, time_dimensions, source, source_url,
     license, data_retrieved_at, caveats.
-
-    total_cells is the size of the full cube. A query must select down to
-    max_cells_per_query or fewer, so pick explicit codes per dimension.
     """
     try:
         path = _dataset_path(dataset_path)
@@ -729,12 +738,26 @@ async def query_psa_dataset(
     """Run one bounded query against a PSA OpenSTAT dataset.
 
     Every dimension needs an explicit list of value codes from
-    describe_psa_dataset. That is a hard requirement, not a convention: PXWeb
-    expands an unselected dimension to all of its values, and PSA answers the
-    resulting full-cube request with an HTTP 403.
+    describe_psa_dataset. That is a hard requirement, not a convention.
+    PXWeb expands an unselected dimension to all of its values, and PSA
+    answers the resulting full-cube request with an HTTP 403. PSA writes a
+    missing cell as "..", and those come back as null, never zero. Examples:
+
+      # one dataset, every dimension given an explicit code list
+      query_psa_dataset(
+          "1F/FY/0241F3DF013.px",
+          {"Year": ["2"], "Major Island Group": ["0", "2"],
+           "Among Families/Population": ["0"]},
+      )
+
+    On failure: this tool does not set data_status. A bad path or a rejected
+    selection, such as a missing dimension, an unknown code, or "all"/"*",
+    sets validation_error true before any request goes out. An OpenSTAT
+    outage sets upstream_error true, with the real error in caveats. Both
+    return an empty rows list.
 
     Args:
-        dataset_path: Relative `.px` path, e.g. "1F/FY/0241F3DF013.px".
+        dataset_path: Relative `.px` path, for example "1F/FY/0241F3DF013.px".
         selections: Dimension code -> list of value codes, covering every
                     dimension the dataset declares. "all" and "*" are rejected.
                     Example: {"Year": ["2"], "Major Island Group": ["0", "2"],
@@ -745,10 +768,6 @@ async def query_psa_dataset(
     labels {dimension: value_label}, and a numeric or null value),
     row_count, requested_cells, truncated, reference_period, source,
     source_url, license, data_retrieved_at, caveats, disclaimer.
-
-    PSA writes a missing cell as "..", and those come back as null, never zero.
-    A selection error returns validation_error: true; an OpenSTAT outage
-    returns upstream_error: true.
     """
     try:
         path = _dataset_path(dataset_path)
@@ -983,21 +1002,25 @@ async def search_psa_catalog(keyword: str, limit: int = 20) -> dict:
 
     Matches a case-insensitive substring against every dataset title and path
     in the catalog. The first call after a cold start walks the whole
-    ~2,900-table tree and can take a few minutes; the flattened index then
-    caches for 24 hours, so a later search answers from memory.
+    ~2,900-table tree and can take a few minutes. The flattened index then
+    caches for 24 hours, so a later search answers from memory. Examples:
+
+      search_psa_catalog("fertility")                 datasets with "fertility" in the title or path
+      search_psa_catalog("poverty incidence", limit=5) at most 5 matches
+
+    On failure: data_status is "invalid_request" for an empty keyword or a
+    bad limit, and "unavailable" for an OpenSTAT outage during the catalog
+    walk. validation_error or upstream_error is set to match. The real error
+    sits in caveats. Neither failure is cached.
 
     Args:
         keyword: Case-insensitive substring to match against a dataset title
-                 or path, e.g. "fertility", "poverty incidence", "CPI".
+                 or path, for example "fertility", "poverty incidence", "CPI".
         limit: Maximum number of matches to return (1-100, default 20).
 
     Returns: keyword, matches (each with path and title), match_count,
     total_available, limit, data_status, source, source_url, license,
     data_retrieved_at, caveats.
-
-    A caller mistake (an empty keyword) returns validation_error: true. An
-    OpenSTAT outage during the catalog walk returns upstream_error: true.
-    Neither is cached.
     """
     url = CATALOG_ROOT_URL
 
