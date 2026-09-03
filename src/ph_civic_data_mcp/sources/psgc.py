@@ -618,6 +618,21 @@ async def _resolve_query(query: str) -> dict | None:
 async def resolve_ph_location(query: str) -> dict:
     """Fuzzy-resolve a Philippine place name to its canonical PSGC record.
 
+    Handles common nicknames directly, such as "QC", "Gensan", "CDO", and
+    "Metro Manila". An ambiguous name such as "San Juan" still returns one
+    best match, plus an `alternatives` list of the other candidates. This
+    tool sets no `data_status` field on any path. Check `matched` and
+    `upstream_error` instead. Examples:
+
+      resolve_ph_location("Cebu City")  exact city match
+      resolve_ph_location("QC")         nickname resolves to Quezon City
+      resolve_ph_location("San Juan")   ambiguous name, returns alternatives
+
+    On failure, a clean no-match returns matched: false and caveats, with
+    no upstream_error key at all. When the PSGC API itself is unreachable,
+    it returns matched: false, upstream_error: true, and the real error in
+    caveats.
+
     Args:
         query: Free-text place name. Examples:
                "Sta. Mesa, Manila", "Cebu City", "NCR", "Pampanga", "Tagaytay".
@@ -625,10 +640,9 @@ async def resolve_ph_location(query: str) -> dict:
     Returns: psgc_code, name, level (region|province|city|municipality|barangay),
     parent_code, region_name, source_url, license, match_score, alternatives
     (runner-up candidates for ambiguous names), data_retrieved_at.
-    {"matched": false, "caveats": [...]} when no match; the same shape plus
-    "upstream_error": true when the PSGC API itself was unreachable.
-
-    Common nicknames resolve directly: "QC", "Gensan", "CDO", "Metro Manila".
+    {"matched": false, "caveats": [...]} on a clean no-match. The same
+    shape, plus "upstream_error": true, when the PSGC API itself was
+    unreachable.
     """
     key = cache_key({"tool": "resolve", "query": query.lower().strip()})
     cache = CACHES["psgc_resolve"]
@@ -690,14 +704,28 @@ async def list_admin_units(
 ) -> list[dict] | dict:
     """Browse children of a PSGC node, or top-level regions when parent_code is None.
 
+    An unrecognized parent_code or level filter matches no children and
+    returns an empty list. This tool never returns validation_error. A
+    malformed argument degrades to an empty result instead of a failure.
+    Examples:
+
+      list_admin_units()                                    top-level regions
+      list_admin_units(parent_code="072200000")              children of Cebu province
+      list_admin_units(level="city-municipality", limit=10)  first 10 cities and municipalities
+
+    On failure, only a PSGC API outage returns a failure envelope:
+    data_status "unavailable", upstream_error: true, results: [], and the
+    real error in caveats. A malformed parent_code or level returns an
+    empty list instead of this failure shape.
+
     Args:
         parent_code: Parent PSGC code. None returns the regions list.
         level: Filter children by level
                (region|province|city|municipality|district|barangay).
         limit: Max units to return (default 50, capped at 500).
-        offset: Skip this many matching units before returning results —
-                page past 500 children (e.g. Manila has 897 barangays) by
-                calling again with offset=500.
+        offset: Skip this many matching units before returning results.
+                Page past 500 children (for example, Manila has 897
+                barangays) by calling again with offset=500.
 
     Returns: list of PSGC records with psgc_code, name, level, parent_code,
     region_name, source_url, license, source. On PSGC API failure returns
@@ -884,8 +912,24 @@ async def _walk_hierarchy(record: dict[str, Any], level_hint: str) -> list[PSGCH
     },
 )
 async def get_location_hierarchy(psgc_code: str) -> dict:
-    """Return the full chain region -> province -> city/municipality -> barangay
-    for one PSGC code.
+    """Return the full chain region -> province -> city/municipality -> barangay for one PSGC code.
+
+    This tool checks that psgc_code is well-formed before it sends any
+    request. A malformed code never reaches the network. An unknown but
+    well-formed code, or a PSGC mirror outage, both produce an empty chain
+    instead of a match. Check the fields named below to tell the two
+    apart. Examples:
+
+      get_location_hierarchy("072217000")   Cebu City, chain walks up through province and region
+      get_location_hierarchy("999999999")   well-formed but unknown code
+      get_location_hierarchy("not-a-code")  malformed, rejected before any network call
+
+    On failure, a malformed code returns validation_error: true,
+    data_status "invalid_request", and chain: [], with no network call
+    made. A genuine mirror outage during lookup or the hierarchy walk
+    returns chain: [], upstream_error: true, and the real error in
+    caveats. A clean unknown-code answer returns chain: [] and caveats,
+    with neither key set.
 
     Args:
         psgc_code: 9-digit PSGC code (leading zeros optional).

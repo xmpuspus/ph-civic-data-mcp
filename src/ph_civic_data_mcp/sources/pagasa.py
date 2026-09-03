@@ -258,13 +258,30 @@ async def _pagasa_api_forecast(location: str, days: int, token: str) -> dict | N
     },
 )
 async def get_weather_forecast(location: str, days: int = 3) -> dict:
-    """Get weather forecast for a Philippine location.
+    """Get the weather forecast for a Philippine location.
 
-    Uses PAGASA TenDay API when PAGASA_API_TOKEN is set, Open-Meteo otherwise.
+    Uses the PAGASA TenDay API when PAGASA_API_TOKEN is set, and falls
+    back to Open-Meteo when the token is absent or the PAGASA call fails.
+    This tool sets no `data_status` field on a success or an
+    unknown-location result. Check `data_source` and `caveats` instead.
+    Examples:
+
+      get_weather_forecast("Manila")             3-day default forecast
+      get_weather_forecast("Cebu City", days=2)  2-day forecast
+      get_weather_forecast("Wakanda")             unknown location, no coordinates found
+
+    On failure, a location with no known coordinates returns days: [] and
+    a caveat, with no data_status or upstream_error key. An Open-Meteo
+    fetch failure returns data_status "unavailable", upstream_error: true,
+    days: [], and the real error in caveats.
 
     Args:
         location: Municipality, city, or province name.
         days: Forecast days (1-10, default 3).
+
+    Returns: location, forecast_issued, days (date, temp_min_c, temp_max_c,
+    rainfall_mm, wind_speed_kph, wind_direction, weather_description),
+    data_source (pagasa_api|open_meteo), data_retrieved_at.
     """
     days = max(1, min(int(days), 10))
     key = cache_key({"tool": "weather", "location": location.lower(), "days": days})
@@ -328,9 +345,23 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
 async def get_active_typhoons() -> list[dict] | dict:
     """Get active tropical cyclones in/near the Philippine Area of Responsibility (PAR).
 
-    Returns empty list if none active. If the PAGASA bulletin page is
-    unreachable, returns {results: [], upstream_error: true, caveats} instead,
-    so an outage is never read as "no active typhoons".
+    Returns an empty list when no cyclone is active. This tool parses the
+    live PAGASA bulletin page with regular expressions. A bulletin wording
+    change can miss a cyclone, but the "no active" state itself is
+    reliably detected.
+
+    Examples:
+        get_active_typhoons()   # only call form, no arguments
+
+    On failure:
+        When the PAGASA bulletin page is unreachable, this tool returns
+        data_status "unavailable", upstream_error: true, results: [], and
+        the real error in caveats. That shape never matches a genuine "no
+        active typhoons" answer, which is a bare empty list.
+
+    Returns: list of typhoons, each with local_name, international_name,
+    category, max_winds_kph, within_par, signal_numbers, bulletin_number,
+    source, bulletin_url, data_retrieved_at. Or the failure dict above.
     """
     key = cache_key({"endpoint": "typhoons"})
     cache = CACHES["pagasa_typhoons"]
@@ -456,18 +487,30 @@ async def get_active_typhoons() -> list[dict] | dict:
 async def get_weather_alerts(region: str | None = None) -> list[dict] | dict:
     """Get active PAGASA weather alerts and advisories.
 
-    The PAGASA homepage embeds alert names ("Heavy Rainfall Warning",
-    "Flood Advisory") in its navigation menu and breadcrumbs as well as
-    in actual active-warning sections. We can reliably detect the
-    "No Active Warnings" state but cannot yet isolate active warnings
-    from chrome text. To avoid fabricated advisories, this tool returns
-    `[]` with a caveat when the page is reachable but the state is
-    ambiguous, and `[]` with the explicit "no active warnings" signal
-    when the homepage says so. For real-time advisories, call
-    `bagong.pagasa.dost.gov.ph` directly.
+    The PAGASA homepage embeds alert names such as "Heavy Rainfall
+    Warning" in its navigation menu and breadcrumbs, as well as in real
+    active-warning sections. This tool reliably detects the "No Active
+    Warnings" state, but it cannot yet isolate a real active warning from
+    that navigation text. To avoid a fabricated advisory, this tool
+    returns a bare empty list for the confirmed "no active warnings"
+    state. It returns the same bare empty list for the ambiguous state,
+    where the page is reachable but the warning text cannot be trusted.
+    For real-time advisories, call bagong.pagasa.dost.gov.ph directly.
+    Examples:
+
+      get_weather_alerts()              no region argument
+      get_weather_alerts(region="NCR")  region only changes the cache key
+
+    On failure, when the PAGASA homepage is unreachable, this tool
+    returns data_status "unavailable", upstream_error: true, results: [],
+    and the real error in caveats. A reachable page always returns a bare
+    empty list, whether warnings are active or the text is ambiguous.
 
     Args:
-        region: e.g. "NCR", "Region VII", "CALABARZON". None returns all.
+        region: For example "NCR", "Region VII", "CALABARZON". None returns all.
+
+    Returns: list of alerts (currently always empty, pending a reliable
+    parser), or the failure dict above on an outage.
     """
     key = cache_key({"endpoint": "alerts", "region": region})
     cache = CACHES["pagasa_alerts"]
