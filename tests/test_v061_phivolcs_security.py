@@ -210,7 +210,7 @@ async def test_volcano_alert_refuses_an_off_host_url_without_a_request(monkeypat
 async def test_a_bulletin_timeout_carries_upstream_error_not_a_null_reading(monkeypatch):
     mayon = f"{WOVODAT}/bulletin/activity-mvo?bid=100&lang=en"
     taal = f"{WOVODAT}/bulletin/activity-tvo?bid=200&lang=en"
-    two_volcano_page = f"""
+    two_volcano_page = """
     <html><body>
     <a href="/bulletin/activity-mvo?bid=100&lang=en">Mayon Summary</a>
     <a href="/bulletin/activity-tvo?bid=200&lang=en">Taal Summary</a>

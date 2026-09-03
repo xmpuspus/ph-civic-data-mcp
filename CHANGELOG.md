@@ -43,6 +43,24 @@ changed. Every new response field is additive.
 - **Discovered table locations never expired.** A process that ran for weeks
   kept serving a table PSA moved. Discovery results now live in a 24-hour
   TTL cache.
+- **`get_area_profile` also missed a PSGC resolver or hierarchy outage.**
+  It checked `matched` but never `upstream_error` on `resolve_ph_location`
+  and `get_location_hierarchy`, so an outage there read as "no such place".
+  Both now fold into `blocks` and `caveats` the same way every sibling call
+  does.
+- **A rate-limited PSGC mirror read as an unknown code.** `lookup_psgc_code`
+  raised only on a 5xx. A 429 or 403 now raises too, so
+  `get_population_stats(psgc_code=...)` reports `upstream_error`, not
+  `validation_error`, when a rate limit or a block hits the mirror.
+- **`get_location_hierarchy` turned a lookup outage into "record not
+  found".** `_fetch_barangay_by_code` and `_fetch_one` swallowed a transport
+  failure into `None`, the same shape as an unknown code. Both now raise on
+  a real failure and return `None` only for a clean miss.
+- **A single volcano bulletin timeout read as a confirmed normal reading.**
+  `_fetch_volcano_alert` returned `(None, None)` on any failure, so
+  `get_volcano_status` published a null alert level with no warning. Each
+  entry now carries `upstream_error` and a `caveats` entry when its own
+  bulletin fetch failed.
 
 ### Added
 

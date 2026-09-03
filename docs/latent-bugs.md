@@ -1,8 +1,8 @@
 # Latent bugs found but not fixed in v0.6.0
 
 > Items 1, 4 and 8 were fixed during the review rounds and are marked below.
-> Items 12 to 16 came from rounds 5 and 6. v0.6.1 fixed items 2, 7 and 21.
-> Everything else still stands.
+> Items 12 to 16 came from rounds 5 and 6. v0.6.1 fixed items 2, 3, 5, 7 and
+> 21. Everything else still stands.
 
 Found by an adversarial and a cross-model review of the v0.6.0 branch on
 2026-08-06. Every item here predates that branch, so none of them ship as a
@@ -52,7 +52,7 @@ URL and every redirect hop against the https host allowlist. The client no
 longer follows redirects on its own. `tests/test_v061_phivolcs_security.py`
 holds the adversarial cases.
 
-## 3. A per-volcano bulletin failure reads as a real alert with null fields
+## 3. FIXED in v0.6.1. A per-volcano bulletin failure reads as a real alert with null fields
 
 `sources/phivolcs.py`, in `get_volcano_status`. `_fetch_volcano_alert` returns
 `(None, None)` on any failure, and the caller emits a normal alert record with
@@ -60,6 +60,10 @@ a null level. An agent cannot tell "alert level unknown" from "alert level not
 published".
 
 Severity: medium, and it sits on a hazard tool.
+
+Fixed: `_fetch_volcano_alert` returns a third value naming the failure, and
+the entry it produces carries `upstream_error` and a `caveats` entry instead
+of a silent null.
 
 ## 4. FIXED in v0.6.0. A subsistence-table outage becomes a null statistic
 
@@ -73,12 +77,16 @@ Severity: low. The poverty figure beside it is correct.
 Fixed: a discovery or query failure now reaches the caller as a `caveats`
 entry with `upstream_error`, and that partial answer never caches.
 
-## 5. PSGC hierarchy turns an endpoint failure into "record not found"
+## 5. FIXED in v0.6.1. PSGC hierarchy turns an endpoint failure into "record not found"
 
 `sources/psgc.py`, in the hierarchy lookup. A transport failure and a genuine
 unknown code produce the same answer.
 
 Severity: medium.
+
+Fixed: `_fetch_barangay_by_code` and `_fetch_one` raise `PSGCFetchError` on a
+real transport failure and return `None` only for a clean non-200/404 miss.
+`get_location_hierarchy` folds that into `upstream_error`.
 
 ## 6. MODIS transport failures cache as an empty observation window
 
