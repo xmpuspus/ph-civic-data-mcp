@@ -618,6 +618,75 @@ async def test_psgc_lookup_outage_still_returns_the_figure_with_a_caveat(monkeyp
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# lookup_psgc_code: a 429 or 403 is an outage, never "the code is unknown"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_lookup_psgc_code_raises_on_rate_limiting_not_unknown(monkeypatch):
+    """Codex cross-model finding: only >=500 raised, so a 429 read as a miss."""
+    from ph_civic_data_mcp.sources import psgc as psgc_module
+
+    async def _rate_limited(client, method, url, **kwargs):
+        return httpx.Response(429, text="slow down", request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psgc_module, "fetch_with_retry", _rate_limited)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await psgc_module.lookup_psgc_code("083747000")
+
+
+@pytest.mark.asyncio
+async def test_lookup_psgc_code_treats_404_as_try_the_next_level(monkeypatch):
+    from ph_civic_data_mcp.sources import psgc as psgc_module
+
+    calls: list[str] = []
+
+    async def _fake(client, method, url, **kwargs):
+        calls.append(url)
+        if url.endswith("/cities-municipalities/083747000/"):
+            return httpx.Response(
+                200,
+                json={
+                    "code": "083747000",
+                    "name": "City of Tacloban",
+                    "psgc10DigitCode": "0831600000",
+                },
+                request=httpx.Request(method, url),
+            )
+        return httpx.Response(404, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psgc_module, "fetch_with_retry", _fake)
+
+    record = await psgc_module.lookup_psgc_code("083747000")
+
+    assert record is not None
+    assert record["psgc_10digit_code"] == "0831600000"
+    assert len(calls) == 3  # regions, provinces, then cities-municipalities
+
+
+@pytest.mark.asyncio
+async def test_a_psgc_rate_limit_becomes_an_upstream_error_not_a_bad_code(monkeypatch):
+    """End to end: get_population_stats must not call a rate-limited code invalid."""
+    _install_fake_census(monkeypatch)
+
+    async def _rate_limited(code: str):
+        import httpx as httpx_mod
+
+        raise httpx_mod.HTTPStatusError(
+            "429", request=httpx_mod.Request("GET", "https://x"), response=httpx_mod.Response(429)
+        )
+
+    monkeypatch.setattr(psa_module, "lookup_psgc_code", _rate_limited)
+
+    result = await get_population_stats(psgc_code="083747000")
+
+    assert result["upstream_error"] is True
+    assert result["validation_error"] is False
+    assert result["data_status"] == "unavailable"
+
+
 def test_failure_result_shape():
     out = envelope.failure_result("PSA", "https://x", "boom", population=None, region="NCR")
     assert out["upstream_error"] is True

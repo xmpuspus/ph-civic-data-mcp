@@ -253,7 +253,11 @@ async def lookup_psgc_code(code: str) -> dict[str, Any] | None:
         ("barangays", "barangay"),
     ):
         response = await fetch_with_retry(CLIENT, "GET", f"{PSGC_BASE}/{endpoint}/{code}/")
-        if response.status_code >= 500:
+        if response.status_code not in (200, 404):
+            # Only a 404 means "not at this level, try the next one". A 429,
+            # 401 or 403 is an outage, not a verdict on the code, and must
+            # raise so the caller reports upstream_error rather than "unknown
+            # code" for a mirror that is rate-limiting or blocking us.
             response.raise_for_status()
         if response.status_code != 200:
             continue
