@@ -715,6 +715,56 @@ def test_failure_envelope_keeps_the_list_contract():
     assert not envelope.is_failure([])
 
 
+def test_failure_result_empty_status_is_not_a_failure(monkeypatch):
+    """Codex cross-model finding: 'empty' used to arrive with validation_error
+    true, so a legitimate no-data answer read as a caller mistake."""
+    out = envelope.failure_result(
+        "PSA",
+        "https://x",
+        "no row for this code",
+        data_status=envelope.DATA_STATUS_EMPTY,
+        population=None,
+    )
+    assert out["data_status"] == "empty"
+    assert out["upstream_error"] is False
+    assert out["validation_error"] is False
+    assert not envelope.is_failure(out)
+
+
+def test_failure_result_indeterminate_status_is_a_failure():
+    out = envelope.failure_result(
+        "PSA", "https://x", "cannot trust this cell", data_status=envelope.DATA_STATUS_INDETERMINATE
+    )
+    assert out["upstream_error"] is True
+    assert out["validation_error"] is False
+    assert envelope.is_failure(out)
+
+
+@pytest.mark.asyncio
+async def test_an_empty_result_from_an_unrecognized_psgc_code_is_never_validation_error(
+    monkeypatch,
+):
+    _install_fake_census(monkeypatch)
+
+    async def _unknown(code: str):
+        return {
+            "psgc_code": "999999999",
+            "psgc_10digit_code": "0899999999",
+            "name": "Nowhere",
+            "level": "barangay",
+            "region_code": "080000000",
+        }
+
+    monkeypatch.setattr(psa_module, "lookup_psgc_code", _unknown)
+
+    result = await get_population_stats(psgc_code="0899999999")
+
+    assert result["data_status"] == "empty"
+    assert result["upstream_error"] is False
+    assert result["validation_error"] is False
+    assert not envelope.is_failure(result)
+
+
 # ---------------------------------------------------------------------------
 # get_area_profile folds a sibling's failure envelope into its caveats
 # ---------------------------------------------------------------------------
@@ -796,6 +846,27 @@ async def test_area_profile_marks_every_block_when_all_succeed(_profile_mocks, m
     assert profile["blocks"]["population"] == "success"
     assert profile["upstream_error"] is False
     assert profile["caveats"] == []
+
+
+@pytest.mark.asyncio
+async def test_area_profile_never_flags_a_sibling_validation_error_as_an_outage(
+    _profile_mocks, monkeypatch
+):
+    """Codex cross-model finding: a validation_error block set the profile's
+    top-level upstream_error, which is documented to mean a source was down."""
+
+    async def _pop_bad_region(**kwargs):
+        return envelope.failure_result(
+            "PSA", "https://openstat", "unknown region", validation_error=True, population=None
+        )
+
+    monkeypatch.setattr(autostitch_module, "get_population_stats", _pop_bad_region)
+
+    profile = await autostitch_module.get_area_profile("NCR")
+
+    assert profile["blocks"]["population"] == "invalid_request"
+    assert profile["upstream_error"] is False
+    assert any("PSA population" in c for c in profile["caveats"])
 
 
 @pytest.mark.asyncio

@@ -956,7 +956,6 @@ async def get_population_stats(
             f"{parent_region}. The census keyed this table on the PSGC edition current at "
             "its reference date, so a code created or retired since may be absent.",
             license=PSA_LICENSE,
-            validation_error=True,
             data_status=DATA_STATUS_EMPTY,
             region=parent_region or label_arg,
             population=None,

@@ -42,9 +42,18 @@ def failure_result(
 ) -> dict:
     """Dict a single-value tool sends back when it cannot publish a figure.
 
-    `upstream_error` and `validation_error` never overlap. An upstream failure
-    sets `upstream_error: true` and `data_status: "unavailable"`. A rejected
-    argument sets `validation_error: true` and `data_status: "invalid_request"`.
+    `data_status` is the single source of truth. `upstream_error` and
+    `validation_error` are both derived from it, so they can never disagree
+    with the status a caller actually branches on. Codex cross-model finding
+    on the v0.6.1 diff: an earlier version let a caller pass
+    `data_status="empty"` alongside `validation_error=True`, which made a
+    legitimate empty answer read as a caller mistake.
+
+    `data_status` defaults from `validation_error` when not given explicitly:
+    a rejected argument is `"invalid_request"`, anything else is
+    `"unavailable"`. Pass `data_status="empty"` or `"indeterminate"`
+    directly for those cases; `validation_error` is then ignored.
+
     Extra keyword fields (a `population: None`, a `region`) land in the dict
     first so the contract keys always win.
     """
@@ -55,8 +64,8 @@ def failure_result(
     out.update(
         {
             "data_status": data_status,
-            "upstream_error": not validation_error,
-            "validation_error": validation_error,
+            "upstream_error": data_status in (DATA_STATUS_UNAVAILABLE, DATA_STATUS_INDETERMINATE),
+            "validation_error": data_status == DATA_STATUS_INVALID_REQUEST,
             "caveats": caveats,
             "source": source,
             "source_url": source_url,

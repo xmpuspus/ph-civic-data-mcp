@@ -31,10 +31,17 @@ from ph_civic_data_mcp.sources.psa import (
 )
 from ph_civic_data_mcp.sources.psgc import get_location_hierarchy, resolve_ph_location
 from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_INDETERMINATE,
     DATA_STATUS_SUCCESS,
     DATA_STATUS_UNAVAILABLE,
     is_failure,
 )
+
+# The only statuses that mean "a source was actually unreachable or its
+# answer could not be trusted". A block a sibling tool rejected as an
+# invalid request, or answered as genuinely empty, is neither, and must not
+# flip the profile's top-level upstream_error.
+_OUTAGE_STATUSES = frozenset({DATA_STATUS_UNAVAILABLE, DATA_STATUS_INDETERMINATE})
 
 PROFILE_DISCLAIMER = (
     "Statistical indicators derived from public data. Patterns may have "
@@ -58,6 +65,13 @@ def _unwrap(result: object, caveats: list[str], label: str) -> tuple[dict | list
     a caveat naming why. Before v0.6.1 only the exception branch existed: a
     sibling that returned `{upstream_error: true}` passed through as data, and
     the profile showed `population: null` beside an empty caveat list.
+
+    The block status is the child's own `data_status` when it set one, not a
+    blanket "unavailable". Codex cross-model finding on the v0.6.1 diff: an
+    earlier version collapsed a sibling's `validation_error` (a mismatched
+    region name, never an outage) into the same status as a real outage, so
+    a profile flagged its top-level `upstream_error` for a call that never
+    left the process.
     """
     if isinstance(result, BaseException):
         caveats.append(f"{label} failed: {type(result).__name__}: {result}")
@@ -66,7 +80,8 @@ def _unwrap(result: object, caveats: list[str], label: str) -> tuple[dict | list
         detail = result.get("caveats") or ["upstream error with no detail"]  # type: ignore[union-attr]
         for c in detail:
             caveats.append(f"{label}: {c}")
-        return None, DATA_STATUS_UNAVAILABLE
+        status = result.get("data_status") or DATA_STATUS_UNAVAILABLE  # type: ignore[union-attr]
+        return None, status
     return result, DATA_STATUS_SUCCESS  # type: ignore[return-value]
 
 
@@ -253,7 +268,7 @@ async def get_area_profile(location: str) -> dict:
         },
         "correlations": correlations,
         "blocks": blocks,
-        "upstream_error": any(v == DATA_STATUS_UNAVAILABLE for v in blocks.values()),
+        "upstream_error": any(v in _OUTAGE_STATUSES for v in blocks.values()),
         "caveats": caveats,
         "assessment_datetime": retrieved_at.isoformat(),
         "source": "PSGC + PSA + PhilGEPS + PHIVOLCS + PAGASA",
