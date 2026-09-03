@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import datetime, timezone
+from math import atan2, cos, radians, sin, sqrt
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -20,7 +21,7 @@ from dateutil import parser as date_parser
 from ph_civic_data_mcp.models.earthquake import Earthquake
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.envelope import failure_envelope
+from ph_civic_data_mcp.utils.envelope import failure_envelope, failure_result
 from ph_civic_data_mcp.utils.http import PHIVOLCS_CLIENT, fetch_with_retry, log_stderr
 
 PHIVOLCS_LICENSE = "Public — PHIVOLCS public bulletin pages"
@@ -96,6 +97,21 @@ VOLCANO_NAMES = {
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km between two lat/lon points.
+
+    Local to this module because utils/geo.py belongs to another change in
+    this release. usgs.py keeps its own copy, the same way both modules
+    already keep their own `_now()`.
+    """
+    earth_radius_km = 6371.0
+    p1, p2 = radians(lat1), radians(lat2)
+    dphi = radians(lat2 - lat1)
+    dlambda = radians(lon2 - lon1)
+    a = sin(dphi / 2) ** 2 + cos(p1) * cos(p2) * sin(dlambda / 2) ** 2
+    return 2 * earth_radius_km * atan2(sqrt(a), sqrt(1 - a))
 
 
 async def _fetch_earthquake_list() -> list[dict]:
@@ -185,6 +201,9 @@ async def get_latest_earthquakes(
     min_magnitude: float = 1.0,
     limit: int = 20,
     region: str | None = None,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    radius_km: float | None = None,
 ) -> list[dict] | dict:
     """Get the latest earthquake events from PHIVOLCS.
 
@@ -192,11 +211,40 @@ async def get_latest_earthquakes(
         min_magnitude: Minimum magnitude to include (default 1.0).
         limit: Max events to return (default 20, max 100).
         region: Filter by PH region/province/city name (partial match).
+        center_lat: Latitude of a search point. Give with center_lon and
+                    radius_km to filter to events near one place instead of
+                    the full recent-events list.
+        center_lon: Longitude of a search point. Give with center_lat and
+                    radius_km.
+        radius_km: Keep only events within this distance of
+                   (center_lat, center_lon). Give all three of center_lat,
+                   center_lon, and radius_km together, or none of them. Each
+                   returned event then carries a distance_km field.
 
     Returns a list of events on success. If the PHIVOLCS upstream is
     unreachable, returns a dict {results: [], upstream_error: true, caveats}
     instead of an empty list, so "outage" is never mistaken for "no quakes".
     """
+    have = (center_lat is not None, center_lon is not None, radius_km is not None)
+    if any(have) and not all(have):
+        return failure_result(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            "center_lat, center_lon, and radius_km must all be given together, or all left out.",
+            license=PHIVOLCS_LICENSE,
+            validation_error=True,
+            results=[],
+        )
+    if radius_km is not None and radius_km <= 0:
+        return failure_result(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            "radius_km must be a positive number.",
+            license=PHIVOLCS_LICENSE,
+            validation_error=True,
+            results=[],
+        )
+
     limit = max(1, min(int(limit), 100))
     try:
         rows = await _fetch_earthquake_list()
@@ -213,12 +261,18 @@ async def get_latest_earthquakes(
     retrieved_at = _now()
     results: list[dict] = []
     region_lc = region.lower().strip() if region else None
+    use_radius = radius_km is not None
 
     for row in rows:
         if row["magnitude"] < min_magnitude:
             continue
         if region_lc and region_lc not in row["location"].lower():
             continue
+        distance_km = None
+        if use_radius:
+            distance_km = _haversine_km(center_lat, center_lon, row["latitude"], row["longitude"])
+            if distance_km > radius_km:
+                continue
         quake = Earthquake(
             datetime_pst=row["datetime_pst"],
             latitude=row["latitude"],
@@ -229,7 +283,10 @@ async def get_latest_earthquakes(
             bulletin_url=row["bulletin_url"],
             data_retrieved_at=retrieved_at,
         )
-        results.append(quake.model_dump(mode="json"))
+        data = quake.model_dump(mode="json")
+        if use_radius:
+            data["distance_km"] = round(distance_km, 2)
+        results.append(data)
         if len(results) >= limit:
             break
     return results
