@@ -321,8 +321,19 @@ async def search_infra_projects(
     (construction / road / bridge / flood control / drainage / school
     building / civil works). Source: https://www.philgeps.gov.ph/. Approved
     budget amounts are not published in the open notice listing, so cost_php
-    is null in most records. The DPWH transparency portal API is currently
-    blocked by Cloudflare and not used.
+    is null in most records. min_cost_php almost never matches, because the
+    open listing omits approved budget for nearly every record. The DPWH
+    transparency portal API is currently blocked by Cloudflare and not
+    used. Examples:
+
+      search_infra_projects(keyword="flood control")
+      search_infra_projects(region="ncr")
+      search_infra_projects(min_cost_php=100_000_000)
+
+    On failure: returns {results: [], upstream_error: true, data_status:
+    "unavailable", caveats: [...]} instead of a bare list, with the real
+    upstream error in caveats. This tool never checks an argument before
+    the PhilGEPS fetch runs, so validation_error is always false.
 
     Args:
         keyword: Title/agency substring (e.g. 'flood control', 'bridge').
@@ -417,6 +428,20 @@ async def search_infra_projects(
 async def get_infra_project(project_id: str) -> dict:
     """Return the full record for one infrastructure project by project_id.
 
+    This tool looks up project_id inside the same latest ~100-notice
+    PhilGEPS window search_infra_projects reads. An id from an older window
+    returns matched: false, not an error, because the window has already
+    moved on. Examples:
+
+      get_infra_project("PHILGEPS-INF-003")
+      get_infra_project("DOES-NOT-EXIST")
+
+    On failure: no data_status field exists on this tool. An empty
+    project_id or a project missing from the current window both return
+    matched: false with a caveat and no upstream_error. A PhilGEPS fetch
+    failure returns matched: false, upstream_error: true, and the real
+    error text in caveats.
+
     Args:
         project_id: Reference number from search_infra_projects.
 
@@ -492,6 +517,21 @@ async def summarize_infra_spending(
     funding_source: str | None = None,
 ) -> dict:
     """Aggregate infrastructure procurement statistics over the latest PhilGEPS window.
+
+    This tool aggregates the same infra-keyword-matched notice window
+    search_infra_projects reads (cached 6h). rules_evaluated names which
+    breakdowns ran, today by_category and by_region. rules_not_computable
+    names by_funding_source, retired to an always-empty dict because
+    PhilGEPS notices carry no funding source field. sample_size and
+    sufficient_for_per_capita flag whether the window, today under the
+    500-notice threshold, is large enough for a per-100k rate. Examples:
+
+      summarize_infra_spending()
+      summarize_infra_spending(region="ncr", year=2025)
+
+    On failure: data_status "unavailable", upstream_error true, totals zero
+    and by_category/by_region/top_agencies empty, with the real PhilGEPS
+    error in caveats. No validation_error path exists.
 
     Args:
         region: PH region filter (partial match).

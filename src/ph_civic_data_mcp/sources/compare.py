@@ -164,14 +164,21 @@ async def compare_areas(
 ) -> dict:
     """Compare civic indicators for two to five Philippine places, side by side.
 
-    Example: compare_areas(["Cebu City", "Davao City"], metrics=["population",
-    "poverty_incidence_pct"]).
-
     Calls get_area_profile for each place and builds one row per place, so an
     agent does not have to call the profile tool once per place and merge the
     results itself. locations needs 2 to 5 entries. metrics, when given, must
-    come from a fixed allowlist of eight names; it defaults to all eight.
-    format is "json" or "csv"; "csv" adds a CSV string under `export`.
+    come from a fixed allowlist of eight names, and it defaults to all eight.
+    format is "json" or "csv". "csv" adds a CSV string under `export`.
+    Examples:
+
+      compare_areas(["Cebu City", "Davao City"])
+      compare_areas(["Cebu City", "Davao City"], metrics=["population"])
+
+    On failure: a rejected request, such as a wrong location count, an
+    unknown metric, or a bad format, never calls get_area_profile. It
+    returns validation_error: true and data_status "invalid_request". A
+    place that fails to resolve still gets a row, with resolved_name None,
+    and the overall data_status becomes "indeterminate" or "unavailable".
 
     Args:
         locations: 2 to 5 place names, e.g. ["Cebu City", "Davao City"].
@@ -186,11 +193,6 @@ async def compare_areas(
     dict per place, caveats, data_status, upstream_error, validation_error,
     source, source_url, license, disclaimer, data_retrieved_at. csv format
     also returns export, a CSV string with a header row.
-
-    A rejected request (wrong location count, an unknown metric, a bad
-    format) never calls get_area_profile and returns validation_error: true.
-    Rows for a place that never resolved still appear, with resolved_name
-    set to None, and data_status becomes "indeterminate" or "unavailable".
     """
     problem = _validate_request(locations, metrics, format)
     if problem is not None:

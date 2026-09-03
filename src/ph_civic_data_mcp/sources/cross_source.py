@@ -191,7 +191,16 @@ async def assess_area_risk(location: str) -> dict:
 
     Makes parallel upstream calls to PHIVOLCS (earthquakes, volcano alert
     levels) and PAGASA (active typhoons, weather alerts). Expect 3-6 second
-    response time.
+    response time. earthquake_risk_level is a heuristic reading of recent
+    seismic activity, never an official PHIVOLCS hazard assessment.
+    Examples:
+
+      assess_area_risk("Manila")
+      assess_area_risk("Batangas")
+
+    On failure: this tool never raises and carries no data_status field. A
+    failed PHIVOLCS or PAGASA sub-call shows up only as a caveats entry
+    naming the source, and the other sources still report.
 
     Args:
         location: Municipality, city, or province name.
@@ -318,7 +327,16 @@ async def flag_infra_anomalies(
       "progress is missing" finding.
     - hazard_overlap: project location keywords overlap with a recent
       PHIVOLCS earthquake (>=M4.0 in last 30d) or an active PAGASA typhoon
-      footprint, suggesting urgency or post-disaster reconstruction context
+      footprint, suggesting urgency or post-disaster reconstruction
+      context. Examples:
+
+      flag_infra_anomalies()
+      flag_infra_anomalies(min_cost_php=100_000_000)
+
+    On failure: this tool never raises and carries no data_status field. A
+    failed PHIVOLCS, PAGASA, or PhilGEPS sub-call shows up only as a
+    caveats entry naming the source. The flagged list still returns data
+    from every source that did respond.
 
     Args:
         region: PH region filter for the project list.

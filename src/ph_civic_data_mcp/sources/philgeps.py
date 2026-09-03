@@ -142,6 +142,14 @@ async def search_procurement(
     external clients, so this tool fetches the latest ~100 bid notices and
     filters them in-memory. Data is cached 6 hours. Keyword/agency/region
     filters are applied client-side (case-insensitive substring match).
+    Examples:
+
+      search_procurement(keyword="flood")
+      search_procurement(keyword="", agency="DPWH", limit=10)
+
+    On failure: returns {results: [], upstream_error: true, data_status:
+    "unavailable", caveats: [...]} instead of a bare list, so an outage is
+    never read as "no matching notices". No validation_error path exists.
 
     Args:
         keyword: Search term matched against title + agency + classification.
@@ -150,9 +158,7 @@ async def search_procurement(
         date_from / date_to: YYYY-MM-DD bounds on publish date.
         limit: Max results (default 20, max 100).
 
-    Returns a list on success. If the PhilGEPS listing is unreachable,
-    returns {results: [], upstream_error: true, caveats} instead of an
-    empty list, so an outage is never read as "no matching notices".
+    Returns a list of matching notices on success.
     """
     limit = max(1, min(int(limit), 100))
 
@@ -220,6 +226,19 @@ async def get_procurement_summary(
     year: int | None = None,
 ) -> dict:
     """Aggregate procurement statistics over the latest notices cached from PhilGEPS.
+
+    This tool aggregates the same latest ~100-notice window
+    search_procurement reads (6h cache). rules_evaluated names which
+    breakdowns ran, by_mode and by_region. rules_not_computable explains
+    why total_value_php stays null: PhilGEPS open notices do not publish
+    approved budget amounts. Examples:
+
+      get_procurement_summary()
+      get_procurement_summary(agency="DPWH", year=2025)
+
+    On failure: data_status "unavailable", upstream_error true, totals zero
+    and by_mode/by_region/top_agencies empty, with the real PhilGEPS error
+    in caveats. No validation_error path exists.
 
     Args:
         agency: Partial agency match filter.
