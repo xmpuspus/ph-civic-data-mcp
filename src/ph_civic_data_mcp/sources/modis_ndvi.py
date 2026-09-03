@@ -47,7 +47,8 @@ async def _fetch_subset(latitude: float, longitude: float, start: str, end: str,
 
     A subset with no composites in it (`{"subset": []}`) is a real, cacheable
     answer: the pixel may be over water, or the window has no completed
-    16-day composite. Only a transport failure or a non-object body raises.
+    16-day composite. A transport failure, a non-object body, or a body with
+    no list `subset` field raises instead.
     """
     url = f"{ORNL_BASE}/{PRODUCT}/subset"
     params = {
@@ -70,6 +71,8 @@ async def _fetch_subset(latitude: float, longitude: float, start: str, end: str,
         raise MODISUpstreamError(f"{type(exc).__name__}: {exc}") from exc
     if not isinstance(payload, dict):
         raise MODISUpstreamError(f"ORNL returned a non-object body for band {band!r}")
+    if not isinstance(payload.get("subset"), list):
+        raise MODISUpstreamError(f"ORNL returned no subset list for band {band!r}: {payload!r}")
     return payload
 
 

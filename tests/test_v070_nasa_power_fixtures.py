@@ -123,8 +123,9 @@ async def test_a_span_within_the_cap_still_fetches(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_non_dict_parameter_block_is_reported_not_a_crash(monkeypatch):
-    """A malformed 'parameter' field (a list, not an object) must not raise."""
+async def test_a_non_dict_parameter_block_is_reported_as_indeterminate(monkeypatch):
+    """A malformed 'parameter' field (a list, not an object) must not cache
+    a false empty answer."""
 
     async def _drifted(client, method, url, **kwargs):
         return _json_response(method, url, {"properties": {"parameter": ["broken"]}})
@@ -132,5 +133,24 @@ async def test_a_non_dict_parameter_block_is_reported_not_a_crash(monkeypatch):
     monkeypatch.setattr(power_module, "fetch_with_retry", _drifted)
 
     result = await power_module.get_solar_and_climate(14.5995, 120.9842, "2026-04-01", "2026-04-02")
-    assert not result.get("upstream_error")
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
     assert result["days"] == []
+    assert len(CACHES["nasa_power"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_non_dict_properties_block_is_reported_as_indeterminate(monkeypatch):
+    """A malformed 'properties' field (a list, not an object) must not cache
+    a false empty answer."""
+
+    async def _drifted(client, method, url, **kwargs):
+        return _json_response(method, url, {"properties": ["broken"]})
+
+    monkeypatch.setattr(power_module, "fetch_with_retry", _drifted)
+
+    result = await power_module.get_solar_and_climate(14.5995, 120.9842, "2026-04-01", "2026-04-02")
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert result["days"] == []
+    assert len(CACHES["nasa_power"]) == 0

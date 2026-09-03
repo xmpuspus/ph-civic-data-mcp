@@ -78,15 +78,16 @@ class WorldBankUpstreamError(RuntimeError):
     """
 
 
-async def _fetch_observations(code: str, per_page: int) -> tuple[str | None, list[dict]]:
-    """(indicator_name, observations) for one indicator. Raises on a bad payload.
+async def _fetch_observations(code: str, per_page: int) -> tuple[str | None, list[dict], int]:
+    """(indicator_name, observations, skipped_count) for one indicator.
 
-    A real zero answer and a transient empty answer look the same on the
-    surface: a 200 with no usable rows. World Bank's own `total` count in the
-    response metadata tells them apart. `total` at 0 means the indicator truly
-    has no published data, which is worth caching. `total` above 0 with no
-    usable rows means the rows did not come back this time, which must not be
-    cached as a zero.
+    Raises on a bad payload. A real zero answer and a transient empty answer
+    look the same on the surface: a 200 with no usable rows. World Bank's own
+    `total` count in the response metadata tells them apart. `total` at 0
+    means the indicator truly has no published data, which is worth caching.
+    `total` above 0 with no usable rows means the rows did not come back this
+    time, which must not be cached as a zero. A row whose `value` cannot
+    convert to a number is skipped and counted, never published as a figure.
     """
     url = f"{WB_BASE}/{code}"
     params = {"format": "json", "per_page": per_page}
@@ -110,6 +111,7 @@ async def _fetch_observations(code: str, per_page: int) -> tuple[str | None, lis
 
     indicator_name = None
     observations: list[dict] = []
+    skipped = 0
     for rec in records:
         if not isinstance(rec, dict):
             continue
@@ -118,10 +120,15 @@ async def _fetch_observations(code: str, per_page: int) -> tuple[str | None, lis
         value = rec.get("value")
         if value is None:
             continue
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            skipped += 1
+            continue
         observations.append(
             {
                 "year": int(rec["date"]) if str(rec.get("date", "")).isdigit() else rec.get("date"),
-                "value": value,
+                "value": numeric_value,
                 "unit": rec.get("unit") or "",
             }
         )
@@ -138,7 +145,7 @@ async def _fetch_observations(code: str, per_page: int) -> tuple[str | None, lis
             f"World Bank returned {len(records)} rows with nothing usable for indicator "
             f"{code!r} (metadata total={metadata.get('total')!r}); not a real zero."
         )
-    return indicator_name, observations
+    return indicator_name, observations, skipped
 
 
 @mcp.tool(
@@ -169,7 +176,9 @@ async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
     returns data_status "invalid_request", with validation_error true and
     observations []. An upstream fetch failure returns data_status
     "unavailable", with upstream_error true, observations [], and the real
-    error text in caveats.
+    error text in caveats. A row with a non-numeric value is skipped and
+    counted in caveats. A response where every row is non-numeric returns
+    data_status "unavailable" instead of a false empty answer.
 
     Args:
         indicator: WB code or alias. See INDICATOR_ALIASES in source for the
@@ -200,7 +209,7 @@ async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
     url = f"{WB_BASE}/{code}"
 
     try:
-        indicator_name, observations = await _fetch_observations(code, per_page)
+        indicator_name, observations, skipped = await _fetch_observations(code, per_page)
     except WorldBankUpstreamError as exc:
         log_stderr(f"World Bank error: {exc}")
         return failure_result(
@@ -234,5 +243,9 @@ async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
         observations=observations,
         data_retrieved_at=_now(),
     ).model_dump(mode="json")
+    if skipped:
+        result["caveats"] = [
+            f"Skipped {skipped} row(s) with a non-numeric value for indicator {code!r}."
+        ]
     cache[ckey] = result
     return result
