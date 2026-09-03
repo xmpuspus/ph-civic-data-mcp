@@ -1564,9 +1564,16 @@ async def get_inflation_stats(area: str | None = None) -> dict:
         }
         try:
             payload = await _post_json_or_raise(table_url, query)
+            if not isinstance(payload.get("data"), list):
+                # A 200 with no `data` list is a malformed body, not a real
+                # empty year. Falling back would read this year as published.
+                raise PSAUpstreamError(
+                    f"PSA CPI query for year {year_code} returned a malformed "
+                    "payload with no `data` array"
+                )
         except PSAUpstreamError as exc:
             return _err(f"PSA CPI query failed: {exc}")
-        if not payload.get("data"):
+        if not payload["data"]:
             continue
         period_code_var = next(
             (c for c in _key_columns(payload) if c.lower() == "period"), "Period"
@@ -1714,9 +1721,16 @@ async def get_labor_stats(region: str | None = None) -> dict:
         }
         try:
             payload = await _post_json_or_raise(table_url, query)
+            if not isinstance(payload.get("data"), list):
+                # Same guard as get_inflation_stats: a malformed body must not
+                # read as a genuine empty year and fall back to an older one.
+                raise PSAUpstreamError(
+                    f"PSA LFS query for year {year_code} returned a malformed "
+                    "payload with no `data` array"
+                )
         except PSAUpstreamError as exc:
             return _err(f"PSA LFS query failed: {exc}")
-        if not payload.get("data"):
+        if not payload["data"]:
             continue
         cols = _key_columns(payload)
         month_col = next((c for c in cols if c.lower() == "month"), "Month")
