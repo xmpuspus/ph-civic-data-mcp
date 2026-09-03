@@ -158,6 +158,39 @@ async def test_out_of_range_coordinates_are_rejected_before_any_fetch(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_a_span_over_the_cap_is_rejected_before_any_fetch(monkeypatch):
+    """Codex cross-model finding: the date range had no cap, so a 45-year
+    span went to both band queries at once, one request each."""
+
+    def _unexpected(client, method, url, **kwargs):
+        raise AssertionError("fetch_with_retry must not be called for an over-cap span")
+
+    monkeypatch.setattr(modis_module, "fetch_with_retry", _unexpected)
+
+    result = await modis_module.get_vegetation_index(15.58, 121.0, "2024-01-01", "2025-02-05")
+    assert result["validation_error"] is True
+    assert result["data_status"] == "invalid_request"
+    assert len(CACHES["modis_ndvi"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_an_unparseable_date_is_rejected_before_any_fetch(monkeypatch):
+    """Codex cross-model finding: a start_date or end_date that failed to
+    parse fell back to the default window and cached a normal-looking
+    result for dates nobody asked for."""
+
+    def _unexpected(client, method, url, **kwargs):
+        raise AssertionError("fetch_with_retry must not be called for a bad date")
+
+    monkeypatch.setattr(modis_module, "fetch_with_retry", _unexpected)
+
+    result = await modis_module.get_vegetation_index(15.58, 121.0, "bad-date", "2026-08-15")
+    assert result["validation_error"] is True
+    assert result["data_status"] == "invalid_request"
+    assert len(CACHES["modis_ndvi"]) == 0
+
+
+@pytest.mark.asyncio
 async def test_both_bands_all_non_numeric_values_is_upstream_error_never_cached(monkeypatch):
     """Codex cross-model finding: rows with only non-numeric strings in
     'data' were discarded silently and read as a real empty answer."""

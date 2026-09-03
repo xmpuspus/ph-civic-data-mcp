@@ -94,13 +94,17 @@ def _in_par(lat: float | None, lng: float | None) -> bool:
     return PAR_MIN_LAT <= lat <= PAR_MAX_LAT and PAR_MIN_LNG <= lng <= PAR_MAX_LNG
 
 
-def _accumulate_storm(header: list[str], row: list[str], storms: dict[str, dict]) -> None:
+def _accumulate_storm(header: list[str], row: list[str], storms: dict[str, dict]) -> bool:
     """Parse one IBTrACS CSV data row and fold it into its storm's aggregate.
 
     Exact port of the per-row logic the old buffer-then-loop version ran, one
     row at a time, so the streaming rewrite in _stream_storms changes nothing
     about which storms match the PAR filter or what their aggregated stats
     come out to.
+
+    Returns True when the row carried a sid and was folded into a storm,
+    False when it was skipped. The caller counts the True rows, so a header
+    plus a units row plus an empty data row is not read as real data.
     """
 
     def col(name: str) -> str | None:
@@ -111,7 +115,7 @@ def _accumulate_storm(header: list[str], row: list[str], storms: dict[str, dict]
 
     sid = col("sid")
     if not sid:
-        return
+        return False
     lat = _f(col("latitude"))
     lng = _f(col("longitude"))
     # wmo_wind is often null for WP storms; fall back to JTWC (usa) then JMA (tokyo).
@@ -158,6 +162,7 @@ def _accumulate_storm(header: list[str], row: list[str], storms: dict[str, dict]
             entry["end_time_utc"] = t
     if _in_par(lat, lng):
         entry["passed_within_par"] = True
+    return True
 
 
 async def _stream_storms(url: str) -> tuple[int, dict[str, dict]]:
@@ -184,7 +189,7 @@ async def _stream_storms(url: str) -> tuple[int, dict[str, dict]]:
     """
     last_exc: Exception | None = None
     for attempt in range(MAX_RETRIES):
-        line_count = 0
+        parsed_rows = 0
         header: list[str] | None = None
         seen_units_row = False
         storms: dict[str, dict] = {}
@@ -195,7 +200,6 @@ async def _stream_storms(url: str) -> tuple[int, dict[str, dict]]:
                     continue
                 response.raise_for_status()
                 async for raw_line in response.aiter_lines():
-                    line_count += 1
                     row = next(csv.reader([raw_line]))
                     if header is None:
                         header = row
@@ -216,8 +220,9 @@ async def _stream_storms(url: str) -> tuple[int, dict[str, dict]]:
                     if not seen_units_row:
                         seen_units_row = True
                         continue
-                    _accumulate_storm(header, row, storms)
-            return line_count, storms
+                    if _accumulate_storm(header, row, storms):
+                        parsed_rows += 1
+            return parsed_rows, storms
         except RETRYABLE_EXCEPTIONS as exc:
             last_exc = exc
             if attempt < MAX_RETRIES - 1:
@@ -278,7 +283,7 @@ async def get_historical_typhoons_ph(year: int | None = None, limit: int = 30) -
     full_url = f"{base_url}?{'&'.join(query_parts)}"
 
     try:
-        line_count, storms = await _stream_storms(full_url)
+        parsed_rows, storms = await _stream_storms(full_url)
     except Exception as exc:
         log_stderr(f"IBTrACS error: {exc}")
         return failure_envelope(
@@ -288,7 +293,10 @@ async def get_historical_typhoons_ph(year: int | None = None, limit: int = 30) -
             license="Public domain (NOAA)",
         )
 
-    if line_count < 3:
+    # Codex cross-model finding: line_count counted physical CSV lines, so a
+    # header, a units row, and one empty data row all passed a `< 3` check
+    # and cached a bare []. Count rows that actually reached a storm instead.
+    if parsed_rows == 0:
         return failure_envelope(
             "NOAA IBTrACS",
             base_url,
