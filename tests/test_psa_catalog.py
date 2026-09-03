@@ -750,6 +750,36 @@ async def test_a_psa_missing_marker_alone_stays_a_success_with_a_null_cell(monke
 
 
 @pytest.mark.asyncio
+async def test_a_string_values_field_is_malformed_not_a_psa_missing_marker(monkeypatch):
+    """A `values` field of "10.9" (a string, not a list) is drift. It must
+    not read as a confirmed PSA '..' gap."""
+    payload = {
+        "columns": [
+            {"code": "Major Island Group", "type": "d"},
+            {"code": "Among Families/Population", "type": "d"},
+            {"code": "Year", "type": "d"},
+            {"code": "V", "type": "c"},
+        ],
+        "data": [{"key": ["0", "0", "2"], "values": "10.9"}],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, payload)
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(
+        DATASET,
+        {"Major Island Group": ["0"], "Among Families/Population": ["0"], "Year": ["2"]},
+    )
+    assert out["rows"][0]["value"] is None
+    assert out["data_status"] == DATA_STATUS_INDETERMINATE
+    assert out["upstream_error"] is True
+    assert all(".." not in c for c in out["caveats"]), out["caveats"]
+
+
+@pytest.mark.asyncio
 async def test_a_misaligned_row_is_reported_not_silently_truncated(monkeypatch):
     payload = {
         "columns": [

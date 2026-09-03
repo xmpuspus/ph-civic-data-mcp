@@ -1044,11 +1044,12 @@ async def get_poverty_stats(region: str | None = None) -> dict:
     unparseable year label, or a query failure sets data_status
     "unavailable" and upstream_error true. A region PSA does not list sets
     data_status "invalid_request" and validation_error true. A table with no
-    matching incidence measure sets data_status "indeterminate" and
-    upstream_error true. A published ".." cell for the region and year sets
-    no error flag and no data_status. Check caveats instead. A
-    subsistence-table failure sets upstream_error true on an otherwise valid
-    poverty figure, but sets no data_status.
+    matching incidence measure, or a cell whose values field is not a list,
+    sets data_status "indeterminate" and upstream_error true. A published
+    ".." cell for the region and year sets no error flag and no data_status.
+    Check caveats instead. A subsistence-table failure sets upstream_error
+    true on an otherwise valid poverty figure, but leaves data_status at
+    "success".
 
     Args:
         region: PH region (None returns national).
@@ -1160,6 +1161,23 @@ async def get_poverty_stats(region: str | None = None) -> dict:
     poverty_pct = _first_cell(payload)
 
     if poverty_pct is None:
+        data = payload.get("data")
+        row = data[0] if isinstance(data, list) and data else None
+        row_values = row.get("values") if isinstance(row, dict) else None
+        if row_values is not None and (
+            isinstance(row_values, (str, bytes)) or not isinstance(row_values, (list, tuple))
+        ):
+            # PXWeb always sends a list here. A string like "10.9" is drift,
+            # not a published ".." cell, and must not read as a confirmed gap.
+            return failure_result(
+                "PSA",
+                table_url,
+                f"PSA poverty query returned a malformed values field, not a list: {row_values!r}.",
+                data_status=DATA_STATUS_INDETERMINATE,
+                license=PSA_LICENSE,
+                region=geo_text,
+                poverty_incidence_pct=None,
+            )
         # The call worked, so this is a real gap in PSA's data, not an outage.
         # _err would say upstream_error and send the agent back to retry.
         return {
@@ -1251,6 +1269,9 @@ async def get_poverty_stats(region: str | None = None) -> dict:
         "source_table": table_url,
         "license": PSA_LICENSE,
         "caveats": partial,
+        "data_status": DATA_STATUS_SUCCESS,
+        "upstream_error": False,
+        "validation_error": False,
         "data_retrieved_at": _now().isoformat(),
     }
     if partial:
@@ -1651,6 +1672,9 @@ async def get_inflation_stats(area: str | None = None) -> dict:
         result = {
             **stats.model_dump(mode="json"),
             "source_table": table_url,
+            "data_status": DATA_STATUS_SUCCESS,
+            "upstream_error": False,
+            "validation_error": False,
             "source": "PSA",
             "source_url": table_url,
             "license": PSA_LICENSE,
@@ -1828,6 +1852,9 @@ async def get_labor_stats(region: str | None = None) -> dict:
             **stats.model_dump(mode="json"),
             "caveats": caveats,
             "source_table": table_url,
+            "data_status": DATA_STATUS_SUCCESS,
+            "upstream_error": False,
+            "validation_error": False,
             "source": "PSA",
             "source_url": table_url,
             "license": PSA_LICENSE,

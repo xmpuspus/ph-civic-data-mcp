@@ -546,3 +546,43 @@ async def test_fetch_one_5xx_is_an_error_not_a_cached_miss(monkeypatch):
         await psgc_module._fetch_one("070000000")
     key = psgc_module.cache_key({"endpoint": "one", "code": "070000000"})
     assert key not in CACHES["psgc_browse"], "an outage must never cache a false not-found"
+
+
+@pytest.mark.asyncio
+async def test_get_location_hierarchy_barangay_bad_json_reports_upstream_error(monkeypatch):
+    """A 200 with an unreadable body on the barangay endpoint must raise
+    PSGCFetchError, not a bare JSONDecodeError, out of get_location_hierarchy."""
+
+    def _bad_json_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not-json")
+
+    transport = httpx.MockTransport(_bad_json_handler)
+    bad_client = httpx.AsyncClient(transport=transport, base_url="https://psgc.gitlab.io")
+    monkeypatch.setattr(psgc_module, "CLIENT", bad_client)
+    CACHES["psgc_browse"].clear()
+
+    result = await psgc_module.get_location_hierarchy("133901001")
+
+    assert result["chain"] == []
+    assert result["upstream_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_location_hierarchy_200_empty_body_is_an_error_not_a_cached_miss(monkeypatch):
+    """A 200 `{}` on every level endpoint is a malformed body, not a genuine
+    miss. It must not cache a false "not found" for 24 hours."""
+
+    def _empty_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    transport = httpx.MockTransport(_empty_handler)
+    bad_client = httpx.AsyncClient(transport=transport, base_url="https://psgc.gitlab.io")
+    monkeypatch.setattr(psgc_module, "CLIENT", bad_client)
+    CACHES["psgc_browse"].clear()
+
+    result = await psgc_module.get_location_hierarchy("130000000")
+
+    assert result["chain"] == []
+    assert result["upstream_error"] is True
+    key = psgc_module.cache_key({"endpoint": "one", "code": "130000000"})
+    assert key not in CACHES["psgc_browse"], "a malformed 200 must never cache a false not-found"
