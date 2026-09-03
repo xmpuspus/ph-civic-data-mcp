@@ -142,9 +142,16 @@ def _validate_request(locations: object, metrics: object, format: object) -> str
 # never runs a formula.
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
 
+# A spreadsheet skips leading whitespace before it decides a cell is a
+# formula, so a value that starts with a tab and then "=" still evaluates.
+# Strip these before the prefix check, and add the quote to the real value.
+_CSV_LEADING_WHITESPACE = "\t\r\n "
+
 
 def _csv_safe_cell(value: object) -> object:
-    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+    if isinstance(value, str) and value.lstrip(_CSV_LEADING_WHITESPACE).startswith(
+        _CSV_FORMULA_PREFIXES
+    ):
         return "'" + value
     return value
 

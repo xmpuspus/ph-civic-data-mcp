@@ -319,6 +319,26 @@ async def test_compare_csv_export_escapes_a_formula_prefixed_location(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_compare_csv_export_escapes_a_tab_prefixed_formula_location(monkeypatch):
+    """A cell that starts with a tab and then "=" still evaluates as a
+    formula in Excel or Sheets, so the leading tab must not bypass the
+    quote guard. The JSON rows stay exact."""
+    formula = '\t=WEBSERVICE("x")'
+    by_location = {
+        formula: _profile(name=formula),
+        "Davao City": _profile(name="Davao City", psgc_code="112402000"),
+    }
+    _install(monkeypatch, by_location)
+
+    out = await compare.compare_areas([formula, "Davao City"], metrics=["population"], format="csv")
+
+    reader = csv.reader(io.StringIO(out["export"]))
+    lines = list(reader)
+    assert lines[1][0] == "'" + formula
+    assert out["rows"][0]["location"] == formula
+
+
+@pytest.mark.asyncio
 async def test_compare_two_clean_no_matches_is_invalid_request(monkeypatch):
     """Two places that resolve cleanly to no match are a caller mistake,
     not an outage."""
