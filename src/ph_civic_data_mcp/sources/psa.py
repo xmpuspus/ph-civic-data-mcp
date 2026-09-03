@@ -741,10 +741,12 @@ async def get_population_stats(
       get_population_stats(psgc_code="083747000")  same place, 9-digit code
       get_population_stats(psgc_code="1380100001") one barangay, 2024 Census
 
-    On an OpenSTAT outage: population null, upstream_error true, data_status
-    "unavailable", the real error in caveats. On a bad argument:
-    validation_error true, data_status "invalid_request". A code no census
-    table carries: data_status "empty". Failures are never cached.
+    On failure: data_status is "unavailable" when PSA is down, with
+    upstream_error true. data_status is "invalid_request" for an unknown
+    region, year, or PSGC code, with validation_error true. data_status is
+    "empty" when a valid PSGC code has no row in the chosen census table.
+    caveats always carries the real error text. population is None in every
+    failure. Failures are never cached.
 
     Args:
         region: Region, province or highly urbanized city as PSA labels it,
@@ -1081,12 +1083,19 @@ async def get_poverty_stats(region: str | None = None) -> dict:
 
     geo_hit = _find_geo_value(meta, region, "Geolocation")
     if geo_hit is None:
-        return {
-            "region": region or "Philippines",
-            "caveats": [f"Region '{region}' not found in PSA poverty table"],
-            "source": "PSA",
-            "data_retrieved_at": _now().isoformat(),
-        }
+        # A caller mistake, not an outage. failure_result sets data_status
+        # "invalid_request" and validation_error true, and keeps
+        # poverty_incidence_pct present as None so a caller that indexes it
+        # does not raise KeyError.
+        return failure_result(
+            "PSA",
+            f"{PSA_API_BASE}/DB/",
+            f"Region '{region}' not found in PSA poverty table",
+            license=PSA_LICENSE,
+            validation_error=True,
+            region=region or "Philippines",
+            poverty_incidence_pct=None,
+        )
     geo_val, geo_text = geo_hit
 
     measure_code, measure_values, measure_texts = _variable_values(meta, "Incidence")
@@ -1535,7 +1544,11 @@ async def get_inflation_stats(area: str | None = None) -> dict:
     if "2018=100" in title.replace(" ", ""):
         base_year = "2018"
 
-    # Walk newest year backwards until we find a published month.
+    # Walk newest year backwards until we find a published month. A raised
+    # PSAUpstreamError means the POST itself failed and must not fall back to
+    # an older year as if it were the latest. An empty "data" on a response
+    # that did come back means PSA has no rows for that year yet, which is
+    # the one case that may fall back to the year before it.
     for year_code in reversed(year_codes):
         query = {
             "query": [
@@ -1549,8 +1562,11 @@ async def get_inflation_stats(area: str | None = None) -> dict:
             ],
             "response": {"format": "json"},
         }
-        payload = await _post_json(table_url, query)
-        if not payload or not payload.get("data"):
+        try:
+            payload = await _post_json_or_raise(table_url, query)
+        except PSAUpstreamError as exc:
+            return _err(f"PSA CPI query failed: {exc}")
+        if not payload.get("data"):
             continue
         period_code_var = next(
             (c for c in _key_columns(payload) if c.lower() == "period"), "Period"
@@ -1683,6 +1699,9 @@ async def get_labor_stats(region: str | None = None) -> dict:
     rate_codes = rates_var.get("values", [])
     month_codes = month_var.get("values", [])
 
+    # Same shape as get_inflation_stats: a raised PSAUpstreamError is a POST
+    # failure and must not fall back to an older year. An empty "data" on a
+    # real response is the one case that may fall back to the year before.
     for year_code in reversed(year_var.get("values", [])):
         query = {
             "query": [
@@ -1693,8 +1712,11 @@ async def get_labor_stats(region: str | None = None) -> dict:
             ],
             "response": {"format": "json"},
         }
-        payload = await _post_json(table_url, query)
-        if not payload or not payload.get("data"):
+        try:
+            payload = await _post_json_or_raise(table_url, query)
+        except PSAUpstreamError as exc:
+            return _err(f"PSA LFS query failed: {exc}")
+        if not payload.get("data"):
             continue
         cols = _key_columns(payload)
         month_col = next((c for c in cols if c.lower() == "month"), "Month")
