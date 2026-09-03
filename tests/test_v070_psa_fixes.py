@@ -302,6 +302,71 @@ async def test_poverty_no_matching_incidence_measure_is_indeterminate_not_a_gues
     assert "Poverty Incidence among Population" in joined
 
 
+@pytest.mark.asyncio
+async def test_subsistence_no_matching_incidence_measure_is_withheld_not_a_guess(monkeypatch):
+    """Falling back to sub_mv[0] once published an unrelated measure, such as
+    a food threshold amount, as subsistence_incidence_pct. No match must not
+    guess, and the headline poverty figure must still publish."""
+    poverty_meta = {
+        "variables": [
+            {
+                "code": "Geolocation",
+                "text": "Geolocation",
+                "values": ["0"],
+                "valueTexts": ["Philippines"],
+            },
+            {
+                "code": "Incidence",
+                "text": "Incidence",
+                "values": ["0"],
+                "valueTexts": ["Poverty Incidence among Families"],
+            },
+            {"code": "Year", "text": "Year", "values": ["0"], "valueTexts": ["2023"]},
+        ]
+    }
+    subsistence_meta = {
+        "variables": [
+            {
+                "code": "Geolocation",
+                "text": "Geolocation",
+                "values": ["0"],
+                "valueTexts": ["Philippines"],
+            },
+            {
+                "code": "Incidence",
+                "text": "Incidence",
+                "values": ["0", "1"],
+                "valueTexts": [
+                    "Annual Per Capita Food Threshold",
+                    "Subsistence Incidence among Population",
+                ],
+            },
+            {"code": "Year", "text": "Year", "values": ["0"], "valueTexts": ["2023"]},
+        ]
+    }
+
+    async def _fake_discover():
+        return "https://example.test/poverty.px", poverty_meta
+
+    async def _fake_subsistence():
+        return "https://example.test/subsistence.px", subsistence_meta
+
+    async def _post(url, query):
+        return {"columns": [{"code": "x", "type": "c"}], "data": [{"key": ["0"], "values": ["18.1"]}]}
+
+    monkeypatch.setattr(psa_module, "_discover_poverty_table", _fake_discover)
+    monkeypatch.setattr(psa_module, "_discover_subsistence_table", _fake_subsistence)
+    monkeypatch.setattr(psa_module, "_post_json_or_raise", _post)
+
+    result = await psa_module.get_poverty_stats()
+
+    assert result["poverty_incidence_pct"] == pytest.approx(18.1)
+    assert result["subsistence_incidence_pct"] is None
+    joined = " ".join(result["caveats"])
+    assert "Annual Per Capita Food Threshold" in joined
+    assert "Subsistence Incidence among Population" in joined
+
+
 HEALTH_META = {
     "title": "Maternal Mortality Ratio",
     "variables": [
@@ -344,3 +409,64 @@ async def test_health_empty_in_every_year_is_an_error_not_a_cached_null(monkeypa
     value, year_text, error = await psa_module._latest_health_value("https://x/mmr.px", HEALTH_META)
     assert value is None
     assert error and "no data rows" in error
+
+
+def _install_health_catalog(monkeypatch, entries, fetch_calls):
+    """Route _browse to `entries` and count each metadata fetch in `fetch_calls`."""
+
+    async def _fake_browse(path):
+        return entries
+
+    async def _fake_get_json(url):
+        fetch_calls.append(url)
+        return {"title": url, "variables": []}
+
+    async def _fake_latest(table_url, meta):
+        return 1.0, "2023", None
+
+    monkeypatch.setattr(psa_module, "_browse", _fake_browse)
+    monkeypatch.setattr(psa_module, "_get_json_or_raise", _fake_get_json)
+    monkeypatch.setattr(psa_module, "_latest_health_value", _fake_latest)
+
+
+@pytest.mark.asyncio
+async def test_health_whitespace_indicator_behaves_like_the_default_set(monkeypatch):
+    """" " is truthy, so it once skipped the curated default set. The
+    substring check then matched it against every table, since "" is a
+    substring of anything. A blank indicator must behave like None."""
+    entries = [
+        {"id": "mmr.px", "type": "t", "text": "Maternal Mortality Ratio"},
+        {"id": "tfr.px", "type": "t", "text": "Total Fertility Rate"},
+        {"id": "other.px", "type": "t", "text": "Some Other Health Table"},
+    ]
+
+    default_calls: list[str] = []
+    _install_health_catalog(monkeypatch, entries, default_calls)
+    CACHES["psa_health"].clear()
+    default_result = await psa_module.get_health_indicators()
+
+    blank_calls: list[str] = []
+    _install_health_catalog(monkeypatch, entries, blank_calls)
+    CACHES["psa_health"].clear()
+    blank_result = await psa_module.get_health_indicators(" ")
+
+    assert len(blank_calls) == len(default_calls) == 2
+    assert len(blank_result["indicators"]) == len(default_result["indicators"])
+
+
+@pytest.mark.asyncio
+async def test_health_broad_indicator_caps_metadata_fetches_at_ten(monkeypatch):
+    """With no bound, a broad keyword fanned out one metadata fetch per
+    matched table, against PSA's 10-per-10-second rate limit."""
+    entries = [
+        {"id": f"table{i}.px", "type": "t", "text": f"Health Table {i}"} for i in range(25)
+    ]
+    fetch_calls: list[str] = []
+    _install_health_catalog(monkeypatch, entries, fetch_calls)
+    CACHES["psa_health"].clear()
+
+    result = await psa_module.get_health_indicators("Health Table")
+
+    assert len(fetch_calls) <= 10
+    assert len(result["indicators"]) <= 10
+    assert any("10" in c for c in result["caveats"])

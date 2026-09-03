@@ -865,6 +865,7 @@ async def query_psa_dataset(
     misaligned = 0
     unparseable = 0
     malformed_key_rows = 0
+    value_malformed = 0
     for record in payload.get("data", []):
         if not isinstance(record, dict):
             malformed_key_rows += 1
@@ -885,14 +886,20 @@ async def query_psa_dataset(
             raw = None
         elif not values:
             # An empty array is a row with no cell at all, which is drift, not
-            # the '..' PSA writes for a value it does not publish.
+            # the '..' PSA writes for a value it does not publish. It must not
+            # pass as a confirmed null in an ordinary success response.
             misaligned += 1
+            value_malformed += 1
             raw = None
         else:
             raw = values[0]
         parsed = _to_float(raw)
         if parsed is None and raw is not None and str(raw).strip() not in PSA_MISSING_MARKERS:
+            # Not a number and not one of PSA's own missing-value markers, so
+            # this is a parse failure. It must not pass as a confirmed null in
+            # an ordinary success response either.
             unparseable += 1
+            value_malformed += 1
         rows.append(
             {
                 "keys": keys,
@@ -953,6 +960,17 @@ async def query_psa_dataset(
         caveats.append(
             f"{misaligned} row(s) carried a key count that does not match the "
             f"{len(columns)} dimension columns; those rows are partially mapped."
+        )
+    if value_malformed:
+        # An empty values array, or a value that is not a number and not one
+        # of PSA's missing-value markers, is drift, not a confirmed reading.
+        # A row like this once passed as a null cell in a success response.
+        out["data_status"] = DATA_STATUS_INDETERMINATE
+        out["upstream_error"] = True
+        caveats.append(
+            f"{value_malformed} cell(s) had no readable value: an empty values "
+            "array or a value that is not a number and not a PSA missing-value "
+            "marker. The response is indeterminate, not a confirmed reading."
         )
     if 0 < total_rows < cells:
         # PXWeb answers every requested cell, writing ".." for one it does not

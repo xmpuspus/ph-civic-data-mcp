@@ -37,6 +37,9 @@ from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 PSA_API_BASE = "https://openstat.psa.gov.ph/PXWeb/api/v1/en"
 PSA_LICENSE = "PSA Open Data terms (Philippine Statistics Authority, OpenSTAT)"
+# Bounds one indicator fan-out to 10 metadata fetches, so a broad keyword
+# cannot fan out past PSA's 10-per-10-second rate limit.
+HEALTH_MATCH_CAP = 10
 
 
 def _now() -> datetime:
@@ -1178,11 +1181,24 @@ async def get_poverty_stats(region: str | None = None) -> dict:
         sub_geo = _find_geo_value(sub_meta, region, "Geolocation")
         sub_measure_code, sub_mv, sub_mt = _variable_values(sub_meta, "Incidence")
         if sub_geo and sub_mv:
-            sub_incidence_val = sub_mv[0]
+            sub_incidence_val = None
             for v, t in zip(sub_mv, sub_mt):
                 if "subsistence" in t.lower() and "famil" in t.lower():
                     sub_incidence_val = v
                     break
+        else:
+            sub_incidence_val = None
+        if sub_geo and sub_mv and sub_incidence_val is None:
+            # Falling back to sub_mv[0] here once published an unrelated
+            # measure, such as a food threshold amount, as
+            # subsistence_incidence_pct. No match means withhold the figure
+            # rather than guess. The headline poverty figure still publishes.
+            offered = ", ".join(repr(t) for t in sub_mt)
+            partial.append(
+                "PSA subsistence table offers no 'subsistence incidence among "
+                f"families' measure. Measures found: {offered}."
+            )
+        elif sub_geo and sub_mv and sub_incidence_val is not None:
             sub_year_code, sub_yv, sub_yt = _variable_values(sub_meta, "Year")
             sub_year_val = sub_yv[-1] if sub_yv else "0"
             sub_year_int = _year_from_label(sub_yt[-1]) if sub_yt else None
@@ -1928,6 +1944,12 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
         indicator: Optional free-text indicator name, for example "maternal
                    mortality", "fertility". None returns the default headline set.
     """
+    # A whitespace-only value such as " " is truthy, so it once skipped the
+    # curated default set and, through the substring match below, matched
+    # every catalog table. Strip first, and treat a blank result as None.
+    indicator = indicator.strip() if indicator else indicator
+    indicator = indicator or None
+
     key = cache_key({"tool": "health", "indicator": indicator})
     cache = CACHES["psa_health"]
     if key in cache:
@@ -1972,6 +1994,16 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
         ]
         caveat = None
 
+    cap_caveat = None
+    if len(chosen) > HEALTH_MATCH_CAP:
+        # No bound here made a broad keyword fan out one metadata fetch per
+        # matched table, against PSA's 10-per-10-second rate limit.
+        cap_caveat = (
+            f"{len(chosen)} PSA Health tables matched; fetching only the first "
+            f"{HEALTH_MATCH_CAP}."
+        )
+        chosen = chosen[:HEALTH_MATCH_CAP]
+
     indicators: list[dict] = []
     unavailable: list[str] = []
     for entry in chosen:
@@ -2000,7 +2032,7 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
         )
         indicators.append({**model.model_dump(mode="json"), "source_table": table_url})
 
-    caveats = [caveat] if caveat else []
+    caveats = [c for c in (caveat, cap_caveat) if c]
     if unavailable:
         caveats.append(
             f"{len(unavailable)} of {len(chosen)} matched tables did not load: {unavailable}"
