@@ -24,7 +24,7 @@ from ph_civic_data_mcp.utils.envelope import (
     failure_envelope,
     failure_result,
 )
-from ph_civic_data_mcp.utils.geo import city_to_coords, resolve_to_coords
+from ph_civic_data_mcp.utils.geo import GeoResolveError, city_to_coords, resolve_to_coords
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 PAGASA_LICENSE = "Public — PAGASA bulletin pages"
@@ -276,8 +276,9 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
 
     On failure, a location with no known coordinates returns days: [] and
     a caveat, with no data_status or upstream_error key. An Open-Meteo
-    fetch failure returns data_status "unavailable", upstream_error: true,
-    days: [], and the real error in caveats.
+    fetch failure, or a PSGC outage during location resolution, returns
+    data_status "unavailable", upstream_error: true, days: [], and the
+    real error in caveats.
 
     Args:
         location: Municipality, city, or province name.
@@ -300,7 +301,18 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
             cache[key] = result
             return result
 
-    coords = await resolve_to_coords(location)
+    try:
+        coords = await resolve_to_coords(location)
+    except GeoResolveError as exc:
+        log_stderr(f"get_weather_forecast PSGC resolve error: {exc}")
+        return failure_result(
+            "Open-Meteo",
+            OPEN_METEO_BASE,
+            f"PSGC location resolution failed ({exc}). Could not resolve '{location}'.",
+            location=location,
+            days=[],
+            data_source="open_meteo",
+        )
     if coords is None:
         coords = city_to_coords(location)
     if coords is None:

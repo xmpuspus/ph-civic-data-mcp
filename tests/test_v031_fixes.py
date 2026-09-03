@@ -163,3 +163,96 @@ async def test_get_weather_alerts_respects_no_active_warnings(monkeypatch):
     monkeypatch.setattr(pagasa, "fetch_with_retry", _fake_fetch)
     alerts = await pagasa.get_weather_alerts(region="another-unique-region")
     assert alerts == []
+
+
+# --- v0.7.0: a PSGC outage during location resolution must read as an -------
+# --- upstream outage, never as "no coordinates known for this place" -------
+
+
+@pytest.mark.asyncio
+async def test_resolve_to_coords_raises_geo_resolve_error_on_psgc_outage(monkeypatch):
+    """A PSGC transport failure must raise, not collapse to a silent None.
+
+    Codex cross-model finding: `get_weather_forecast("QC")` used to answer
+    "No coordinates known" while PSGC was down, even for a known alias.
+    """
+    from ph_civic_data_mcp.sources import psgc as psgc_module
+    from ph_civic_data_mcp.utils.cache import CACHES
+    from ph_civic_data_mcp.utils.geo import GeoResolveError, resolve_to_coords
+
+    CACHES["psgc_resolve"].clear()
+
+    async def _broken(query):
+        raise ConnectionError("PSGC down")
+
+    monkeypatch.setattr(psgc_module, "resolve_ph_location", _broken)
+
+    with pytest.raises(GeoResolveError, match="PSGC down"):
+        await resolve_to_coords("Marawi")
+
+
+@pytest.mark.asyncio
+async def test_get_weather_forecast_reports_upstream_error_on_psgc_outage(monkeypatch):
+    """A PSGC outage must surface as upstream_error, not an unknown place."""
+    from ph_civic_data_mcp.sources import pagasa
+    from ph_civic_data_mcp.sources import psgc as psgc_module
+    from ph_civic_data_mcp.utils.cache import CACHES
+
+    monkeypatch.delenv("PAGASA_API_TOKEN", raising=False)
+    CACHES["pagasa_forecast"].clear()
+    CACHES["psgc_resolve"].clear()
+
+    async def _broken(query):
+        raise ConnectionError("PSGC down")
+
+    monkeypatch.setattr(psgc_module, "resolve_ph_location", _broken)
+
+    result = await pagasa.get_weather_forecast("Marawi", days=3)
+
+    assert result["upstream_error"] is True
+    assert result["days"] == []
+    assert any("PSGC down" in c for c in result["caveats"])
+
+
+@pytest.mark.asyncio
+async def test_get_weather_forecast_manila_skips_psgc_call(monkeypatch):
+    """A known city must resolve from CITY_COORDS and never reach PSGC."""
+    from ph_civic_data_mcp.sources import pagasa
+    from ph_civic_data_mcp.sources import psgc as psgc_module
+    from ph_civic_data_mcp.utils.cache import CACHES
+
+    monkeypatch.delenv("PAGASA_API_TOKEN", raising=False)
+    CACHES["pagasa_forecast"].clear()
+
+    async def _must_not_call(query):
+        raise AssertionError("a known city must not call PSGC")
+
+    monkeypatch.setattr(psgc_module, "resolve_ph_location", _must_not_call)
+
+    async def _fake_forecast(location, lat, lng, days):
+        return {
+            "location": location,
+            "days": [
+                {
+                    "date": "2026-09-05",
+                    "temp_min_c": 24,
+                    "temp_max_c": 31,
+                    "rainfall_mm": 0,
+                    "wind_speed_kph": 10,
+                    "wind_direction": "NE",
+                    "weather_description": "Partly cloudy",
+                }
+            ],
+            "data_source": "open_meteo",
+            "data_retrieved_at": "2026-09-04T00:00:00+00:00",
+            "source": "Open-Meteo",
+            "source_url": "https://api.open-meteo.com/v1/forecast",
+            "license": "Open-Meteo CC-BY 4.0",
+        }
+
+    monkeypatch.setattr(pagasa, "_open_meteo_forecast", _fake_forecast)
+
+    result = await pagasa.get_weather_forecast("Manila", days=3)
+    assert result["location"] == "Manila"
+    assert result["data_source"] == "open_meteo"
+    assert len(result["days"]) == 1

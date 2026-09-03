@@ -468,3 +468,62 @@ async def test_concurrent_fetch_one_hits_upstream_once(monkeypatch):
     results = await asyncio.gather(*[psgc_module._fetch_one("130000000") for _ in range(20)])
     assert all(r == payload for r in results)
     assert calls["n"] == 1, f"fetched {calls['n']} times, expected 1"
+
+
+# ---------------------------------------------------------------------------
+# v0.7.0: a 5xx/429/401/403 response must not be treated as a clean miss.
+# Codex cross-model finding: `_fetch_one` and `_fetch_barangay_by_code` only
+# checked for `status_code == 200`, so an outage response fell through the
+# same path as a 404 and got cached as "code does not exist" for 24 hours.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_location_hierarchy_5xx_reports_upstream_error(monkeypatch):
+    def _outage_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "service unavailable"})
+
+    transport = httpx.MockTransport(_outage_handler)
+    bad_client = httpx.AsyncClient(transport=transport, base_url="https://psgc.gitlab.io")
+    monkeypatch.setattr(psgc_module, "CLIENT", bad_client)
+    CACHES["psgc_browse"].clear()
+
+    result = await psgc_module.get_location_hierarchy("999999999")
+
+    assert result["chain"] == []
+    assert result["upstream_error"] is True
+    assert any("503" in c or "HTTP" in c for c in result["caveats"])
+    key = psgc_module.cache_key({"endpoint": "one", "code": "999999999"})
+    assert key not in CACHES["psgc_browse"], "an outage must never cache a false not-found"
+
+
+@pytest.mark.asyncio
+async def test_get_location_hierarchy_404_stays_clean_miss_and_caches(monkeypatch):
+    def _not_found_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "not found"})
+
+    transport = httpx.MockTransport(_not_found_handler)
+    clean_client = httpx.AsyncClient(transport=transport, base_url="https://psgc.gitlab.io")
+    monkeypatch.setattr(psgc_module, "CLIENT", clean_client)
+    CACHES["psgc_browse"].clear()
+
+    result = await psgc_module.get_location_hierarchy("999999999")
+
+    assert result["chain"] == []
+    assert "upstream_error" not in result
+    key = psgc_module.cache_key({"endpoint": "one", "code": "999999999"})
+    assert key in CACHES["psgc_browse"]
+    assert CACHES["psgc_browse"][key] is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_barangay_by_code_raises_on_503(monkeypatch):
+    def _outage_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "service unavailable"})
+
+    transport = httpx.MockTransport(_outage_handler)
+    bad_client = httpx.AsyncClient(transport=transport, base_url="https://psgc.gitlab.io")
+    monkeypatch.setattr(psgc_module, "CLIENT", bad_client)
+
+    with pytest.raises(psgc_module.PSGCFetchError):
+        await psgc_module._fetch_barangay_by_code("012801001")
