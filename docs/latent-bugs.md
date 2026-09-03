@@ -131,7 +131,7 @@ another number.
 
 Severity: medium. It is a wrong published figure, not a missing one.
 
-## 11. World Bank: a wrong-typed records object caches as an empty success
+## 11. FIXED in v0.7.0. World Bank: a wrong-typed records object caches as an empty success
 
 `sources/world_bank.py`. v0.6.0 added `upstream_error` to the two failure paths
 it has, but a 200 carrying an unexpected type still falls through to a normal
@@ -147,7 +147,7 @@ and cache as the current series. The tool then reports stale figures as latest.
 
 Severity: high. It publishes a wrong vintage silently. Predates v0.4.0.
 
-## 13. A failed CPI query for the newest year falls back to an older year
+## 13. FIXED in v0.7.0. A failed CPI query for the newest year falls back to an older year
 
 `sources/psa.py`, in `get_inflation_stats`. The year loop walks backwards and
 returns the first year that answers, labelling it the latest available result.
@@ -163,7 +163,7 @@ entry in the metadata, it returns `values[0]`, which is whatever sits first.
 
 Severity: medium. Only metadata drift reaches it.
 
-## 15. A year-filtered infra search keeps records with an unknown year
+## 15. FIXED in v0.7.0. A year-filtered infra search keeps records with an unknown year
 
 `sources/infra.py`. A record whose publication year cannot be parsed passes a
 year filter instead of being excluded.

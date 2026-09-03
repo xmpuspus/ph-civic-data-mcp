@@ -7,9 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.7.0] - 2026-09-04
 
 `v0.7.0` adds two tools, `compare_areas` and `search_psa_catalog`, and raises
-the tool count from 32 to 34. It closes five items in `docs/latent-bugs.md`
-(6, 9, 10, 12, 18) and eight more defects found in review. Most of them let
-an upstream failure cache as a normal answer. `get_area_profile` now reports a resolved place's own population and
+the tool count from 32 to 34. It closes eight items in `docs/latent-bugs.md`
+(6, 9, 10, 11, 12, 13, 15, 18) and 19 more defects that three Codex review
+passes found. Most of them let an upstream failure cache as a normal answer.
+`get_area_profile` now reports a resolved place's own population and
 poverty, with full provenance, plus a national reference for comparison. The
 release pipeline gains trusted publishing, pinned Actions and Docker images,
 and offline fixtures for six sources that had none. No existing tool name
