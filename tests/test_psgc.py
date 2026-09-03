@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 
 import httpx
 import pytest
@@ -232,3 +233,187 @@ def test_score_ranking():
         "manila", "Iloilo City"
     )
     assert psgc_module._score("", "Manila") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# v0.7.0: prominence tiebreak — a bare name must resolve to the well-known
+# city, not a same-named municipality or the containing province.
+#
+# The live mirror carries `isCity`/`isMunicipality` booleans on every
+# cities-municipalities record and sends no `type` string at all, so these
+# fixtures use that real shape rather than the `type: "City"` shape used
+# above (which only some other callers, and none of the real mirror
+# endpoints, send).
+# ---------------------------------------------------------------------------
+
+PROMINENCE_REGIONS_PAYLOAD = [
+    {"code": "060000000", "name": "Western Visayas", "regionName": "Region VI"},
+    {"code": "070000000", "name": "Central Visayas", "regionName": "Region VII"},
+    {"code": "100000000", "name": "Northern Mindanao", "regionName": "Region X"},
+]
+
+PROMINENCE_PROVINCES_PAYLOAD = [
+    {"code": "072200000", "name": "Cebu", "regionCode": "070000000"},
+]
+
+PROMINENCE_CITIES_PAYLOAD = [
+    {
+        "code": "064501000",
+        "name": "City of Bacolod",
+        "isCity": True,
+        "isMunicipality": False,
+        "regionCode": "060000000",
+        "provinceCode": "",
+    },
+    {
+        "code": "103501000",
+        "name": "Bacolod",
+        "isCity": False,
+        "isMunicipality": True,
+        "regionCode": "100000000",
+        "provinceCode": "103500000",
+    },
+    {
+        "code": "072217000",
+        "name": "City of Cebu",
+        "isCity": True,
+        "isMunicipality": False,
+        "regionCode": "070000000",
+        "provinceCode": "072200000",
+    },
+]
+
+
+def _prominence_handler(request: httpx.Request) -> httpx.Response:
+    path = request.url.path
+    if path.endswith("/regions/"):
+        return httpx.Response(200, json=PROMINENCE_REGIONS_PAYLOAD)
+    if path.endswith("/provinces/"):
+        return httpx.Response(200, json=PROMINENCE_PROVINCES_PAYLOAD)
+    if path.endswith("/cities-municipalities/"):
+        return httpx.Response(200, json=PROMINENCE_CITIES_PAYLOAD)
+    if path.endswith("/barangays/"):
+        return httpx.Response(200, json=[])
+    return httpx.Response(404, json={"detail": f"unmocked: {path}"})
+
+
+@pytest.fixture()
+def _prominence_mock(monkeypatch):
+    transport = httpx.MockTransport(_prominence_handler)
+    client = httpx.AsyncClient(transport=transport, base_url="https://psgc.gitlab.io")
+    monkeypatch.setattr("ph_civic_data_mcp.sources.psgc.CLIENT", client)
+    for cache_name in ("psgc_browse", "psgc_resolve"):
+        CACHES[cache_name].clear()
+    yield
+
+
+@pytest.mark.asyncio
+async def test_prominence_prefers_city_over_bare_name_municipality(_prominence_mock):
+    """v0.7.0: 'Bacolod' exact-matched the small Lanao del Norte municipality
+    (isCity False) at score 1.0, beating 'City of Bacolod' (isCity True) at
+    about 0.9. Live-checked against the real mirror on 2026-09-03."""
+    result = await psgc_module.resolve_ph_location("Bacolod")
+    assert result["name"] == "City of Bacolod"
+    assert result["psgc_code"] == "064501000"
+    alt_codes = {a["psgc_code"] for a in result["alternatives"]}
+    assert "103501000" in alt_codes, (
+        "the exact-match municipality must still show as an alternative"
+    )
+
+
+@pytest.mark.asyncio
+async def test_prominence_prefers_city_over_containing_province(_prominence_mock):
+    """v0.7.0: 'Cebu' exact-matched the province at score 1.0, beating
+    'City of Cebu' at about 0.88. Live-checked against the real mirror on
+    2026-09-03."""
+    result = await psgc_module.resolve_ph_location("Cebu")
+    assert result["name"] == "City of Cebu"
+    assert result["psgc_code"] == "072217000"
+    alt_codes = {a["psgc_code"] for a in result["alternatives"]}
+    assert "072200000" in alt_codes, "the exact-match province must still show as an alternative"
+
+
+# ---------------------------------------------------------------------------
+# v0.7.0: PSGC code shape validation. httpx collapses ".." path segments, so
+# a code that is not pure digits must never reach a URL.
+# ---------------------------------------------------------------------------
+
+_BAD_CODES = ["../../etc", "%2e%2e%2f", "not-a-code", ""]
+
+
+@pytest.fixture()
+def _forbid_network(monkeypatch):
+    async def _must_not_fetch(*args, **kwargs):
+        raise AssertionError("a malformed PSGC code must never reach a network call")
+
+    monkeypatch.setattr(psgc_module, "fetch_with_retry", _must_not_fetch)
+    yield
+
+
+@pytest.mark.parametrize("bad_code", _BAD_CODES)
+@pytest.mark.asyncio
+async def test_get_location_hierarchy_rejects_malformed_code(_forbid_network, bad_code):
+    result = await psgc_module.get_location_hierarchy(bad_code)
+    assert result["validation_error"] is True
+    assert result["upstream_error"] is False
+    assert result["chain"] == []
+
+
+@pytest.mark.parametrize("bad_code", _BAD_CODES)
+@pytest.mark.asyncio
+async def test_fetch_one_rejects_malformed_code_without_network_call(_forbid_network, bad_code):
+    assert await psgc_module._fetch_one(bad_code) is None
+
+
+@pytest.mark.parametrize("bad_code", _BAD_CODES)
+@pytest.mark.asyncio
+async def test_fetch_barangay_by_code_rejects_malformed_code_without_network_call(
+    _forbid_network, bad_code
+):
+    assert await psgc_module._fetch_barangay_by_code(bad_code) is None
+
+
+@pytest.mark.parametrize("bad_code", _BAD_CODES)
+@pytest.mark.asyncio
+async def test_lookup_psgc_code_rejects_malformed_code_without_network_call(
+    _forbid_network, bad_code
+):
+    assert await psgc_module.lookup_psgc_code(bad_code) is None
+
+
+# ---------------------------------------------------------------------------
+# v0.7.0: single-flight locks on `_fetch_level` and `_fetch_one`.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_fetch_level_hits_upstream_once(monkeypatch):
+    calls = {"n": 0}
+
+    async def _slow(client, method, url, **kwargs):
+        calls["n"] += 1
+        await asyncio.sleep(0.01)
+        return httpx.Response(200, json=REGIONS_PAYLOAD, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psgc_module, "fetch_with_retry", _slow)
+    CACHES["psgc_browse"].clear()
+    results = await asyncio.gather(*[psgc_module._fetch_level("region") for _ in range(20)])
+    assert all(r == REGIONS_PAYLOAD for r in results)
+    assert calls["n"] == 1, f"fetched {calls['n']} times, expected 1"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_fetch_one_hits_upstream_once(monkeypatch):
+    calls = {"n": 0}
+    payload = {"code": "130000000", "name": "National Capital Region"}
+
+    async def _slow(client, method, url, **kwargs):
+        calls["n"] += 1
+        await asyncio.sleep(0.01)
+        return httpx.Response(200, json=payload, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psgc_module, "fetch_with_retry", _slow)
+    CACHES["psgc_browse"].clear()
+    results = await asyncio.gather(*[psgc_module._fetch_one("130000000") for _ in range(20)])
+    assert all(r == payload for r in results)
+    assert calls["n"] == 1, f"fetched {calls['n']} times, expected 1"

@@ -13,6 +13,9 @@ Tools:
 
 from __future__ import annotations
 
+import asyncio
+import re
+
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from typing import Any
@@ -24,11 +27,26 @@ from ph_civic_data_mcp.models.location import (
 )
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.envelope import failure_envelope
+from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_INVALID_REQUEST,
+    failure_envelope,
+    failure_result,
+)
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 PSGC_BASE = "https://psgc.gitlab.io/api"
 PSGC_LICENSE = "Public domain (PSA Philippine Standard Geographic Code)"
+
+# A PSGC code is pure digits: the 9-digit code (leading zeros optional) or the
+# 10-digit edition. httpx collapses ".." path segments, so a code carrying a
+# letter, a dot, or a slash could walk a request outside `/api/<level>/<code>/`.
+# world_bank.py hit the same bug class with a non-numeric indicator code.
+_CODE_RE = re.compile(r"^\d{1,10}$")
+
+
+def _valid_psgc_code(code: str) -> bool:
+    return bool(_CODE_RE.match(code))
+
 
 # Common nicknames and abbreviations that the fuzzy scorer cannot bridge on
 # its own ("QC" scores nowhere near "Quezon City"). Keys are compared
@@ -168,6 +186,30 @@ async def _record_to_psgc(item: dict[str, Any], level_hint: str | None = None) -
     )
 
 
+# One lock per admin level, bounded even though LEVEL_ENDPOINTS only ever
+# defines 8 keys. N concurrent cold resolves for the same level used to queue
+# N identical GETs behind the rate limiter, and the later ones could blow
+# their own timeout while the first result sat unused. Same pattern as
+# `psa._browse_lock`.
+_MAX_LEVEL_LOCKS = 32
+_LEVEL_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _level_lock(level: str) -> asyncio.Lock:
+    lock = _LEVEL_LOCKS.get(level)
+    if lock is not None:
+        return lock
+    if len(_LEVEL_LOCKS) >= _MAX_LEVEL_LOCKS:
+        for key in [k for k, held in _LEVEL_LOCKS.items() if not held.locked()]:
+            del _LEVEL_LOCKS[key]
+        if len(_LEVEL_LOCKS) >= _MAX_LEVEL_LOCKS:
+            # Every remaining lock is in use. Serve this call an unshared
+            # lock rather than evict one; it costs one duplicate fetch, not
+            # a bug.
+            return asyncio.Lock()
+    return _LEVEL_LOCKS.setdefault(level, asyncio.Lock())
+
+
 async def _fetch_level(level: str) -> list[dict[str, Any]]:
     """Fetch and cache the full list at one administrative level."""
     endpoint = LEVEL_ENDPOINTS.get(level)
@@ -178,16 +220,21 @@ async def _fetch_level(level: str) -> list[dict[str, Any]]:
     if key in cache:
         return cache[key]
 
-    # Failures raise — a transient PSGC outage must not be cached as an empty
-    # level list for 24h (which made every resolve report "no match").
-    response = await fetch_with_retry(CLIENT, "GET", f"{PSGC_BASE}/{endpoint}/")
-    response.raise_for_status()
-    data = response.json()
+    # Single-flight: without the lock, concurrent cold calls for one level
+    # each miss the cache and each fetch.
+    async with _level_lock(level):
+        if key in cache:
+            return cache[key]
+        # Failures raise — a transient PSGC outage must not be cached as an
+        # empty level list for 24h (which made every resolve report "no match").
+        response = await fetch_with_retry(CLIENT, "GET", f"{PSGC_BASE}/{endpoint}/")
+        response.raise_for_status()
+        data = response.json()
 
-    if not isinstance(data, list):
-        raise RuntimeError(f"PSGC {endpoint} endpoint returned non-list payload")
-    cache[key] = data
-    return data
+        if not isinstance(data, list):
+            raise RuntimeError(f"PSGC {endpoint} endpoint returned non-list payload")
+        cache[key] = data
+        return data
 
 
 class PSGCFetchError(RuntimeError):
@@ -201,53 +248,82 @@ class PSGCFetchError(RuntimeError):
     """
 
 
+# One lock per code, bounded the same way as `_level_lock`. A caller-supplied
+# code has far more possible values than an admin level, so the cap is wider.
+_MAX_ONE_LOCKS = 256
+_ONE_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _one_lock(code: str) -> asyncio.Lock:
+    lock = _ONE_LOCKS.get(code)
+    if lock is not None:
+        return lock
+    if len(_ONE_LOCKS) >= _MAX_ONE_LOCKS:
+        for key in [k for k, held in _ONE_LOCKS.items() if not held.locked()]:
+            del _ONE_LOCKS[key]
+        if len(_ONE_LOCKS) >= _MAX_ONE_LOCKS:
+            return asyncio.Lock()
+    return _ONE_LOCKS.setdefault(code, asyncio.Lock())
+
+
 async def _fetch_one(code: str) -> dict[str, Any] | None:
     """Try each level endpoint to retrieve one PSGC record by code.
 
     Raises PSGCFetchError only when every endpoint failed on a transport
     error and none answered cleanly (a 200 or a 404). A clean "not found at
-    any level" still returns None.
+    any level" still returns None. A malformed code returns None straight
+    away; no endpoint is ever called with it.
     """
+    if not _valid_psgc_code(code):
+        return None
     key = cache_key({"endpoint": "one", "code": code})
     cache = CACHES["psgc_browse"]
     if key in cache:
         return cache[key]
 
-    had_errors = False
-    last_exc: Exception | None = None
-    for endpoint in (
-        "regions",
-        "provinces",
-        "cities-municipalities",
-        "districts",
-        "sub-municipalities",
-    ):
-        try:
-            response = await fetch_with_retry(CLIENT, "GET", f"{PSGC_BASE}/{endpoint}/{code}/")
-            if response.status_code == 200:
-                payload = response.json()
-                if isinstance(payload, dict) and payload.get("code"):
-                    cache[key] = payload
-                    return payload
-        except Exception as exc:
-            log_stderr(f"PSGC code fetch error ({endpoint}/{code}): {exc}")
-            had_errors = True
-            last_exc = exc
-            continue
-    # Only cache a genuine miss; a None born from upstream errors must not
-    # pin "code does not exist" for the 24h TTL.
-    if had_errors:
-        raise PSGCFetchError(f"PSGC mirror unreachable for code '{code}': {last_exc}")
-    cache[key] = None
-    return None
+    # Single-flight: without the lock, concurrent cold calls for one code
+    # each miss the cache and each fetch every endpoint.
+    async with _one_lock(code):
+        if key in cache:
+            return cache[key]
+        had_errors = False
+        last_exc: Exception | None = None
+        for endpoint in (
+            "regions",
+            "provinces",
+            "cities-municipalities",
+            "districts",
+            "sub-municipalities",
+        ):
+            try:
+                response = await fetch_with_retry(CLIENT, "GET", f"{PSGC_BASE}/{endpoint}/{code}/")
+                if response.status_code == 200:
+                    payload = response.json()
+                    if isinstance(payload, dict) and payload.get("code"):
+                        cache[key] = payload
+                        return payload
+            except Exception as exc:
+                log_stderr(f"PSGC code fetch error ({endpoint}/{code}): {exc}")
+                had_errors = True
+                last_exc = exc
+                continue
+        # Only cache a genuine miss; a None born from upstream errors must
+        # not pin "code does not exist" for the 24h TTL.
+        if had_errors:
+            raise PSGCFetchError(f"PSGC mirror unreachable for code '{code}': {last_exc}")
+        cache[key] = None
+        return None
 
 
 async def _fetch_barangay_by_code(code: str) -> dict[str, Any] | None:
     """Barangay lookup endpoint exists separately.
 
     Raises PSGCFetchError on a transport failure. Returns None only for a
-    clean non-200 response, which means the code is not a barangay.
+    clean non-200 response, which means the code is not a barangay. A
+    malformed code returns None straight away, with no request sent.
     """
+    if not _valid_psgc_code(code):
+        return None
     try:
         response = await fetch_with_retry(CLIENT, "GET", f"{PSGC_BASE}/barangays/{code}/")
     except Exception as exc:
@@ -279,9 +355,12 @@ async def lookup_psgc_code(code: str) -> dict[str, Any] | None:
     unknown code from an unreachable mirror. The mirror keys its per-record
     endpoints on the 9-digit code, so a 10-digit code is found by scanning the
     cached level lists (the barangay list is about 11 MB, fetched once a day).
-    Not a tool.
+    Not a tool, but `psa.py` passes a caller-supplied code straight through,
+    so a malformed code still returns None with no request sent.
     """
     code = code.strip()
+    if not _valid_psgc_code(code):
+        return None
     if len(code) == 10:
         for level in ("region", "province", "city-municipality", "barangay"):
             for item in await _fetch_level(level):
@@ -386,6 +465,55 @@ def _candidate_queries(query: str) -> list[str]:
     return deduped
 
 
+# A bare place name like "Bacolod" or "Cebu" matches its small same-named
+# municipality, or the province it sits in, exactly (score 1.0). The
+# well-known city ("City of Bacolod", "City of Cebu") only scores a fuzzy
+# substring match, 0.85 to 0.95 by construction of `_score`. Live-checked
+# 2026-09-03: the real gap for Bacolod/Cebu/Davao/Iloilo runs 0.004 to
+# 0.117. Within this margin, prefer the candidate `_classify_level` calls a
+# city over one it calls a municipality or a province.
+_PROMINENCE_EPSILON = 0.15
+
+
+def _is_city_record(item: dict[str, Any]) -> bool:
+    """True when a cities-municipalities record is an incorporated city.
+
+    The live PSGC mirror sends `isCity`/`isMunicipality` booleans on every
+    record and no `type` string at all, so `_classify_level` (which reads
+    `type` first, then falls back to a 9-digit code shape that cannot tell a
+    city from a municipality) always answers "city-municipality" here, never
+    the bare "city" a caller might expect. Read the boolean directly; fall
+    back to `_classify_level` only for a record that does carry a `type`
+    string, such as the fixtures in test_psgc.py.
+    """
+    is_city = item.get("isCity")
+    if isinstance(is_city, bool):
+        return is_city
+    return _classify_level(item) == "city"
+
+
+def _prefer_prominent(
+    pool: list[tuple[float, dict[str, Any], str]],
+) -> tuple[float, dict[str, Any], str]:
+    """Among candidates near the top score, prefer an actual city.
+
+    `pool` is sorted by score descending. Only a candidate within
+    `_PROMINENCE_EPSILON` of the outright top score is eligible, so a
+    genuinely distinct, lower-scoring match is never promoted. Several
+    candidates tied at the very top score (real same-named places, like the
+    four "San Juan" municipalities and cities) still keep their ranking
+    among themselves; the search below just moves a top-of-pack city ahead
+    of a top-of-pack municipality or province.
+    """
+    top_score = pool[0][0]
+    for score, item, level_key in pool:
+        if top_score - score > _PROMINENCE_EPSILON:
+            break
+        if _is_city_record(item):
+            return score, item, level_key
+    return pool[0]
+
+
 async def _resolve_query(query: str) -> dict | None:
     """Search across cities-municipalities, provinces, regions for the best match."""
     if not query:
@@ -431,6 +559,9 @@ async def _resolve_query(query: str) -> dict | None:
 
     if best is None:
         return None
+
+    if best_pool:
+        best = _prefer_prominent(best_pool)
 
     score, top, level = best
     record = await _record_to_psgc(top, level_hint=level)
@@ -755,18 +886,20 @@ async def get_location_hierarchy(psgc_code: str) -> dict:
     Returns: psgc_code, chain (list of {psgc_code, name, level, source_url}),
     source, license, data_retrieved_at.
     """
-    if not psgc_code:
-        return {
-            "psgc_code": "",
-            "chain": [],
-            "caveats": ["psgc_code is empty"],
-            "source": "PSGC",
-            "source_url": PSGC_BASE,
-            "license": PSGC_LICENSE,
-            "data_retrieved_at": _now().isoformat(),
-        }
-
-    code = psgc_code.strip()
+    code = (psgc_code or "").strip()
+    if not _valid_psgc_code(code):
+        # A caller mistake, not an outage: never reaches a URL. httpx
+        # collapses ".." path segments, so a shape check must run before the
+        # code is ever interpolated into a request.
+        return failure_result(
+            "PSGC",
+            PSGC_BASE,
+            f"psgc_code must be 1 to 10 digits (leading zeros optional). Got {psgc_code!r}.",
+            license=PSGC_LICENSE,
+            data_status=DATA_STATUS_INVALID_REQUEST,
+            psgc_code=psgc_code or "",
+            chain=[],
+        )
 
     record: dict[str, Any] | None = None
     level_hint = "region"
