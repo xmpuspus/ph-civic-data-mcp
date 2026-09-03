@@ -191,6 +191,25 @@ async def test_inflation_query_failure_on_newest_year_does_not_serve_older_year(
 
 
 @pytest.mark.asyncio
+async def test_inflation_malformed_payload_on_newest_year_does_not_serve_older_year(monkeypatch):
+    """A 200 body with no `data` list is malformed, not a genuine empty year."""
+    _clear_state()
+
+    def _malformed_2026(method, url):
+        return _resp(method, url, {})
+
+    _install_cpi_query(monkeypatch, _malformed_2026)
+
+    result = await psa_module.get_inflation_stats()
+
+    assert result["upstream_error"] is True
+    assert result["headline_inflation_pct"] is None
+    assert result["reference_period"] is None
+    assert all("3.5" not in c for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["psa_prices"]) == 0
+
+
+@pytest.mark.asyncio
 async def test_inflation_genuine_empty_year_still_falls_back_to_older_year(monkeypatch):
     """A real, rowless 2026 response is a legitimate fallback to 2025, unlike a POST failure."""
     _clear_state()

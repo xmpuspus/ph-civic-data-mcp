@@ -737,7 +737,12 @@ async def test_a_misaligned_row_is_reported_not_silently_truncated(monkeypatch):
 
     monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
     out = await cat.query_psa_dataset(DATASET, FULL)
-    assert any("key count" in c for c in out["caveats"]), out["caveats"]
+    # A key of the wrong length cannot map to a place or period, so the whole
+    # response fails instead of publishing a row with no geography attached.
+    assert out["upstream_error"] is True
+    assert out["data_status"] == DATA_STATUS_INDETERMINATE
+    assert out["rows"] == []
+    assert any("1 of 1" in c for c in out["caveats"]), out["caveats"]
 
 
 @pytest.mark.asyncio
@@ -980,8 +985,37 @@ async def test_a_malformed_row_does_not_crash_the_tool(monkeypatch):
 
     monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
     out = await cat.query_psa_dataset(DATASET, FULL)
-    assert not out.get("upstream_error")
-    assert any("key count" in c for c in out["caveats"]), out["caveats"]
+    # Neither row has a usable key, so the tool must not crash and must not
+    # publish a value with no geography or period.
+    assert out["upstream_error"] is True
+    assert out["rows"] == []
+    assert any("2 of 2" in c for c in out["caveats"]), out["caveats"]
+
+
+@pytest.mark.asyncio
+async def test_a_non_list_key_does_not_publish_a_bare_value(monkeypatch):
+    """A key that is not a list must not turn into keys: {}, value: 1.0."""
+    payload = {
+        "columns": [
+            {"code": "Major Island Group", "type": "d"},
+            {"code": "Among Families/Population", "type": "d"},
+            {"code": "Year", "type": "d"},
+            {"code": "V", "type": "c"},
+        ],
+        "data": [{"key": "abc", "values": ["1.0"]}],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, payload)
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(DATASET, FULL)
+    assert out["data_status"] == DATA_STATUS_INDETERMINATE
+    assert out["upstream_error"] is True
+    assert out["rows"] == []
+    assert any("1 of 1" in c for c in out["caveats"]), out["caveats"]
 
 
 @pytest.mark.asyncio

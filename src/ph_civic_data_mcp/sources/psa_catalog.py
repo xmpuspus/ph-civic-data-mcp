@@ -861,18 +861,20 @@ async def query_psa_dataset(
     rows: list[dict] = []
     misaligned = 0
     unparseable = 0
+    malformed_key_rows = 0
     for record in payload.get("data", []):
         if not isinstance(record, dict):
-            misaligned += 1
+            malformed_key_rows += 1
             continue
-        key = record.get("key") or []
-        if not isinstance(key, (list, tuple)):
-            misaligned += 1
-            key = []
+        key = record.get("key")
+        if not isinstance(key, (list, tuple)) or len(key) != len(columns):
+            # A key that is not a list, or the wrong length, cannot map to a
+            # real geography or period. Skip it rather than publish a number
+            # with no place or time attached.
+            malformed_key_rows += 1
+            continue
+        keys = {columns[i]: key[i] for i in range(len(columns))}
         values = record.get("values")
-        if len(key) != len(columns):
-            misaligned += 1
-        keys = {columns[i]: key[i] for i in range(min(len(columns), len(key)))}
         if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
             # PXWeb always sends a list here. Anything else is drift, and
             # indexing a string would hand back its first character as data.
@@ -897,6 +899,21 @@ async def query_psa_dataset(
                 },
                 "value": parsed,
             }
+        )
+
+    if malformed_key_rows:
+        total_records = len(payload.get("data", []))
+        return failure_result(
+            SOURCE_NAME,
+            url,
+            f"{malformed_key_rows} of {total_records} row(s) had a key that did "
+            "not map to the declared columns and were skipped rather than "
+            "published with no geography or period.",
+            license=PSA_LICENSE,
+            data_status=DATA_STATUS_INDETERMINATE,
+            dataset_path=path,
+            rows=[],
+            row_count=0,
         )
 
     total_rows = len(rows)
