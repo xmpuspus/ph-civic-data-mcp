@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from ph_civic_data_mcp.sources.autostitch import get_area_profile
+from tests.live_helpers import skip_if_outage
 
 
 # Hits live PSGC/PSA/PhilGEPS/PHIVOLCS/PAGASA with no offline fallback —
@@ -91,3 +92,21 @@ async def test_area_profile_per_capita_is_consistent() -> None:
     if pop and corr["infra_notices_per_100k_population"] is not None:
         expected = round(count / pop * 100_000, 2)
         assert corr["infra_notices_per_100k_population"] == expected
+
+
+@pytest.mark.asyncio
+async def test_area_profile_population_is_city_scale_not_region() -> None:
+    """A resolved city reports its own population, not its region's total.
+
+    Fix regression: before this fix, Tacloban (a city) reported Region
+    VIII's multi-million total under "demographics". Tacloban's own 2024
+    Census figure is 259,353, read live on 2026-09-03.
+    """
+    profile = await get_area_profile("Tacloban")
+    skip_if_outage(profile, "get_area_profile Tacloban")
+    _has_envelope(profile)
+    assert profile["resolved"]["level"] == "city"
+    population = profile["demographics"]["population"]
+    assert population is not None, profile["caveats"]
+    assert population < 500_000, population
+    assert profile["national_reference"]["population"] > 100_000_000

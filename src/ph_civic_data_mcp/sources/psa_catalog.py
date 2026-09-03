@@ -40,6 +40,14 @@ from ph_civic_data_mcp.sources.psa import (
     _to_float,
 )
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_INDETERMINATE,
+    DATA_STATUS_INVALID_REQUEST,
+    DATA_STATUS_SUCCESS,
+    DATA_STATUS_UNAVAILABLE,
+    DATA_STATUS_VALUES,
+    failure_result,
+)
 
 SOURCE_NAME = "PSA OpenSTAT"
 CATALOG_ROOT_URL = f"{PSA_API_BASE}/DB/"
@@ -205,6 +213,33 @@ QUERY_SCHEMA: dict[str, Any] = {
     "required": [*_REQUIRED, "dataset_path", "rows", "row_count"],
 }
 
+_MATCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {
+            "type": "string",
+            "description": "Pass to describe_psa_dataset or query_psa_dataset.",
+        },
+        "title": {"type": "string"},
+    },
+    "required": ["path", "title"],
+}
+
+SEARCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": "Dataset titles and paths matching a keyword, or a failure envelope.",
+    "properties": {
+        **_ENVELOPE_FIELDS,
+        "data_status": {"type": "string", "enum": sorted(DATA_STATUS_VALUES)},
+        "keyword": {"type": "string"},
+        "matches": {"type": "array", "items": _MATCH_SCHEMA},
+        "match_count": {"type": "integer"},
+        "total_available": {"type": "integer"},
+        "limit": {"type": "integer"},
+    },
+    "required": [*_REQUIRED, "keyword", "matches", "match_count"],
+}
+
 
 # ---------------------------------------------------------------------------
 # Path validation
@@ -275,11 +310,17 @@ def _dataset_url(path: str) -> str:
 
 
 def _base_envelope(source_url: str) -> dict:
+    # Every catalog response starts as a success. A failure helper below, or
+    # a later drift check, overwrites data_status and the matching flag, so
+    # the three keys can never disagree with each other.
     return {
         "source": SOURCE_NAME,
         "source_url": source_url,
         "license": PSA_LICENSE,
         "data_retrieved_at": _now().isoformat(),
+        "data_status": DATA_STATUS_SUCCESS,
+        "upstream_error": False,
+        "validation_error": False,
         "caveats": [],
     }
 
@@ -287,6 +328,7 @@ def _base_envelope(source_url: str) -> dict:
 def _validation_envelope(source_url: str, message: str, **extra: Any) -> dict:
     out = _base_envelope(source_url)
     out.update(extra)
+    out["data_status"] = DATA_STATUS_INVALID_REQUEST
     out["validation_error"] = True
     out["caveats"] = [message]
     return out
@@ -295,6 +337,7 @@ def _validation_envelope(source_url: str, message: str, **extra: Any) -> dict:
 def _upstream_envelope(source_url: str, message: str, **extra: Any) -> dict:
     out = _base_envelope(source_url)
     out.update(extra)
+    out["data_status"] = DATA_STATUS_UNAVAILABLE
     out["upstream_error"] = True
     out["caveats"] = [message]
     return out
@@ -426,9 +469,22 @@ def _total_cells(dims: list[dict]) -> int:
 async def browse_psa_catalog(path: str | None = None) -> dict:
     """List one level of the PSA OpenSTAT statistical catalog.
 
-    OpenSTAT publishes roughly 2,900 tables across 27 subjects. This walks that
-    tree one level at a time so an agent can find a dataset without guessing a
-    table id.
+    OpenSTAT publishes roughly 2,900 tables across 27 subjects. This walks
+    that tree one level at a time, so an agent can find a dataset without
+    guessing a table id. A `dataset` entry is a `.px` table. Pass its `path`
+    to describe_psa_dataset before calling query_psa_dataset. Folder depth
+    varies by subject, so keep browsing until entries come back as datasets. Examples:
+
+      browse_psa_catalog()          the 27 top-level subjects
+      browse_psa_catalog("1F")      one level into the Poverty subject
+      browse_psa_catalog("1F/FY")   the Full Year Poverty Statistics tables
+
+    On failure: data_status is "invalid_request" for a rejected argument
+    and "unavailable" for an OpenSTAT outage. A bad
+    path sets validation_error true before any request goes out. An
+    unreachable catalog sets upstream_error true, with the real error in
+    caveats. Both return an empty entries list, which never means an empty
+    folder.
 
     Args:
         path: Relative catalog path such as "1F" or "1F/FY". None or ""
@@ -438,14 +494,6 @@ async def browse_psa_catalog(path: str | None = None) -> dict:
     Returns: path, parent_path, entries (each with id, title, type
     "folder"/"dataset", and the `path` to pass back), folder_count,
     dataset_count, source, source_url, license, data_retrieved_at, caveats.
-
-    A `dataset` entry is a `.px` table. Pass its `path` to
-    describe_psa_dataset before calling query_psa_dataset. Folder depth varies
-    by subject, so keep browsing until entries come back as datasets.
-
-    On upstream failure this returns upstream_error: true with an empty
-    entries list. That means the catalog was unreachable, never that the
-    folder is empty.
     """
     try:
         safe = _normalize_path(path)
@@ -513,21 +561,28 @@ async def browse_psa_catalog(path: str | None = None) -> dict:
 async def describe_psa_dataset(dataset_path: str) -> dict:
     """Read the dimensions and valid value codes of one PSA OpenSTAT dataset.
 
-    Call this before query_psa_dataset. The query tool needs an explicit value
-    code for every dimension, and those codes live here.
+    Call this before query_psa_dataset. The query tool needs an explicit
+    value code for every dimension, and those codes live here. total_cells is
+    the size of the full cube. A query must select down to
+    max_cells_per_query or fewer, so pick explicit codes per dimension. Examples:
+
+      describe_psa_dataset("1F/FY/0241F3DF013.px")   dimensions and value codes for one table
+
+    On failure: data_status is "invalid_request" for a rejected argument
+    and "unavailable" for an OpenSTAT outage. A path
+    that is not a `.px` dataset sets validation_error true before any
+    request goes out. An unreadable dataset sets upstream_error true, with
+    the real error in caveats. Both return an empty dimensions list.
 
     Args:
-        dataset_path: Relative path to a `.px` dataset, e.g.
-                      "1F/FY/0011F3DF010.px". Take it from the `path` field of
-                      a browse_psa_catalog dataset entry.
+        dataset_path: Relative path to a `.px` dataset, for example
+                      "1F/FY/0241F3DF013.px". Take it from the `path` field
+                      of a browse_psa_catalog dataset entry.
 
     Returns: dataset_path, title, dimensions (each with code, label,
     value_count, values [{code, label}], values_truncated, is_time_like),
     total_cells, max_cells_per_query, time_dimensions, source, source_url,
     license, data_retrieved_at, caveats.
-
-    total_cells is the size of the full cube. A query must select down to
-    max_cells_per_query or fewer, so pick explicit codes per dimension.
     """
     try:
         path = _dataset_path(dataset_path)
@@ -697,12 +752,28 @@ async def query_psa_dataset(
     """Run one bounded query against a PSA OpenSTAT dataset.
 
     Every dimension needs an explicit list of value codes from
-    describe_psa_dataset. That is a hard requirement, not a convention: PXWeb
-    expands an unselected dimension to all of its values, and PSA answers the
-    resulting full-cube request with an HTTP 403.
+    describe_psa_dataset. That is a hard requirement, not a convention.
+    PXWeb expands an unselected dimension to all of its values, and PSA
+    answers the resulting full-cube request with an HTTP 403. PSA writes a
+    missing cell as "..", and those come back as null, never zero. Examples:
+
+      # one dataset, every dimension given an explicit code list
+      query_psa_dataset(
+          "1F/FY/0241F3DF013.px",
+          {"Year": ["2"], "Major Island Group": ["0", "2"],
+           "Among Families/Population": ["0"]},
+      )
+
+    On failure: a bad path, a bad max_rows, or a rejected selection (a
+    missing dimension, an unknown code, or "all"/"*") sets validation_error
+    true and data_status "invalid_request", before any request goes out. An
+    OpenSTAT outage sets upstream_error true and data_status "unavailable". A zero-row reply for
+    a nonzero selection, or a row whose key does not map to the declared
+    columns, sets data_status "indeterminate" and upstream_error true on a
+    real HTTP 200. All four cases return an empty rows list.
 
     Args:
-        dataset_path: Relative `.px` path, e.g. "1F/FY/0241F3DF013.px".
+        dataset_path: Relative `.px` path, for example "1F/FY/0241F3DF013.px".
         selections: Dimension code -> list of value codes, covering every
                     dimension the dataset declares. "all" and "*" are rejected.
                     Example: {"Year": ["2"], "Major Island Group": ["0", "2"],
@@ -713,10 +784,6 @@ async def query_psa_dataset(
     labels {dimension: value_label}, and a numeric or null value),
     row_count, requested_cells, truncated, reference_period, source,
     source_url, license, data_retrieved_at, caveats, disclaimer.
-
-    PSA writes a missing cell as "..", and those come back as null, never zero.
-    A selection error returns validation_error: true; an OpenSTAT outage
-    returns upstream_error: true.
     """
     try:
         path = _dataset_path(dataset_path)
@@ -785,6 +852,22 @@ async def query_psa_dataset(
             row_count=0,
         )
 
+    if cells > 0 and not payload["data"]:
+        # PXWeb writes a missing cell as ".." inside a row. It never answers a
+        # nonzero selection with zero rows, so an empty array here is a
+        # degenerate reply, not a genuine empty result. Never cache this.
+        return failure_result(
+            SOURCE_NAME,
+            url,
+            f"PSA returned zero rows for a {cells}-cell selection. PXWeb writes "
+            "a missing cell as '..' inside a row, never as zero rows.",
+            license=PSA_LICENSE,
+            data_status=DATA_STATUS_INDETERMINATE,
+            dataset_path=path,
+            rows=[],
+            row_count=0,
+        )
+
     # C. Labels come from every declared value, not from the display-capped
     # list, so a code past MAX_VALUES_LISTED still resolves to its label and
     # still contributes its reference period.
@@ -793,33 +876,50 @@ async def query_psa_dataset(
     rows: list[dict] = []
     misaligned = 0
     unparseable = 0
+    malformed_key_rows = 0
+    value_malformed = 0
+    genuine_null = 0
     for record in payload.get("data", []):
         if not isinstance(record, dict):
-            misaligned += 1
+            malformed_key_rows += 1
             continue
-        key = record.get("key") or []
-        if not isinstance(key, (list, tuple)):
-            misaligned += 1
-            key = []
+        key = record.get("key")
+        if not isinstance(key, (list, tuple)) or len(key) != len(columns):
+            # A key that is not a list, or the wrong length, cannot map to a
+            # real geography or period. Skip it rather than publish a number
+            # with no place or time attached.
+            malformed_key_rows += 1
+            continue
+        keys = {columns[i]: key[i] for i in range(len(columns))}
         values = record.get("values")
-        if len(key) != len(columns):
-            misaligned += 1
-        keys = {columns[i]: key[i] for i in range(min(len(columns), len(key)))}
         if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
             # PXWeb always sends a list here. Anything else is drift, and
             # indexing a string would hand back its first character as data.
+            # It must not read as a confirmed null the way a real ".." does.
             misaligned += 1
+            value_malformed += 1
             raw = None
         elif not values:
             # An empty array is a row with no cell at all, which is drift, not
-            # the '..' PSA writes for a value it does not publish.
+            # the '..' PSA writes for a value it does not publish. It must not
+            # pass as a confirmed null in an ordinary success response.
             misaligned += 1
+            value_malformed += 1
             raw = None
         else:
             raw = values[0]
         parsed = _to_float(raw)
-        if parsed is None and raw is not None and str(raw).strip() not in PSA_MISSING_MARKERS:
-            unparseable += 1
+        if parsed is None and raw is not None:
+            if str(raw).strip() in PSA_MISSING_MARKERS:
+                # PSA's own published gap, the one case a null cell is a
+                # confirmed reading rather than drift.
+                genuine_null += 1
+            else:
+                # Not a number and not one of PSA's own missing-value markers,
+                # so this is a parse failure. It must not pass as a confirmed
+                # null in an ordinary success response either.
+                unparseable += 1
+                value_malformed += 1
         rows.append(
             {
                 "keys": keys,
@@ -829,6 +929,21 @@ async def query_psa_dataset(
                 },
                 "value": parsed,
             }
+        )
+
+    if malformed_key_rows:
+        total_records = len(payload.get("data", []))
+        return failure_result(
+            SOURCE_NAME,
+            url,
+            f"{malformed_key_rows} of {total_records} row(s) had a key that did "
+            "not map to the declared columns and were skipped rather than "
+            "published with no geography or period.",
+            license=PSA_LICENSE,
+            data_status=DATA_STATUS_INDETERMINATE,
+            dataset_path=path,
+            rows=[],
+            row_count=0,
         )
 
     total_rows = len(rows)
@@ -853,7 +968,7 @@ async def query_psa_dataset(
         caveats.append(
             f"Returned {rows_cap} of {total_rows} rows. Raise max_rows or narrow the selection."
         )
-    if any(row["value"] is None for row in out["rows"]):
+    if genuine_null:
         caveats.append("Some cells are null: PSA publishes '..' for a missing value.")
     if unparseable:
         caveats.append(
@@ -866,5 +981,193 @@ async def query_psa_dataset(
             f"{misaligned} row(s) carried a key count that does not match the "
             f"{len(columns)} dimension columns; those rows are partially mapped."
         )
+    if value_malformed:
+        # An empty values array, or a value that is not a number and not one
+        # of PSA's missing-value markers, is drift, not a confirmed reading.
+        # A row like this once passed as a null cell in a success response.
+        out["data_status"] = DATA_STATUS_INDETERMINATE
+        out["upstream_error"] = True
+        caveats.append(
+            f"{value_malformed} cell(s) had no readable value: an empty values "
+            "array or a value that is not a number and not a PSA missing-value "
+            "marker. The response is indeterminate, not a confirmed reading."
+        )
+    if 0 < total_rows < cells:
+        # PXWeb answers every requested cell, writing ".." for one it does not
+        # publish. Fewer rows than cells means a partial or degenerate reply,
+        # not a genuine full answer.
+        out["data_status"] = DATA_STATUS_INDETERMINATE
+        out["upstream_error"] = True
+        caveats.append(
+            f"PSA returned {total_rows} row(s) for a {cells}-cell selection. "
+            "That is fewer rows than requested and may be a partial reply."
+        )
     out["caveats"] = caveats
     return out
+
+
+# ---------------------------------------------------------------------------
+# search_psa_catalog
+# ---------------------------------------------------------------------------
+
+MAX_SEARCH_LIMIT = 100
+MIN_SEARCH_LIMIT = 1
+
+# One walk of the whole tree at a time. Without it, two concurrent cold
+# searches both miss the index cache and each pace their own few hundred
+# browse calls behind the rate limiter, for the same result.
+_INDEX_LOCK = asyncio.Lock()
+_INDEX_CACHE_KEY = "index"
+
+
+async def _walk_catalog(path: str) -> list[dict]:
+    """Recursively collect every {path, title} dataset entry under `path`.
+
+    Reuses _browse, the same per-level listing browse_psa_catalog calls, and
+    the same dataset-or-folder test it applies to each entry. Sibling folders
+    walk concurrently, the fan-out pattern get_area_profile already uses, so
+    the rate limiter still paces every request but the round trips overlap.
+
+    Raises PSAUpstreamError if any subtree fails to load. A partial index
+    would let a real table quietly look like a search miss.
+    """
+    entries = await _browse(path)
+    matches: list[dict] = []
+    subfolders: list[str] = []
+    for entry in entries:
+        entry_id = str(entry.get("id") or "")
+        if not entry_id:
+            continue
+        title = str(entry.get("text") or entry_id)
+        child_path = f"{path}/{entry_id}" if path else entry_id
+        is_dataset = entry.get("type") == "t" or entry_id.lower().endswith(".px")
+        if is_dataset:
+            matches.append({"path": child_path, "title": title})
+        else:
+            subfolders.append(child_path)
+    if subfolders:
+        for sub_matches in await asyncio.gather(*(_walk_catalog(p) for p in subfolders)):
+            matches.extend(sub_matches)
+    return matches
+
+
+async def _catalog_index() -> list[dict]:
+    """The flattened {path, title} list for every dataset in the PSA catalog.
+
+    Walking the whole ~2,900-table tree paces one request at a time behind the
+    rate limiter, so a cold call can take minutes. The flattened list caches
+    24h, the same TTL as psa_discovery, so a later search answers from memory.
+    """
+    cache = CACHES["psa_catalog_index"]
+    if _INDEX_CACHE_KEY in cache:
+        return cache[_INDEX_CACHE_KEY]
+    async with _INDEX_LOCK:
+        if _INDEX_CACHE_KEY in cache:
+            return cache[_INDEX_CACHE_KEY]
+        index = await _walk_catalog("")
+        cache[_INDEX_CACHE_KEY] = index
+        return index
+
+
+@mcp.tool(
+    title="Search the PSA OpenSTAT catalog",
+    tags={"psa", "openstat", "statistics", "search", "catalog", "philippines"},
+    annotations={
+        "title": "Search the PSA OpenSTAT catalog",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+    output_schema=SEARCH_SCHEMA,
+    timeout=300.0,
+)
+async def search_psa_catalog(keyword: str, limit: int = 20) -> dict:
+    """Find a PSA OpenSTAT dataset by keyword, without browsing level by level.
+
+    Matches a case-insensitive substring against every dataset title and path
+    in the catalog. The first call after a cold start walks the whole
+    ~2,900-table tree and can take a few minutes. The flattened index then
+    caches for 24 hours, so a later search answers from memory. Examples:
+
+      search_psa_catalog("fertility")                 datasets with "fertility" in the title or path
+      search_psa_catalog("poverty incidence", limit=5) at most 5 matches
+
+    On failure: data_status is "invalid_request" for an empty keyword or a
+    bad limit, and "unavailable" for an OpenSTAT outage during the catalog
+    walk. validation_error or upstream_error is set to match. The real error
+    sits in caveats. Neither failure is cached.
+
+    Args:
+        keyword: Case-insensitive substring to match against a dataset title
+                 or path, for example "fertility", "poverty incidence", "CPI".
+        limit: Maximum number of matches to return (1-100, default 20).
+
+    Returns: keyword, matches (each with path and title), match_count,
+    total_available, limit, data_status, source, source_url, license,
+    data_retrieved_at, caveats.
+    """
+    url = CATALOG_ROOT_URL
+
+    if not isinstance(keyword, str) or not keyword.strip():
+        return failure_result(
+            SOURCE_NAME,
+            url,
+            "keyword must be a non-empty string.",
+            license=PSA_LICENSE,
+            validation_error=True,
+            keyword=keyword,
+            matches=[],
+            match_count=0,
+        )
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return failure_result(
+            SOURCE_NAME,
+            url,
+            f"limit must be a whole number, got {type(limit).__name__}",
+            license=PSA_LICENSE,
+            validation_error=True,
+            keyword=keyword,
+            matches=[],
+            match_count=0,
+        )
+    bounded_limit = max(MIN_SEARCH_LIMIT, min(limit, MAX_SEARCH_LIMIT))
+
+    try:
+        index = await _catalog_index()
+    except PSAUpstreamError as exc:
+        return failure_result(
+            SOURCE_NAME,
+            url,
+            f"PSA OpenSTAT catalog walk failed: {exc}",
+            license=PSA_LICENSE,
+            keyword=keyword,
+            matches=[],
+            match_count=0,
+        )
+
+    want = keyword.strip().lower()
+    hits = [e for e in index if want in e["title"].lower() or want in e["path"].lower()]
+    matches = hits[:bounded_limit]
+
+    caveats: list[str] = []
+    if len(hits) > bounded_limit:
+        caveats.append(
+            f"Returned {bounded_limit} of {len(hits)} matches. Raise limit or narrow the keyword."
+        )
+
+    return {
+        "keyword": keyword,
+        "matches": matches,
+        "match_count": len(matches),
+        "total_available": len(hits),
+        "limit": bounded_limit,
+        "data_status": DATA_STATUS_SUCCESS,
+        "upstream_error": False,
+        "validation_error": False,
+        "caveats": caveats,
+        "source": SOURCE_NAME,
+        "source_url": url,
+        "license": PSA_LICENSE,
+        "data_retrieved_at": _now().isoformat(),
+    }

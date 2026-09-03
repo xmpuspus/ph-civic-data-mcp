@@ -59,6 +59,16 @@ async def test_active_typhoons_returns_list() -> None:
 
 
 @pytest.mark.asyncio
-async def test_weather_alerts_returns_list() -> None:
+async def test_weather_alerts_returns_list_or_says_the_page_was_not_recognized() -> None:
+    """v0.7.0: only the explicit "No Active Warnings" marker proves an empty
+    list. Live on 2026-09-04 the PAGASA homepage carries no such marker, so
+    the honest answer is an indeterminate envelope, never a bare [] that
+    reads as an all-clear. The old assertion encoded that false all-clear."""
     result = await get_weather_alerts()
-    assert isinstance(result, list)
+    if isinstance(result, list):
+        return
+    assert isinstance(result, dict)
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert result["results"] == []
+    assert any("marker" in c for c in result["caveats"]), result["caveats"]

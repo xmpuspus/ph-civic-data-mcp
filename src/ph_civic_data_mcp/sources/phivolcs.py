@@ -20,7 +20,8 @@ from dateutil import parser as date_parser
 from ph_civic_data_mcp.models.earthquake import Earthquake
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.envelope import failure_envelope
+from ph_civic_data_mcp.utils.envelope import failure_envelope, failure_result
+from ph_civic_data_mcp.utils.geo import haversine_km
 from ph_civic_data_mcp.utils.http import PHIVOLCS_CLIENT, fetch_with_retry, log_stderr
 
 PHIVOLCS_LICENSE = "Public — PHIVOLCS public bulletin pages"
@@ -31,6 +32,10 @@ PHIVOLCS_LICENSE = "Public — PHIVOLCS public bulletin pages"
 # that escapes to another host would be fetched with no TLS check at all.
 ALLOWED_BULLETIN_HOST_SUFFIX = ".phivolcs.dost.gov.ph"
 MAX_REDIRECT_HOPS = 3
+
+# Half the Earth's circumference: the largest distance a radius filter can
+# ever mean. A bigger value only wastes the caller's own request.
+MAX_RADIUS_KM = 20001.6
 
 
 class PhivolcsHostError(ValueError):
@@ -98,6 +103,33 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Codex cross-model finding: the parser used to detect the header row by
+# name, then read each data row by a fixed cell position (cells[1] for
+# latitude, cells[2] for longitude, and so on). A column reorder upstream
+# would emit longitude as latitude and vice versa with no error. Each name
+# below maps to the keyword the header cell is matched on, so the read
+# position always follows the header, never a hardcoded index.
+REQUIRED_COLUMNS = {
+    "date": "date",
+    "latitude": "latitude",
+    "longitude": "longitude",
+    "depth": "depth",
+    "magnitude": "mag",
+    "location": "location",
+}
+
+
+def _header_column_map(header_cells: list[str]) -> dict[str, int]:
+    """Map each required column name to its index in the header row."""
+    column_map: dict[str, int] = {}
+    for name, keyword in REQUIRED_COLUMNS.items():
+        for idx, cell in enumerate(header_cells):
+            if keyword in cell:
+                column_map[name] = idx
+                break
+    return column_map
+
+
 async def _fetch_earthquake_list() -> list[dict]:
     """Scrape the PHIVOLCS earthquake list table. Returns raw rows."""
     key = cache_key({"endpoint": "eq_list"})
@@ -110,6 +142,7 @@ async def _fetch_earthquake_list() -> list[dict]:
     soup = BeautifulSoup(response.text, "lxml")
 
     target_table = None
+    target_header_cells: list[str] = []
     for table in soup.find_all("table"):
         rows = table.find_all("tr")
         if len(rows) < 5:
@@ -117,6 +150,7 @@ async def _fetch_earthquake_list() -> list[dict]:
         header_cells = [c.get_text(" ", strip=True).lower() for c in rows[0].find_all(["th", "td"])]
         if any("latitude" in h for h in header_cells) and any("mag" in h for h in header_cells):
             target_table = table
+            target_header_cells = header_cells
             break
 
     if target_table is None:
@@ -124,15 +158,25 @@ async def _fetch_earthquake_list() -> list[dict]:
         # failure instead of caching a false all-clear.
         raise RuntimeError("PHIVOLCS earthquake table not found on list page (HTML drift?)")
 
+    column_map = _header_column_map(target_header_cells)
+    missing = sorted(set(REQUIRED_COLUMNS) - set(column_map))
+    if missing:
+        raise RuntimeError(
+            f"PHIVOLCS earthquake table is missing column(s) {missing} (HTML drift?)"
+        )
+
     results: list[dict] = []
+    data_row_count = 0
     rows = target_table.find_all("tr")
+    min_cells = max(column_map.values()) + 1
     for row in rows[1:]:
         cells = row.find_all(["td", "th"])
-        if len(cells) < 6:
+        if len(cells) < min_cells:
             continue
-        datetime_text = cells[0].get_text(" ", strip=True)
+        datetime_text = cells[column_map["date"]].get_text(" ", strip=True)
         if not datetime_text or "date" in datetime_text.lower():
             continue
+        data_row_count += 1
 
         bulletin_href = None
         link = row.find("a", href=True)
@@ -141,14 +185,14 @@ async def _fetch_earthquake_list() -> list[dict]:
             bulletin_href = urljoin(PHIVOLCS_EQ_LIST_URL, href)
 
         try:
-            lat = float(cells[1].get_text(strip=True))
-            lng = float(cells[2].get_text(strip=True))
-            depth = float(cells[3].get_text(strip=True))
-            mag = float(cells[4].get_text(strip=True))
+            lat = float(cells[column_map["latitude"]].get_text(strip=True))
+            lng = float(cells[column_map["longitude"]].get_text(strip=True))
+            depth = float(cells[column_map["depth"]].get_text(strip=True))
+            mag = float(cells[column_map["magnitude"]].get_text(strip=True))
         except (ValueError, IndexError):
             continue
 
-        location = cells[5].get_text(" ", strip=True)
+        location = cells[column_map["location"]].get_text(" ", strip=True)
         try:
             dt = date_parser.parse(datetime_text, fuzzy=True)
         except (ValueError, OverflowError):
@@ -164,6 +208,16 @@ async def _fetch_earthquake_list() -> list[dict]:
                 "location": location,
                 "bulletin_url": bulletin_href,
             }
+        )
+
+    if not results:
+        # Zero parsed rows is HTML drift. A magnitude cell that is not a
+        # number causes it, or a layout change that drops every row below
+        # min_cells before parsing even starts. This page always carries
+        # rows, so it must raise the same way a missing table or column
+        # does. It must never cache a false all-clear.
+        raise RuntimeError(
+            f"PHIVOLCS earthquake table parsed 0 of {data_row_count} data row(s) (HTML drift?)"
         )
 
     cache[key] = results
@@ -185,18 +239,84 @@ async def get_latest_earthquakes(
     min_magnitude: float = 1.0,
     limit: int = 20,
     region: str | None = None,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    radius_km: float | None = None,
 ) -> list[dict] | dict:
     """Get the latest earthquake events from PHIVOLCS.
+
+    Reads the live PHIVOLCS earthquake list, the same table shown at
+    earthquake.phivolcs.dost.gov.ph. Give center_lat, center_lon, and
+    radius_km together to filter events near one place, and each matched
+    event then carries a distance_km field. Give all three together, or
+    leave out all three. Examples:
+
+      get_latest_earthquakes()                             latest events, default filters
+      get_latest_earthquakes(min_magnitude=4.0, limit=10)   strong events only
+      get_latest_earthquakes(center_lat=14.5995, center_lon=120.9842, radius_km=50)  near Manila
+
+    On failure: an invalid trio, an out-of-range radius_km, center_lat, or
+    center_lon gives validation_error true and data_status "invalid_request".
+    An unreachable or unparsable PHIVOLCS list gives upstream_error true and
+    data_status "unavailable". Both return results: [] with the real error
+    in caveats.
 
     Args:
         min_magnitude: Minimum magnitude to include (default 1.0).
         limit: Max events to return (default 20, max 100).
         region: Filter by PH region/province/city name (partial match).
+        center_lat: Latitude of a search point. Give with center_lon and
+                    radius_km to filter to events near one place instead of
+                    the full recent-events list.
+        center_lon: Longitude of a search point. Give with center_lat and
+                    radius_km.
+        radius_km: Keep only events within this distance of
+                   (center_lat, center_lon). Give all three of center_lat,
+                   center_lon, and radius_km together, or none of them. Each
+                   returned event then carries a distance_km field.
 
     Returns a list of events on success. If the PHIVOLCS upstream is
     unreachable, returns a dict {results: [], upstream_error: true, caveats}
     instead of an empty list, so "outage" is never mistaken for "no quakes".
     """
+    have = (center_lat is not None, center_lon is not None, radius_km is not None)
+    if any(have) and not all(have):
+        return failure_result(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            "center_lat, center_lon, and radius_km must all be given together, or all left out.",
+            license=PHIVOLCS_LICENSE,
+            validation_error=True,
+            results=[],
+        )
+    if radius_km is not None and not (0 < radius_km <= MAX_RADIUS_KM):
+        return failure_result(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            f"radius_km must be above 0 and at most {MAX_RADIUS_KM}, got {radius_km}.",
+            license=PHIVOLCS_LICENSE,
+            validation_error=True,
+            results=[],
+        )
+    if center_lat is not None and not (-90.0 <= center_lat <= 90.0):
+        return failure_result(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            f"center_lat must be between -90 and 90, got {center_lat}.",
+            license=PHIVOLCS_LICENSE,
+            validation_error=True,
+            results=[],
+        )
+    if center_lon is not None and not (-180.0 <= center_lon <= 180.0):
+        return failure_result(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            f"center_lon must be between -180 and 180, got {center_lon}.",
+            license=PHIVOLCS_LICENSE,
+            validation_error=True,
+            results=[],
+        )
+
     limit = max(1, min(int(limit), 100))
     try:
         rows = await _fetch_earthquake_list()
@@ -213,12 +333,18 @@ async def get_latest_earthquakes(
     retrieved_at = _now()
     results: list[dict] = []
     region_lc = region.lower().strip() if region else None
+    use_radius = radius_km is not None
 
     for row in rows:
         if row["magnitude"] < min_magnitude:
             continue
         if region_lc and region_lc not in row["location"].lower():
             continue
+        distance_km = None
+        if use_radius:
+            distance_km = haversine_km(center_lat, center_lon, row["latitude"], row["longitude"])
+            if distance_km > radius_km:
+                continue
         quake = Earthquake(
             datetime_pst=row["datetime_pst"],
             latitude=row["latitude"],
@@ -229,7 +355,10 @@ async def get_latest_earthquakes(
             bulletin_url=row["bulletin_url"],
             data_retrieved_at=retrieved_at,
         )
-        results.append(quake.model_dump(mode="json"))
+        data = quake.model_dump(mode="json")
+        if use_radius:
+            data["distance_km"] = round(distance_km, 2)
+        results.append(data)
         if len(results) >= limit:
             break
     return results
@@ -249,26 +378,43 @@ async def get_latest_earthquakes(
 async def get_earthquake_bulletin(bulletin_url: str) -> dict:
     """Get the full bulletin for a PHIVOLCS earthquake event.
 
+    Parses the bulletin page PHIVOLCS publishes for one event: magnitude,
+    depth, location, date and time, and per-municipality intensity reports.
+    Give the bulletin_url a prior get_latest_earthquakes call returned. A
+    hand-built or off-host URL is refused before any fetch is attempted. Examples:
+
+      get_earthquake_bulletin("https://phivolcs.dost.gov.ph/index.php")  # real bulletin URL shape
+
+    On failure: an empty, malformed, or non-PHIVOLCS bulletin_url, or a 404
+    on the page itself, returns a dict with url, source, caveats, and
+    data_retrieved_at only, with no data_status, upstream_error, magnitude,
+    or location fields. A fetch that raises an exception sets data_status
+    "unavailable" and upstream_error true.
+
     Args:
         bulletin_url: Full URL returned by get_latest_earthquakes.bulletin_url.
     """
+    # Both rejections are caller mistakes, so they carry the same
+    # invalid_request status every other tool uses, never a bare dict.
     if not bulletin_url or not bulletin_url.startswith("http"):
-        return {
-            "url": bulletin_url,
-            "source": "PHIVOLCS",
-            "caveats": ["bulletin_url is empty or malformed"],
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            "bulletin_url is empty or malformed",
+            license=PHIVOLCS_LICENSE,
+            validation_error=True,
+            url=bulletin_url,
+        )
     if not _is_phivolcs_url(bulletin_url):
-        return {
-            "url": bulletin_url,
-            "source": "PHIVOLCS",
-            "caveats": [
-                "bulletin_url must be a *.phivolcs.dost.gov.ph URL returned by "
-                "get_latest_earthquakes; refusing to fetch other hosts."
-            ],
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            "bulletin_url must be a *.phivolcs.dost.gov.ph URL returned by "
+            "get_latest_earthquakes. This tool refuses to fetch other hosts.",
+            license=PHIVOLCS_LICENSE,
+            validation_error=True,
+            url=bulletin_url,
+        )
 
     key = cache_key({"bulletin_url": bulletin_url})
     cache = CACHES["phivolcs_bulletins"]
@@ -289,13 +435,12 @@ async def get_earthquake_bulletin(bulletin_url: str) -> dict:
         response.raise_for_status()
     except Exception as exc:
         log_stderr(f"get_earthquake_bulletin fetch error: {exc}")
-        return {
-            "url": bulletin_url,
-            "source": "PHIVOLCS",
-            "upstream_error": True,
-            "caveats": [f"bulletin fetch failed ({type(exc).__name__}: {exc})"],
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PHIVOLCS",
+            bulletin_url,
+            f"bulletin fetch failed ({type(exc).__name__}: {exc})",
+            url=bulletin_url,
+        )
 
     soup = BeautifulSoup(response.text, "lxml")
     text = soup.get_text("\n", strip=True)
@@ -447,6 +592,21 @@ async def _fetch_volcano_alert(bulletin_url: str) -> tuple[int | None, str | Non
 )
 async def get_volcano_status(volcano_name: str | None = None) -> list[dict] | dict:
     """Get current alert level for Philippine volcanoes.
+
+    Reads the WOVODAT bulletin list PHIVOLCS publishes for its monitored
+    volcanoes: Mayon, Taal, Kanlaon, Bulusan, Pinatubo, Hibok-Hibok, and
+    Parker. When one volcano's bulletin fetch fails, that entry carries
+    upstream_error true and a caveat with the real error, not a null
+    alert_level. Examples:
+
+      get_volcano_status()          all monitored volcanoes, one call
+      get_volcano_status("Mayon")   one volcano by name
+      get_volcano_status("Taal")
+
+    On failure: WOVODAT list unreachable or empty gives data_status
+    "unavailable", upstream_error true, results: [], and the real error in
+    caveats. An unmatched volcano_name gives a one-item list with
+    alert_level null and a caveat, not a failure envelope.
 
     Args:
         volcano_name: e.g. "Mayon", "Taal", "Kanlaon", "Bulusan".

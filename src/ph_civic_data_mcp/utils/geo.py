@@ -12,6 +12,8 @@ is unavailable (tests) the resolver falls back to the cheap CITY_COORDS-only pat
 
 from __future__ import annotations
 
+from math import atan2, cos, radians, sin, sqrt
+
 REGION_ALIASES: dict[str, str] = {
     "metro manila": "NCR",
     "national capital region": "NCR",
@@ -144,6 +146,20 @@ CITY_COORDS: dict[str, tuple[float, float]] = {
 }
 
 
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km between two lat/lon points.
+
+    Shared by usgs.py and phivolcs.py, which each kept a private copy before
+    v0.7.0.
+    """
+    earth_radius_km = 6371.0
+    p1, p2 = radians(lat1), radians(lat2)
+    dphi = radians(lat2 - lat1)
+    dlambda = radians(lon2 - lon1)
+    a = sin(dphi / 2) ** 2 + cos(p1) * cos(p2) * sin(dlambda / 2) ** 2
+    return 2 * earth_radius_km * atan2(sqrt(a), sqrt(1 - a))
+
+
 def normalize_region(name: str | None) -> str | None:
     if not name:
         return None
@@ -198,13 +214,31 @@ def city_to_coords(city: str) -> tuple[float, float] | None:
     return None
 
 
+class GeoResolveError(RuntimeError):
+    """PSGC name canonicalisation itself failed, so no verdict is known.
+
+    A caller must not treat this the same as `resolve_to_coords` returning
+    None. None means PSGC gave a clean answer and the place has no known
+    coordinates. This error means PSGC could not answer at all, and the
+    caller should report an outage, not an unknown place. Codex cross-model
+    finding: `get_weather_forecast("QC")` answered "No coordinates known"
+    with no `upstream_error` while PSGC was down, even though QC is a known
+    alias and PSGC was the only broken part.
+    """
+
+
 async def resolve_to_coords(query: str) -> tuple[float, float] | None:
     """Async resolver: try PSGC name canonicalisation, then CITY_COORDS.
 
     PSGC does not expose coordinates, so this function normalises a query like
     "Sta. Mesa, Manila" to its canonical PSGC name (e.g. "Manila") and then
-    looks up CITY_COORDS. Network failures degrade silently to the direct
-    CITY_COORDS path.
+    looks up CITY_COORDS. A known city is served from CITY_COORDS first, so
+    it never reaches the network.
+
+    Raises GeoResolveError when PSGC itself failed, whether by a raised
+    transport error or an `upstream_error` envelope, so a caller can turn
+    that into its own failure envelope instead of reading it as "unknown
+    place". Returns None only for a clean PSGC no-match.
     """
     if not query:
         return None
@@ -213,12 +247,17 @@ async def resolve_to_coords(query: str) -> tuple[float, float] | None:
     if direct is not None:
         return direct
 
-    try:
-        from ph_civic_data_mcp.sources.psgc import resolve_ph_location
+    from ph_civic_data_mcp.sources.psgc import resolve_ph_location
 
+    try:
         resolved = await resolve_ph_location(query)
-    except Exception:
-        return None
+    except Exception as exc:
+        raise GeoResolveError(str(exc)) from exc
+
+    if isinstance(resolved, dict) and resolved.get("upstream_error"):
+        caveats = resolved.get("caveats") or []
+        detail = caveats[0] if caveats else "PSGC API unavailable"
+        raise GeoResolveError(detail)
 
     if not isinstance(resolved, dict) or not resolved.get("matched", True):
         return None

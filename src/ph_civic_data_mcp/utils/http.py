@@ -6,10 +6,13 @@ Never use PHIVOLCS_CLIENT for other sources. Never disable SSL globally.
 from __future__ import annotations
 
 import asyncio
+import random
 import sys
+import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -26,6 +29,7 @@ except Exception:
     pass
 
 from ph_civic_data_mcp import __version__
+from ph_civic_data_mcp.utils import health
 
 USER_AGENT = (
     f"ph-civic-data-mcp/{__version__} "
@@ -93,26 +97,61 @@ PHIVOLCS_CLIENT = httpx.AsyncClient(
 )
 
 
+# v0.7.0: fetch_with_retry caught only 3 of the 8 transient httpx exceptions.
+# A ConnectTimeout, ReadError, PoolTimeout, WriteTimeout, or WriteError fell
+# straight through uncaught, so a source module's own try/except around the
+# call had to catch the raw exception itself with no retry. Same class of bug
+# as the v0.6.1 PSGC fix: a transport hiccup must never look like "no data".
+RETRYABLE_EXCEPTIONS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.ReadError,
+    httpx.WriteTimeout,
+    httpx.WriteError,
+    httpx.PoolTimeout,
+    httpx.RemoteProtocolError,
+)
+
+
+def _with_jitter(delay: float) -> float:
+    """Add up to 10% jitter so concurrent callers don't retry in lockstep."""
+    return delay + random.uniform(0, delay * 0.1)
+
+
 async def fetch_with_retry(
     client: httpx.AsyncClient,
     method: str,
     url: str,
     **kwargs: Any,
 ) -> httpx.Response:
-    """Retry on 429/503/504 with exponential backoff. Pass everything else through."""
+    """Retry on 429/503/504 and on a transient transport failure, with backoff."""
+    host = urlparse(url).netloc
     last_exc: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
+            start = time.monotonic()
             response = await client.request(method, url, **kwargs)
+            latency_ms = (time.monotonic() - start) * 1000
             if response.status_code in RETRY_STATUSES and attempt < MAX_RETRIES - 1:
-                await asyncio.sleep(_retry_delay(response, attempt))
+                await asyncio.sleep(_with_jitter(_retry_delay(response, attempt)))
                 continue
+            if response.status_code < 400:
+                health.record_success(host, latency_ms)
+            elif response.status_code in RETRY_STATUSES or response.status_code >= 500:
+                health.record_failure(host, f"HTTP {response.status_code}")
+            elif response.status_code in (401, 403):
+                # A block or a rejected credential is the host failing us.
+                # Other 4xx (404, 400, 422) are the caller's own bad request,
+                # not a sign the host itself is down, so they stay unrecorded.
+                health.record_failure(host, f"HTTP {response.status_code}")
             return response
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
+        except RETRYABLE_EXCEPTIONS as exc:
             last_exc = exc
             if attempt < MAX_RETRIES - 1:
-                await asyncio.sleep(RETRY_DELAYS[attempt])
+                await asyncio.sleep(_with_jitter(RETRY_DELAYS[attempt]))
                 continue
+            health.record_failure(host, exc)
             raise
     if last_exc:
         raise last_exc

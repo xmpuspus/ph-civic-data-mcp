@@ -357,3 +357,46 @@ async def test_earthquake_bulletin_refuses_every_adversarial_url(monkeypatch, ur
 
     assert any("phivolcs.dost.gov.ph" in c for c in result["caveats"])
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# get_latest_earthquakes: an out-of-range center_lat, center_lon, or
+# radius_km must never reach PHIVOLCS as a real request (Codex cross-model
+# finding, mirrors the same fix in sources/usgs.py)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"center_lat": 999, "center_lon": 120.9842, "radius_km": 50},
+        {"center_lat": 14.5995, "center_lon": 999, "radius_km": 50},
+        {"center_lat": 14.5995, "center_lon": 120.9842, "radius_km": 1_000_000},
+    ],
+    ids=["center_lat_out_of_range", "center_lon_out_of_range", "radius_km_over_max"],
+)
+@pytest.mark.asyncio
+async def test_out_of_range_trio_is_a_validation_error_not_a_fetch(monkeypatch, kwargs):
+    fake, calls = _recorder({})
+    monkeypatch.setattr(phivolcs_module, "fetch_with_retry", fake)
+    CACHES["phivolcs_earthquakes"].clear()
+
+    result = await phivolcs_module.get_latest_earthquakes(**kwargs)
+
+    assert result["validation_error"] is True
+    assert result["upstream_error"] is False
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_off_host_bulletin_rejection_carries_the_status_contract():
+    """Codex pass 7: the two caller-mistake paths returned a bare dict with no
+    data_status. Every tool sets it now."""
+    from ph_civic_data_mcp.sources.phivolcs import get_earthquake_bulletin
+
+    for bad in ("https://evil.example/x", "", "not-a-url"):
+        out = await get_earthquake_bulletin(bad)
+        assert out["data_status"] == "invalid_request", bad
+        assert out["validation_error"] is True
+        assert out["upstream_error"] is False
+        assert out["url"] == bad

@@ -7,6 +7,7 @@ https://datahelpdesk.worldbank.org/knowledgebase/articles/898581-api-basic-call-
 
 from __future__ import annotations
 
+import math
 import re
 
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from datetime import datetime, timezone
 from ph_civic_data_mcp.models.climate import WorldBankIndicator
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import failure_result
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 WB_BASE = "https://api.worldbank.org/v2/country/PHL/indicator"
@@ -69,6 +71,88 @@ def _valid_code(code: str) -> bool:
     return bool(_CODE_RE.match(code)) and ".." not in code
 
 
+class WorldBankUpstreamError(RuntimeError):
+    """A World Bank fetch failed, or sent a payload with nothing usable in it.
+
+    Raised so a transient empty-but-200 response can never enter the 24h TTL
+    cache as if it were a real "this indicator has no data" answer.
+    """
+
+
+async def _fetch_observations(code: str, per_page: int) -> tuple[str | None, list[dict], int]:
+    """(indicator_name, observations, skipped_count) for one indicator.
+
+    Raises on a bad payload. A real zero answer and a transient empty answer
+    look the same on the surface: a 200 with no usable rows. World Bank's own
+    `total` count in the response metadata tells them apart. `total` at 0
+    means the indicator truly has no published data, which is worth caching.
+    `total` above 0 with no usable rows means the rows did not come back this
+    time, which must not be cached as a zero. A row whose `value` cannot
+    convert to a finite number (a non-numeric string, NaN, or inf) is
+    skipped and counted, never published as a figure.
+    """
+    url = f"{WB_BASE}/{code}"
+    params = {"format": "json", "per_page": per_page}
+    response = await fetch_with_retry(CLIENT, "GET", url, params=params)
+    response.raise_for_status()
+    payload = response.json()
+
+    if not isinstance(payload, list) or len(payload) < 2:
+        raise WorldBankUpstreamError(f"Unexpected World Bank response shape for indicator {code!r}")
+
+    metadata = payload[0] if isinstance(payload[0], dict) else {}
+    records = payload[1]
+    if records is None:
+        raise WorldBankUpstreamError(
+            f"World Bank returned a null data array for indicator {code!r}"
+        )
+    if not isinstance(records, list):
+        raise WorldBankUpstreamError(
+            f"World Bank returned a non-list data array for indicator {code!r}"
+        )
+
+    indicator_name = None
+    observations: list[dict] = []
+    skipped = 0
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        if indicator_name is None and isinstance(rec.get("indicator"), dict):
+            indicator_name = rec["indicator"].get("value")
+        value = rec.get("value")
+        if value is None:
+            continue
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            skipped += 1
+            continue
+        if not math.isfinite(numeric_value):
+            skipped += 1
+            continue
+        observations.append(
+            {
+                "year": int(rec["date"]) if str(rec.get("date", "")).isdigit() else rec.get("date"),
+                "value": numeric_value,
+                "unit": rec.get("unit") or "",
+            }
+        )
+
+    try:
+        total = int(metadata.get("total"))
+    except (TypeError, ValueError):
+        total = None
+    # total == 0 is the one degenerate case that is a real answer: the
+    # indicator truly has no data. A missing or unreadable total is not a
+    # confirmed zero, so it raises the same as a nonzero total with no rows.
+    if not observations and total != 0:
+        raise WorldBankUpstreamError(
+            f"World Bank returned {len(records)} rows with nothing usable for indicator "
+            f"{code!r} (metadata total={metadata.get('total')!r}); not a real zero."
+        )
+    return indicator_name, observations, skipped
+
+
 @mcp.tool(
     title="World Bank indicator for the Philippines",
     tags={"economy", "open-data", "philippines", "world-bank"},
@@ -81,10 +165,26 @@ def _valid_code(code: str) -> bool:
     },
 )
 async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
-    """World Bank macroeconomic/social indicator for the Philippines.
+    """World Bank macroeconomic and social indicator for the Philippines.
 
-    Accepts a World Bank indicator code (e.g. 'NY.GDP.MKTP.CD') or a friendly
-    alias (e.g. 'gdp', 'poverty_ratio', 'inflation', 'urban_population_pct').
+    Accepts a World Bank indicator code, such as "NY.GDP.MKTP.CD", or a
+    friendly alias, such as "gdp", "poverty_ratio", "inflation", or
+    "urban_population_pct". The tool checks the indicator code shape before
+    it reaches the URL, so a bad value cannot redirect the request to
+    another country's data. Examples:
+
+      get_world_bank_indicator("gdp")                        # GDP, latest 20 years
+      get_world_bank_indicator("NY.GDP.MKTP.CD", per_page=5)  # same indicator, 5 years
+      get_world_bank_indicator("poverty_ratio")               # poverty headcount ratio
+
+    On failure: an indicator code or alias that fails the shape check
+    returns data_status "invalid_request", with validation_error true and
+    observations []. An upstream fetch failure returns data_status
+    "unavailable", with upstream_error true, observations [], and the real
+    error text in caveats. A row with a non-numeric or non-finite value
+    (NaN, inf) is skipped and counted in caveats. A response where every row
+    is non-numeric or non-finite returns data_status "unavailable" instead
+    of a false empty answer.
 
     Args:
         indicator: WB code or alias. See INDICATOR_ALIASES in source for the
@@ -94,20 +194,18 @@ async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
     code = _resolve(indicator)
     if not _valid_code(code):
         # Never cached, and never fetched: this is a caller mistake.
-        return {
-            "indicator_id": indicator,
-            "indicator_name": None,
-            "country": "Philippines",
-            "country_iso3": "PHL",
-            "observations": [],
-            "validation_error": True,
-            "source": "World Bank Open Data",
-            "data_retrieved_at": _now().isoformat(),
-            "caveats": [
-                f"{indicator!r} is not a World Bank indicator code. Use a code "
-                "like 'NY.GDP.MKTP.CD' or an alias like 'gdp'."
-            ],
-        }
+        return failure_result(
+            "World Bank Open Data",
+            WB_BASE,
+            f"{indicator!r} is not a World Bank indicator code. Use a code "
+            "like 'NY.GDP.MKTP.CD' or an alias like 'gdp'.",
+            validation_error=True,
+            indicator_id=indicator,
+            indicator_name=None,
+            country="Philippines",
+            country_iso3="PHL",
+            observations=[],
+        )
     per_page = max(1, min(int(per_page), 100))
     ckey = cache_key({"tool": "wb", "indicator": code, "per_page": per_page})
     cache = CACHES["world_bank"]
@@ -115,54 +213,32 @@ async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
         return cache[ckey]
 
     url = f"{WB_BASE}/{code}"
-    params = {"format": "json", "per_page": per_page}
 
     try:
-        response = await fetch_with_retry(CLIENT, "GET", url, params=params)
-        response.raise_for_status()
-        payload = response.json()
+        indicator_name, observations, skipped = await _fetch_observations(code, per_page)
+    except WorldBankUpstreamError as exc:
+        log_stderr(f"World Bank error: {exc}")
+        return failure_result(
+            "World Bank Open Data",
+            url,
+            f"World Bank fetch failed: {exc}",
+            indicator_id=code,
+            indicator_name=None,
+            country="Philippines",
+            country_iso3="PHL",
+            observations=[],
+        )
     except Exception as exc:
         log_stderr(f"World Bank error: {exc}")
-        return {
-            "indicator_id": code,
-            "indicator_name": None,
-            "country": "Philippines",
-            "country_iso3": "PHL",
-            "observations": [],
-            "upstream_error": True,
-            "source": "World Bank Open Data",
-            "data_retrieved_at": _now().isoformat(),
-            "caveats": [f"World Bank fetch failed: {type(exc).__name__}: {exc}"],
-        }
-
-    if not isinstance(payload, list) or len(payload) < 2:
-        return {
-            "indicator_id": code,
-            "indicator_name": None,
-            "country": "Philippines",
-            "country_iso3": "PHL",
-            "observations": [],
-            "upstream_error": True,
-            "source": "World Bank Open Data",
-            "data_retrieved_at": _now().isoformat(),
-            "caveats": [f"Unexpected WB response shape for indicator '{code}'"],
-        }
-
-    records = payload[1] or []
-    indicator_name = None
-    observations: list[dict] = []
-    for rec in records:
-        if indicator_name is None and isinstance(rec.get("indicator"), dict):
-            indicator_name = rec["indicator"].get("value")
-        value = rec.get("value")
-        if value is None:
-            continue
-        observations.append(
-            {
-                "year": int(rec["date"]) if str(rec.get("date", "")).isdigit() else rec.get("date"),
-                "value": value,
-                "unit": rec.get("unit") or "",
-            }
+        return failure_result(
+            "World Bank Open Data",
+            url,
+            f"World Bank fetch failed: {type(exc).__name__}: {exc}",
+            indicator_id=code,
+            indicator_name=None,
+            country="Philippines",
+            country_iso3="PHL",
+            observations=[],
         )
 
     result = WorldBankIndicator(
@@ -173,5 +249,9 @@ async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
         observations=observations,
         data_retrieved_at=_now(),
     ).model_dump(mode="json")
+    if skipped:
+        result["caveats"] = [
+            f"Skipped {skipped} row(s) with a non-numeric or non-finite value for indicator {code!r}."
+        ]
     cache[ckey] = result
     return result

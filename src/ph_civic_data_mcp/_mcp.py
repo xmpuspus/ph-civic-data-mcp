@@ -26,6 +26,10 @@ mcp = FastMCP(
       typhoons, volcano alerts), and the 3-day weather outlook, with per-100k
       normalization already derived. Prefer this over orchestrating the
       individual tools yourself.
+    - compare_areas(locations, metrics): 2 to 5 places side by side, one
+      row each (population, poverty, inflation, employment, procurement,
+      quake risk). Sets `comparable: false` plus a caveat when the rows carry
+      different data vintages or admin levels. format="csv" adds an export.
     - assess_area_risk(location) — hazard-only subset (faster) when you just
       need earthquake/typhoon/volcano status.
     - resolve_ph_location(query) — PSGC code for a free-text place name.
@@ -45,10 +49,11 @@ mcp = FastMCP(
       by year), poverty (2023 Full Year), get_inflation_stats (regional CPI,
       latest published month), get_labor_stats (national LFS rates),
       get_health_indicators.
-      For anything outside those curated tables, walk the whole ~2,900-table
-      catalog: browse_psa_catalog(path) -> describe_psa_dataset(dataset_path)
-      -> query_psa_dataset(dataset_path, selections). Always describe before
-      you query: every dimension needs explicit value codes, "all" and "*"
+      For anything outside those curated tables, search the whole ~2,900-table
+      catalog first: search_psa_catalog(keyword) -> describe_psa_dataset(
+      dataset_path) -> query_psa_dataset(dataset_path, selections).
+      browse_psa_catalog(path) walks it level by level when a keyword is not
+      enough. Always describe before you query: every dimension needs explicit value codes, "all" and "*"
       are rejected, and one query is capped at 1000 cells.
 
     Accountability:
@@ -74,6 +79,8 @@ mcp = FastMCP(
     means the argument was wrong and a retry cannot help. Failures are never
     cached, so retrying later is meaningful. get_area_profile reports one
     status per block in `blocks` and folds every failed block into caveats.
+    get_data_freshness reports per-host `source_health` (last success, last
+    failure, latency) for this process, so check it when a source looks down.
 
     Civic-tech framing (read every turn):
     This server is for civic research and accountability work. When you call

@@ -11,11 +11,17 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 from ph_civic_data_mcp.models.climate import SolarClimate, SolarClimateDay
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import DATA_STATUS_INDETERMINATE, failure_result
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 NASA_POWER_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 
 PARAMETERS = "ALLSKY_SFC_SW_DWN,T2M,PRECTOTCORR,WS2M"
+
+# A span with no cap let "1981-01-01" to today return 16,683 daily rows in
+# one response. NASA POWER's own daily coverage starts in 1981, so a year is
+# generous for any solar-site or historical-climate check this tool serves.
+MAX_SPAN_DAYS = 366
 
 
 def _now() -> datetime:
@@ -41,6 +47,10 @@ def _sanitize(val: float | None) -> float | None:
     return float(val)
 
 
+def _as_dict(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 @mcp.tool(
     title="Solar irradiance and climate at a point",
     tags={"climate", "nasa", "philippines", "solar"},
@@ -58,30 +68,110 @@ async def get_solar_and_climate(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict:
-    """Daily solar irradiance + climate variables from NASA POWER for any coordinate.
+    """Daily solar irradiance and climate variables from NASA POWER for any coordinate.
 
-    Returns daily all-sky surface shortwave irradiance (kWh/m²/day), 2m temperature (°C),
-    corrected precipitation (mm/day), and 2m wind speed (m/s). Useful for solar energy
-    siting, agricultural planning, and historical climate analysis.
+    Returns daily solar irradiance, 2m temperature, corrected precipitation,
+    and 2m wind speed, in kWh per m2, Celsius, mm, and m per second. Useful
+    for solar-site screening, farm planning, and historical climate checks. Examples:
+
+      get_solar_and_climate(14.5995, 120.9842)                              # Manila, last 14 days
+      get_solar_and_climate(14.5995, 120.9842, "2026-04-01", "2026-04-02")  # a fixed 2-day window
+
+    On failure: an upstream fetch failure or a non-object response body
+    returns data_status "unavailable", with upstream_error true, days [],
+    and the real error text in caveats. A properties or parameter field
+    that is missing, null, or not an object returns data_status
+    "indeterminate", with upstream_error true and days []. A start_date or
+    end_date that does not parse as YYYY-MM-DD, an end_date before
+    start_date, a span over 366 days, or a latitude or longitude out of
+    range, returns data_status "invalid_request", with validation_error true
+    and days [].
 
     Args:
         latitude: Decimal degrees, WGS84.
         longitude: Decimal degrees, WGS84.
         start_date: ISO date string (YYYY-MM-DD). Defaults to 14 days ago.
-        end_date: ISO date string (YYYY-MM-DD). Defaults to today.
+        end_date: ISO date string (YYYY-MM-DD). Defaults to today. The span
+                  from start_date to end_date cannot exceed 366 days.
     """
+    if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+        return failure_result(
+            "NASA POWER",
+            NASA_POWER_URL,
+            f"latitude {latitude} or longitude {longitude} is out of range. "
+            "Latitude must be -90 to 90. Longitude must be -180 to 180.",
+            validation_error=True,
+            latitude=latitude,
+            longitude=longitude,
+            start_date=start_date,
+            end_date=end_date,
+            days=[],
+        )
+
     today = _now().date()
-    try:
-        sd = date_cls.fromisoformat(start_date) if start_date else today - timedelta(days=14)
-    except ValueError:
+    if start_date is not None:
+        try:
+            sd = date_cls.fromisoformat(start_date)
+        except ValueError:
+            return failure_result(
+                "NASA POWER",
+                NASA_POWER_URL,
+                f"start_date {start_date!r} is not a valid YYYY-MM-DD date.",
+                validation_error=True,
+                latitude=latitude,
+                longitude=longitude,
+                start_date=start_date,
+                end_date=end_date,
+                days=[],
+            )
+    else:
         sd = today - timedelta(days=14)
-    try:
-        ed = date_cls.fromisoformat(end_date) if end_date else today
-    except ValueError:
+    if end_date is not None:
+        try:
+            ed = date_cls.fromisoformat(end_date)
+        except ValueError:
+            return failure_result(
+                "NASA POWER",
+                NASA_POWER_URL,
+                f"end_date {end_date!r} is not a valid YYYY-MM-DD date.",
+                validation_error=True,
+                latitude=latitude,
+                longitude=longitude,
+                start_date=start_date,
+                end_date=end_date,
+                days=[],
+            )
+    else:
         ed = today
 
-    if sd > ed:
-        sd, ed = ed, sd
+    if ed < sd:
+        return failure_result(
+            "NASA POWER",
+            NASA_POWER_URL,
+            f"end_date {ed.isoformat()} is before start_date {sd.isoformat()}. "
+            "Swap the two dates and try again.",
+            validation_error=True,
+            latitude=latitude,
+            longitude=longitude,
+            start_date=sd.isoformat(),
+            end_date=ed.isoformat(),
+            days=[],
+        )
+
+    span_days = (ed - sd).days
+    if span_days > MAX_SPAN_DAYS:
+        return failure_result(
+            "NASA POWER",
+            NASA_POWER_URL,
+            f"Requested span is {span_days} days. The cap is {MAX_SPAN_DAYS} days. "
+            "Narrow start_date and end_date.",
+            validation_error=True,
+            latitude=latitude,
+            longitude=longitude,
+            start_date=sd.isoformat(),
+            end_date=ed.isoformat(),
+            days=[],
+        )
 
     ckey = cache_key(
         {
@@ -110,24 +200,56 @@ async def get_solar_and_climate(
         response = await fetch_with_retry(CLIENT, "GET", NASA_POWER_URL, params=params)
         response.raise_for_status()
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError(f"NASA POWER returned a non-object body: {type(payload).__name__}")
     except Exception as exc:
         log_stderr(f"NASA POWER error: {exc}")
-        return {
-            "latitude": latitude,
-            "longitude": longitude,
-            "start_date": sd.isoformat(),
-            "end_date": ed.isoformat(),
-            "days": [],
-            "source": "NASA POWER",
-            "data_retrieved_at": _now().isoformat(),
-            "caveats": [f"NASA POWER fetch failed: {type(exc).__name__}"],
-        }
+        return failure_result(
+            "NASA POWER",
+            NASA_POWER_URL,
+            f"NASA POWER fetch failed: {type(exc).__name__}: {exc}",
+            latitude=latitude,
+            longitude=longitude,
+            start_date=sd.isoformat(),
+            end_date=ed.isoformat(),
+            days=[],
+        )
 
-    data = payload.get("properties", {}).get("parameter", {}) or {}
-    solar = data.get("ALLSKY_SFC_SW_DWN", {}) or {}
-    t2m = data.get("T2M", {}) or {}
-    precip = data.get("PRECTOTCORR", {}) or {}
-    wind = data.get("WS2M", {}) or {}
+    raw_properties = payload.get("properties")
+    if raw_properties is None or not isinstance(raw_properties, dict):
+        return failure_result(
+            "NASA POWER",
+            NASA_POWER_URL,
+            f"NASA POWER sent a missing or non-object 'properties' field: "
+            f"{type(raw_properties).__name__}.",
+            data_status=DATA_STATUS_INDETERMINATE,
+            latitude=latitude,
+            longitude=longitude,
+            start_date=sd.isoformat(),
+            end_date=ed.isoformat(),
+            days=[],
+        )
+    properties = _as_dict(raw_properties)
+
+    raw_parameter = properties.get("parameter")
+    if raw_parameter is None or not isinstance(raw_parameter, dict):
+        return failure_result(
+            "NASA POWER",
+            NASA_POWER_URL,
+            f"NASA POWER sent a missing or non-object 'parameter' field: "
+            f"{type(raw_parameter).__name__}.",
+            data_status=DATA_STATUS_INDETERMINATE,
+            latitude=latitude,
+            longitude=longitude,
+            start_date=sd.isoformat(),
+            end_date=ed.isoformat(),
+            days=[],
+        )
+    data = _as_dict(raw_parameter)
+    solar = _as_dict(data.get("ALLSKY_SFC_SW_DWN"))
+    t2m = _as_dict(data.get("T2M"))
+    precip = _as_dict(data.get("PRECTOTCORR"))
+    wind = _as_dict(data.get("WS2M"))
 
     dates = sorted(set(solar) | set(t2m) | set(precip) | set(wind))
     days: list[SolarClimateDay] = []

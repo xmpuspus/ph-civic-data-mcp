@@ -17,6 +17,12 @@ from ph_civic_data_mcp.sources.infra import (
 )
 from ph_civic_data_mcp.sources.pagasa import get_active_typhoons, get_weather_alerts
 from ph_civic_data_mcp.sources.phivolcs import get_latest_earthquakes, get_volcano_status
+from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_INDETERMINATE,
+    DATA_STATUS_SUCCESS,
+    DATA_STATUS_UNAVAILABLE,
+    is_failure,
+)
 
 
 def _now() -> datetime:
@@ -39,12 +45,27 @@ def _parse_dt(raw: object) -> datetime | None:
     return dt
 
 
+def _child_failed(result: object) -> bool:
+    """True when a gathered child call failed, by exception, envelope, or type.
+
+    `is_failure` only reads a dict envelope. `asyncio.gather(return_exceptions=True)`
+    can also hand back a raw exception, so that case is checked here too. A
+    child that returns neither a list nor a dict (None, or another wrong
+    type) is not a real empty answer either, so it counts as failed too.
+    """
+    if isinstance(result, BaseException) or is_failure(result):
+        return True
+    return not isinstance(result, (list, dict))
+
+
 def _unwrap_list(result: object, caveats: list[str], label: str) -> list:
     """Normalize a gathered upstream result to a list.
 
     Upstream list tools return a dict failure envelope (results: [],
     upstream_error: true) on outage; exceptions surface via
-    asyncio.gather(return_exceptions=True). Both become caveats here.
+    asyncio.gather(return_exceptions=True). Both become caveats here. A
+    result that is neither a list nor a dict (None, or a wrong type from a
+    broken upstream call) is a failed child too, not a quiet empty list.
     """
     if isinstance(result, BaseException):
         caveats.append(f"{label} failed: {type(result).__name__}")
@@ -53,39 +74,69 @@ def _unwrap_list(result: object, caveats: list[str], label: str) -> list:
         upstream_caveats = result.get("caveats") or []
         caveats.append(f"{label} failed: {'; '.join(upstream_caveats) or 'upstream error'}")
         return []
-    return result or []
+    if isinstance(result, list):
+        return result
+    caveats.append(f"{label} failed: unexpected result type {type(result).__name__}")
+    return []
 
 
 # Geographic chrome that PHIVOLCS/PAGASA include in location strings but that
-# match too broadly against project titles. Compared in lowercase. Curated on
-# audit 2026-05-01 from observed false-positive evidence.
+# match too broadly against project titles. Compared in lowercase.
+#
+# Two tiers make up this set. Generic descriptor words, such as city, island,
+# and north, plus the Spanish norte, oriental, occidental, and nueva, came
+# from the 2026-05-01 false-positive audit. Whole-region and archipelago-
+# scale proper names sit here too, such as luzon, manila, mindanao, visayas,
+# and metro. On 2026-09-03, 11 more region names joined this set, pulled
+# live from the 17 official PSGC regions. One region spans many separate
+# provinces, so a shared token there is too broad to prove one earthquake
+# overlaps one specific project.
+#
+# PSGC province names (samar, surigao, batanes, pampanga, and the rest) stay
+# OFF this list on purpose. tests/test_v031_fixes.py pins "samar" and
+# "surigao" surviving the filter, and tests/test_v030_cross_source.py pins
+# "batanes" firing a real hazard_overlap match. A province is specific
+# enough that a shared token there is real signal, not chrome.
 _HAZARD_STOPWORDS: frozenset[str] = frozenset(
     {
         "area",
         "areas",
         "barangay",
-        "city",
-        "cities",
+        "barmm",
+        "bicol",
+        "cagayan",
+        "calabarzon",
+        "caraga",
         "central",
+        "cities",
+        "city",
         "coast",
         "coastal",
+        "davao",
         "deep",
         "district",
         "east",
         "eastern",
+        "ilocos",
         "island",
         "islands",
         "isle",
         "luzon",
-        "metro",
         "manila",
+        "metro",
+        "mimaropa",
         "mindanao",
         "mountain",
         "municipal",
         "municipality",
         "north",
         "northern",
+        "norte",
+        "nueva",
+        "occidental",
         "ocean",
+        "oriental",
+        "peninsula",
         "philippine",
         "philippines",
         "province",
@@ -95,12 +146,14 @@ _HAZARD_STOPWORDS: frozenset[str] = frozenset(
         "regions",
         "river",
         "sea",
+        "soccsksargen",
         "south",
         "southern",
         "valley",
         "visayas",
         "west",
         "western",
+        "zamboanga",
     }
 )
 
@@ -162,16 +215,30 @@ async def assess_area_risk(location: str) -> dict:
 
     Makes parallel upstream calls to PHIVOLCS (earthquakes, volcano alert
     levels) and PAGASA (active typhoons, weather alerts). Expect 3-6 second
-    response time.
+    response time. earthquake_risk_level is a heuristic reading of recent
+    seismic activity, never an official PHIVOLCS hazard assessment.
+    Examples:
+
+      assess_area_risk("Manila")
+      assess_area_risk("Batangas")
+
+    On failure: this tool never raises. A failed PHIVOLCS or PAGASA sub-call
+    shows up as a caveats entry naming the source, and the other sources
+    still report. data_status is "success" when every sub-call succeeded,
+    "indeterminate" when some failed, and "unavailable" when all failed;
+    upstream_error is true for the last two.
 
     Args:
         location: Municipality, city, or province name.
 
     Returns:
-        earthquake_risk_level derived from recent 30-day seismic activity (not an
-        official PHIVOLCS assessment), typhoon signal status, active alerts,
-        elevated volcano alerts (national scope), and caveats describing any
-        failed sub-calls.
+        earthquake_risk_level derived from recent 30-day seismic activity
+        (not an official PHIVOLCS assessment), or None if the earthquake or
+        volcano sub-call failed, since "Low" would then be an unsupported
+        claim. Also typhoon signal status, active alerts, elevated volcano
+        alerts (national scope), a blocks dict naming each sub-call as
+        "success" or "unavailable", top-level data_status and
+        upstream_error, and caveats describing any failed sub-calls.
     """
     retrieved_at = _now()
     caveats: list[str] = []
@@ -188,10 +255,43 @@ async def assess_area_risk(location: str) -> dict:
     )
     earthquakes_result, typhoons_result, alerts_result, volcano_result = results
 
+    earthquakes_failed = _child_failed(earthquakes_result)
+    typhoons_failed = _child_failed(typhoons_result)
+    alerts_failed = _child_failed(alerts_result)
+    volcano_failed = _child_failed(volcano_result)
+
     earthquakes = _unwrap_list(earthquakes_result, caveats, "PHIVOLCS earthquake query")
     typhoons = _unwrap_list(typhoons_result, caveats, "PAGASA typhoon query")
     active_alerts = _unwrap_list(alerts_result, caveats, "PAGASA alerts query")
     volcanoes = _unwrap_list(volcano_result, caveats, "PHIVOLCS volcano query")
+
+    # get_volcano_status returns a list on success, but one volcano entry can
+    # still carry upstream_error true when only its own bulletin fetch
+    # failed. _child_failed cannot see that, since the top-level call
+    # returned a list, not a failure envelope. Treat that entry as a
+    # degraded child and lift its caveat to the top level.
+    volcano_degraded = False
+    for v in volcanoes:
+        if isinstance(v, dict) and v.get("upstream_error"):
+            volcano_degraded = True
+            caveats.extend(str(c) for c in (v.get("caveats") or []))
+
+    blocks = {
+        "earthquakes": "unavailable" if earthquakes_failed else "success",
+        "typhoons": "unavailable" if typhoons_failed else "success",
+        "alerts": "unavailable" if alerts_failed else "success",
+        "volcanoes": "unavailable"
+        if volcano_failed
+        else ("indeterminate" if volcano_degraded else "success"),
+    }
+    failed_count = sum([earthquakes_failed, typhoons_failed, alerts_failed, volcano_failed])
+    if failed_count == 0 and not volcano_degraded:
+        data_status = DATA_STATUS_SUCCESS
+    elif failed_count == len(blocks):
+        data_status = DATA_STATUS_UNAVAILABLE
+    else:
+        data_status = DATA_STATUS_INDETERMINATE
+    upstream_error = data_status in (DATA_STATUS_UNAVAILABLE, DATA_STATUS_INDETERMINATE)
 
     recent_earthquakes_30d = 0
     max_magnitude_30d = 0.0
@@ -228,7 +328,12 @@ async def assess_area_risk(location: str) -> dict:
         if isinstance(v.get("alert_level"), int) and v["alert_level"] >= 1
     ]
 
-    risk_level = _risk_from_activity(recent_earthquakes_30d, max_magnitude_30d)
+    # "Low" is a claim about real seismic activity. When the earthquake or
+    # volcano data never arrived, there is nothing to base that claim on.
+    if earthquakes_failed or volcano_failed:
+        risk_level = None
+    else:
+        risk_level = _risk_from_activity(recent_earthquakes_30d, max_magnitude_30d)
 
     return {
         "location": location,
@@ -242,6 +347,9 @@ async def assess_area_risk(location: str) -> dict:
         "volcano_alerts_scope": "national — PHIVOLCS volcano bulletins are not geo-filtered",
         "assessment_datetime": retrieved_at.isoformat(),
         "caveats": caveats,
+        "data_status": data_status,
+        "upstream_error": upstream_error,
+        "blocks": blocks,
         "note": (
             "earthquake_risk_level is derived from recent seismic activity, "
             "not an official PHIVOLCS hazard assessment. For emergencies refer "
@@ -289,7 +397,18 @@ async def flag_infra_anomalies(
       "progress is missing" finding.
     - hazard_overlap: project location keywords overlap with a recent
       PHIVOLCS earthquake (>=M4.0 in last 30d) or an active PAGASA typhoon
-      footprint, suggesting urgency or post-disaster reconstruction context
+      footprint, suggesting urgency or post-disaster reconstruction
+      context. Examples:
+
+      flag_infra_anomalies()
+      flag_infra_anomalies(min_cost_php=100_000_000)
+
+    On failure: this tool never raises. data_status is "success" when
+    PhilGEPS, PHIVOLCS, and PAGASA all load, "indeterminate" when one or two
+    fail, and "unavailable" when all three fail; upstream_error is true for
+    the last two. A failed sub-call shows up as a caveats entry naming the
+    source, and the flagged list still returns data from every source that
+    did respond.
 
     Args:
         region: PH region filter for the project list.
@@ -313,6 +432,16 @@ async def flag_infra_anomalies(
         projects_task, earthquakes_task, typhoons_task, return_exceptions=True
     )
 
+    child_results = (projects_result, earthquakes_result, typhoons_result)
+    failed_count = sum(_child_failed(r) for r in child_results)
+    if failed_count == 0:
+        data_status = DATA_STATUS_SUCCESS
+    elif failed_count == len(child_results):
+        data_status = DATA_STATUS_UNAVAILABLE
+    else:
+        data_status = DATA_STATUS_INDETERMINATE
+    upstream_error = data_status in (DATA_STATUS_UNAVAILABLE, DATA_STATUS_INDETERMINATE)
+
     projects = _unwrap_list(projects_result, caveats, "PhilGEPS fetch")
     earthquakes = _unwrap_list(earthquakes_result, caveats, "PHIVOLCS fetch")
     typhoons = _unwrap_list(typhoons_result, caveats, "PAGASA fetch")
@@ -321,8 +450,10 @@ async def flag_infra_anomalies(
     # Use only capitalized words from the original (un-lowercased) location string
     # to keep generic words ("city", "road", "area") out of the keyword set, then
     # apply an explicit stoplist of common geographic chrome that survives the
-    # capitalization filter. Audit 2026-05-01 found tokens like "city" and
-    # "surigao" matching project titles like "Pasig City" with no real overlap.
+    # capitalization filter. Audit 2026-05-01 found "city" matching an
+    # unrelated project titled "Pasig City" with no real overlap.
+    # _HAZARD_STOPWORDS documents which words this stoplist excludes, and why
+    # province names such as "surigao" stay in the keyword set on purpose.
     cutoff = retrieved_at - timedelta(days=30)
     hazard_keywords: set[str] = set()
     recent_quake_count_30d = 0
@@ -436,6 +567,8 @@ async def flag_infra_anomalies(
             "active_typhoon_count": len(typhoons),
         },
         "caveats": caveats,
+        "data_status": data_status,
+        "upstream_error": upstream_error,
         "assessment_datetime": retrieved_at.isoformat(),
         "source": "PhilGEPS + PHIVOLCS + PAGASA",
         "source_url": (

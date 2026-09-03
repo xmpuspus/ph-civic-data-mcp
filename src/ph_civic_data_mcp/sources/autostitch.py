@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.sources.cross_source import assess_area_risk
-from ph_civic_data_mcp.sources.infra import search_infra_projects
+from ph_civic_data_mcp.sources.infra import infra_sample_coverage, search_infra_projects
 from ph_civic_data_mcp.sources.pagasa import get_weather_forecast
 from ph_civic_data_mcp.sources.psa import (
     get_inflation_stats,
@@ -72,16 +72,27 @@ def _unwrap(result: object, caveats: list[str], label: str) -> tuple[dict | list
     region name, never an outage) into the same status as a real outage, so
     a profile flagged its top-level `upstream_error` for a call that never
     left the process.
+
+    A child that reports `data_status="empty"` (a genuine no-data answer, not
+    an outage) does not set `upstream_error` or `validation_error`, so
+    `is_failure` alone missed it and the block read as "success" with no
+    caveat. Every non-success `data_status`, whatever its own name, now
+    propagates as-is and always lifts the child's caveats.
     """
     if isinstance(result, BaseException):
         caveats.append(f"{label} failed: {type(result).__name__}: {result}")
         return None, DATA_STATUS_UNAVAILABLE
-    if is_failure(result):
+    status = result.get("data_status") if isinstance(result, dict) else None  # type: ignore[union-attr]
+    if status and status != DATA_STATUS_SUCCESS:
         detail = result.get("caveats") or ["upstream error with no detail"]  # type: ignore[union-attr]
         for c in detail:
             caveats.append(f"{label}: {c}")
-        status = result.get("data_status") or DATA_STATUS_UNAVAILABLE  # type: ignore[union-attr]
         return None, status
+    if status is None and is_failure(result):
+        detail = result.get("caveats") or ["upstream error with no detail"]  # type: ignore[union-attr]
+        for c in detail:
+            caveats.append(f"{label}: {c}")
+        return None, DATA_STATUS_UNAVAILABLE
     return result, DATA_STATUS_SUCCESS  # type: ignore[return-value]
 
 
@@ -104,15 +115,35 @@ async def get_area_profile(location: str) -> dict:
     labor), procurement activity, multi-hazard risk, and the short-range
     weather outlook — in a single agent turn instead of eight. Adds derived
     cross-source context (e.g. infrastructure notices per 100k residents) so
-    the caller does not have to normalize raw counts itself.
+    the caller does not have to normalize raw counts itself. Examples:
+
+      get_area_profile("Cebu City")   city-level demographics, hazard, weather
+      get_area_profile("NCR")         region-level, no province in the chain
+      get_area_profile("Tacloban")    city under a resolved province
+
+    On failure: each block (population, poverty, inflation, labor, hazard,
+    weather, infra, resolve) gets its own status in blocks. A failed sibling
+    appears there and in caveats, never as a silent null. The top-level
+    upstream_error is true only when a block is genuinely unreachable, not
+    when a sibling rejected an argument or returned a real empty answer.
 
     Args:
         location: Municipality, city, province, or region name.
                   e.g. "Leyte", "Cebu City", "Davao Region", "NCR".
 
-    Returns: resolved location, demographics, economy, procurement, hazard,
-    weather, derived correlations, per-block reference periods, caveats listing
-    any upstream that failed, and the public-data disclaimer.
+    Returns: resolved location, demographics (population and poverty, plus
+    each figure's own geography, PSGC code, census, and reference-date
+    provenance), economy, procurement, hazard, weather, national_reference
+    (the country's population and poverty for comparison), derived
+    correlations (infra_notices_per_100k_population is null and carries an
+    infra_coverage_caveat when the PhilGEPS sample is nonzero but below the
+    500-notice threshold for a population-representative rate), per-block
+    reference periods, caveats listing any upstream that failed, and the
+    public-data disclaimer.
+
+    The first call in a process pays the PSA rate limit for every block at
+    once, so it can take about 15 seconds. A later call for any place reuses
+    the cached national reference and PSA discovery, so it is fast.
     """
     retrieved_at = _now()
     caveats: list[str] = []
@@ -165,15 +196,55 @@ async def get_area_profile(location: str) -> dict:
         "hazard": asyncio.create_task(assess_area_risk(location)),
         "weather": asyncio.create_task(get_weather_forecast(location, days=3)),
         "labor": asyncio.create_task(get_labor_stats()),
+        # National figures let a caller read a place's number against the
+        # country's without a second tool call. Fetched here, in the same
+        # gather, so national_reference costs no extra latency.
+        "national_population": asyncio.create_task(get_population_stats()),
+        "national_poverty": asyncio.create_task(get_poverty_stats()),
     }
-    if region_name:
-        tasks["population"] = asyncio.create_task(get_population_stats(region=region_name))
-        tasks["poverty"] = asyncio.create_task(get_poverty_stats(region=region_name))
-        tasks["inflation"] = asyncio.create_task(get_inflation_stats(area=region_name))
-    infra_filter = province_name or (locality_name if matched else None)
-    tasks["infra"] = asyncio.create_task(
-        search_infra_projects(province=infra_filter, region=region_name, limit=100)
+
+    # A resolved city or province must report its own numbers, not the
+    # containing region's total. Before this fix, Tacloban, a city, showed
+    # Region VIII's multi-million total. Population now uses the PSGC code
+    # directly (v0.6.1 added that parameter to get_population_stats). Poverty
+    # has no psgc_code parameter, so it falls back to the containing
+    # province, the most specific level its PXWeb table carries. A
+    # region-level query, or a match with no province node in the chain,
+    # keeps the region-name path for both.
+    place_more_specific_than_region = matched and (resolved.get("level") or "") not in (
+        "",
+        "region",
     )
+    if place_more_specific_than_region and resolved.get("psgc_code"):
+        tasks["population"] = asyncio.create_task(
+            get_population_stats(psgc_code=resolved["psgc_code"])
+        )
+    elif region_name:
+        tasks["population"] = asyncio.create_task(get_population_stats(region=region_name))
+
+    poverty_area = (province_name if place_more_specific_than_region else None) or region_name
+    if poverty_area:
+        tasks["poverty"] = asyncio.create_task(get_poverty_stats(region=poverty_area))
+
+    # Regional CPI stays on region_name. PSA's public contract for
+    # get_inflation_stats is region-level: "area: Region or Philippines". A
+    # few designated price-monitoring cities, such as City of Tacloban,
+    # appear in the underlying table too. Matching those select cities would
+    # be inconsistent, not a general fix.
+    if region_name:
+        tasks["inflation"] = asyncio.create_task(get_inflation_stats(area=region_name))
+
+    # An unresolved place has no province, region, or verified locality name,
+    # so search_infra_projects(province=None, region=None) would return the
+    # national notice listing and the profile would report it as this
+    # place's own count. Skip the search instead of guessing.
+    if matched:
+        infra_filter = province_name or locality_name
+        tasks["infra"] = asyncio.create_task(
+            search_infra_projects(province=infra_filter, region=region_name, limit=100)
+        )
+    else:
+        caveats.append("Infra notice search needs a resolved place; procurement block skipped.")
 
     gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
     results = dict(zip(tasks.keys(), gathered))
@@ -195,27 +266,102 @@ async def get_area_profile(location: str) -> dict:
     labor = _take("labor", "PSA labor") or {}
     hazard = _take("hazard", "Hazard assessment") or {}
     weather = _take("weather", "Weather forecast") or {}
+    national_population = _take("national_population", "PSA national population") or {}
+    national_poverty = _take("national_poverty", "PSA national poverty") or {}
     infra = _take("infra", "PhilGEPS infra search")
     if not isinstance(infra, list):
         infra = None
     if not isinstance(population, dict):
         population = {}
+    if not isinstance(national_population, dict):
+        national_population = {}
+    if not isinstance(national_poverty, dict):
+        national_poverty = {}
 
     pop_value = population.get("population")
     infra_count: int | None = len(infra) if infra is not None else None
+    # Zero notices is a genuine negative, not an undersized sample of a real
+    # signal, so it takes no coverage caveat and keeps its plain 0.0 rate.
+    infra_coverage = infra_sample_coverage(infra_count) if infra_count else None
+    infra_sufficient = bool(infra_coverage and infra_coverage["sufficient_for_per_capita"])
     infra_per_100k: float | None = None
-    if infra_count is not None and isinstance(pop_value, int) and pop_value > 0:
+    if (infra_sufficient or infra_count == 0) and isinstance(pop_value, int) and pop_value > 0:
         infra_per_100k = round(infra_count / pop_value * 100_000, 2)
 
     correlations = {
         "infra_notice_count": infra_count,
         "infra_notices_per_100k_population": infra_per_100k,
+        "infra_sample_size": infra_count,
         "note": (
             "infra_notices_per_100k_population normalizes the PhilGEPS notice "
             "count by the PSA regional population so the figure is comparable "
             "across regions. PhilGEPS notice counts reflect the latest ~100 "
             "notices window, not a complete regional census of projects."
         ),
+    }
+    if infra_coverage is not None and not infra_sufficient:
+        correlations["infra_coverage_caveat"] = infra_coverage["coverage_caveat"]
+        caveats.append(infra_coverage["coverage_caveat"])
+
+    # national_reference reads the place's own numbers against the country's.
+    # A share or a gap is only meaningful when both sides come from the same
+    # census or survey round, so a vintage mismatch withholds the figure and
+    # names both years instead of comparing numbers that do not line up.
+    national_pop_value = national_population.get("population")
+    national_pop_year = national_population.get("year")
+    national_poverty_pct = national_poverty.get("poverty_incidence_pct")
+    national_poverty_year = national_poverty.get("reference_year")
+
+    population_share_pct: float | None = None
+    place_pop_year = population.get("year")
+    if (
+        isinstance(pop_value, (int, float))
+        and isinstance(national_pop_value, (int, float))
+        and national_pop_value
+    ):
+        if place_pop_year is None or national_pop_year is None:
+            caveats.append(
+                "national_reference: population vintage unknown (place "
+                f"{place_pop_year}, national {national_pop_year}); "
+                "population_share_pct withheld."
+            )
+        elif place_pop_year == national_pop_year:
+            population_share_pct = round(pop_value / national_pop_value * 100, 2)
+        else:
+            caveats.append(
+                "national_reference: population vintages differ (place "
+                f"{place_pop_year}, national {national_pop_year}); "
+                "population_share_pct withheld."
+            )
+
+    place_poverty_pct = poverty.get("poverty_incidence_pct")
+    place_poverty_year = poverty.get("reference_year")
+    poverty_gap_pct_points: float | None = None
+    if isinstance(place_poverty_pct, (int, float)) and isinstance(
+        national_poverty_pct, (int, float)
+    ):
+        if place_poverty_year is None or national_poverty_year is None:
+            caveats.append(
+                "national_reference: poverty vintage unknown (place "
+                f"{place_poverty_year}, national {national_poverty_year}); "
+                "poverty_gap_pct_points withheld."
+            )
+        elif place_poverty_year == national_poverty_year:
+            poverty_gap_pct_points = round(place_poverty_pct - national_poverty_pct, 1)
+        else:
+            caveats.append(
+                "national_reference: poverty vintages differ (place "
+                f"{place_poverty_year}, national {national_poverty_year}); "
+                "poverty_gap_pct_points withheld."
+            )
+
+    national_reference = {
+        "population": national_pop_value,
+        "population_year": national_pop_year,
+        "poverty_incidence_pct": national_poverty_pct,
+        "poverty_year": national_poverty_year,
+        "population_share_pct": population_share_pct,
+        "poverty_gap_pct_points": poverty_gap_pct_points,
     }
 
     return {
@@ -235,8 +381,13 @@ async def get_area_profile(location: str) -> dict:
             "population_year": population.get("year"),
             "population_census": population.get("census"),
             "population_reference": population.get("reference_note"),
+            "population_geography": population.get("geography"),
+            "population_geography_level": population.get("geography_level"),
+            "population_psgc_code": population.get("psgc_code"),
+            "population_reference_date": population.get("reference_date"),
             "poverty_incidence_pct": poverty.get("poverty_incidence_pct"),
             "poverty_reference_year": poverty.get("reference_year"),
+            "poverty_area": poverty.get("region"),
         },
         "economy": {
             "headline_inflation_pct": inflation.get("headline_inflation_pct"),
@@ -267,6 +418,7 @@ async def get_area_profile(location: str) -> dict:
             "days": weather.get("days", []),
         },
         "correlations": correlations,
+        "national_reference": national_reference,
         "blocks": blocks,
         "upstream_error": any(v in _OUTAGE_STATUSES for v in blocks.values()),
         "caveats": caveats,

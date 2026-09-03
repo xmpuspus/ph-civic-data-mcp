@@ -88,7 +88,7 @@ Fixed: `_fetch_barangay_by_code` and `_fetch_one` raise `PSGCFetchError` on a
 real transport failure and return `None` only for a clean non-200/404 miss.
 `get_location_hierarchy` folds that into `upstream_error`.
 
-## 6. MODIS transport failures cache as an empty observation window
+## 6. FIXED in v0.7.0. MODIS transport failures cache as an empty observation window
 
 `sources/modis_ndvi.py`. An outage becomes a legitimate-looking empty result
 and enters the cache.
@@ -116,14 +116,14 @@ Severity: low, but it is a fabricated reference period.
 Fixed: `_year_from_label` returns None and the tool returns an envelope rather
 than publish a year nobody measured.
 
-## 9. PAGASA: the list-response fallback is unreachable
+## 9. FIXED in v0.7.0. PAGASA: the list-response fallback is unreachable
 
 `sources/pagasa.py`. `.get()` runs before the branch meant to handle a list
 response, so the fallback never executes.
 
 Severity: low.
 
-## 10. PAGASA: zero rainfall reads as absent
+## 10. FIXED in v0.7.0. PAGASA: zero rainfall reads as absent
 
 `sources/pagasa.py`. A truthiness check treats `0` rainfall as missing and
 substitutes a different precipitation field, so a genuinely dry day reports
@@ -131,7 +131,7 @@ another number.
 
 Severity: medium. It is a wrong published figure, not a missing one.
 
-## 11. World Bank: a wrong-typed records object caches as an empty success
+## 11. FIXED in v0.7.0. World Bank: a wrong-typed records object caches as an empty success
 
 `sources/world_bank.py`. v0.6.0 added `upstream_error` to the two failure paths
 it has, but a 200 carrying an unexpected type still falls through to a normal
@@ -139,7 +139,7 @@ empty result.
 
 Severity: low.
 
-## 12. A failed metadata fetch can let an older PSA table win discovery
+## 12. FIXED in v0.7.0. A failed metadata fetch can let an older PSA table win discovery
 
 `sources/psa.py`, in `_pick_latest_table`. When the metadata GET for a
 candidate fails, that candidate is skipped, so an older backcast table can win
@@ -147,7 +147,7 @@ and cache as the current series. The tool then reports stale figures as latest.
 
 Severity: high. It publishes a wrong vintage silently. Predates v0.4.0.
 
-## 13. A failed CPI query for the newest year falls back to an older year
+## 13. FIXED in v0.7.0. A failed CPI query for the newest year falls back to an older year
 
 `sources/psa.py`, in `get_inflation_stats`. The year loop walks backwards and
 returns the first year that answers, labelling it the latest available result.
@@ -163,7 +163,7 @@ entry in the metadata, it returns `values[0]`, which is whatever sits first.
 
 Severity: medium. Only metadata drift reaches it.
 
-## 15. A year-filtered infra search keeps records with an unknown year
+## 15. FIXED in v0.7.0. A year-filtered infra search keeps records with an unknown year
 
 `sources/infra.py`. A record whose publication year cannot be parsed passes a
 year filter instead of being excluded.
@@ -185,14 +185,14 @@ the default window rather than telling the caller the argument was wrong.
 
 Severity: medium.
 
-## 18. Open-Meteo air-quality timestamps are labelled UTC but are Manila-local
+## 18. FIXED in v0.7.0. Open-Meteo air-quality timestamps are labelled UTC but are Manila-local
 
 `sources/open_meteo_aq.py`. The API returns naive local timestamps and the
 parser attaches UTC, so every reading is off by eight hours.
 
 Severity: medium. It is a wrong published time on every air-quality result.
 
-## 19. An empty health-query data array becomes a cached null indicator
+## 19. FIXED in v0.7.0. An empty health-query data array becomes a cached null indicator
 
 `sources/psa.py`, in `_latest_health_value`. When a year's query returns an
 empty `data` array the loop moves on, and if every year is empty the indicator
@@ -217,6 +217,63 @@ Severity: low.
 
 Fixed. The value rounds to the nearest whole person, and a `caveats` entry
 names the non-integral cell.
+
+## 22. The PAGASA homepage no longer carries the "No Active Warnings" marker
+
+Found 2026-09-04 while v0.7.0 made `get_weather_alerts` return an empty list
+only on that explicit marker. A live fetch of `bagong.pagasa.dost.gov.ph`
+shows no such phrase, only El Niño and La Niña advisories inside embedded
+JSON and alert names in the nav menu. So on a normal day the tool now
+returns `data_status: "indeterminate"`, which is honest but rarely useful.
+
+The old code returned a bare `[]` here, a false all-clear that cached for 10
+minutes. v0.7.0 removed that. The remaining work is to find the page or
+endpoint that carries the current warnings state, and parse that instead of
+the homepage. Until then the live test accepts the indeterminate envelope.
+
+## 23. `get_location_hierarchy` sends a 10-digit code to the 9-digit detail endpoints
+
+Codex pass 7, 2026-09-04. `lookup_psgc_code` already handles the 10-digit
+edition through the level lists, but the hierarchy tool sends the code to the
+per-record detail endpoints, which only know 9-digit codes. A valid 10-digit
+code returns "not found". Route the hierarchy lookup through the same 10-digit
+path.
+
+## 24. `_open_meteo_forecast` turns an unparseable day into an empty forecast
+
+Codex pass 7. A `daily.time` entry that is not an ISO date is skipped, so a
+list of such entries yields `days: []` and the caller caches it. Treat a
+present day list with zero parsed days as malformed, like the empty list.
+
+## 25. MODIS indexes a string `data` field as a sequence
+
+Codex pass 7. `{"data": "123"}` in a subset row is read character by
+character and scaled, so the tool reports a believable NDVI of 0.0001. Check
+the field is a list before reading it.
+
+## 26. NASA POWER accepts a string where a parameter series belongs
+
+Codex pass 7. A parameter value such as `"broken"` in place of a date map
+yields `days: []` as a success. Check each series is a dict before reading.
+
+## 27. `search_infra_projects(year=0)` disables the year filter
+
+Codex pass 7. A year of zero is falsy, so the filter does not run and every
+record matches. Reject a year outside a sane range as `invalid_request`.
+
+## 28. IBTrACS accepts `inf` as a wind or pressure reading
+
+Codex pass 7. `_f("inf")` converts to a float, so a storm can carry
+`max_wind_kt: inf`. Apply the same `math.isfinite` check World Bank uses.
+
+## 29. release-smoke can time out before a late GitHub Release starts publish.yml
+
+Codex pass 7. The smoke job starts on the tag push and polls PyPI for 20
+minutes. When the trusted publisher is registered and the GitHub Release is
+created more than 20 minutes after the tag, the smoke run fails and the
+later release does not rerun it. The v0.7.0 path uploads with twine before
+the tag, so this does not bite yet. Move the smoke trigger to the release
+event, or have publish.yml call the smoke workflow when it finishes.
 
 ## Suggested order
 

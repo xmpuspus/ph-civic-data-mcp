@@ -29,6 +29,7 @@ from ph_civic_data_mcp.sources.psgc import lookup_psgc_code
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import (
     DATA_STATUS_EMPTY,
+    DATA_STATUS_INDETERMINATE,
     DATA_STATUS_SUCCESS,
     failure_result,
 )
@@ -36,6 +37,9 @@ from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 PSA_API_BASE = "https://openstat.psa.gov.ph/PXWeb/api/v1/en"
 PSA_LICENSE = "PSA Open Data terms (Philippine Statistics Authority, OpenSTAT)"
+# Bounds one indicator fan-out to 10 metadata fetches, so a broad keyword
+# cannot fan out past PSA's 10-per-10-second rate limit.
+HEALTH_MATCH_CAP = 10
 
 
 def _now() -> datetime:
@@ -741,10 +745,12 @@ async def get_population_stats(
       get_population_stats(psgc_code="083747000")  same place, 9-digit code
       get_population_stats(psgc_code="1380100001") one barangay, 2024 Census
 
-    On an OpenSTAT outage: population null, upstream_error true, data_status
-    "unavailable", the real error in caveats. On a bad argument:
-    validation_error true, data_status "invalid_request". A code no census
-    table carries: data_status "empty". Failures are never cached.
+    On failure: data_status is "unavailable" when PSA is down, with
+    upstream_error true. data_status is "invalid_request" for an unknown
+    region, year, or PSGC code, with validation_error true. data_status is
+    "empty" when a valid PSGC code has no row in the chosen census table.
+    caveats always carries the real error text. population is None in every
+    failure. Failures are never cached.
 
     Args:
         region: Region, province or highly urbanized city as PSA labels it,
@@ -1023,7 +1029,27 @@ async def get_population_stats(
     },
 )
 async def get_poverty_stats(region: str | None = None) -> dict:
-    """Poverty incidence from PSA (latest: 2023 Full-Year).
+    """Poverty incidence from the PSA Full Year Poverty Statistics table.
+
+    PSA publishes this once a year, with a lag. As of 2026-09 the latest
+    published year is 2023. The tool discovers the current table live, so a
+    later release shows up without a code change. It also returns the
+    subsistence incidence when PSA publishes both tables for the same year. Examples:
+
+      get_poverty_stats()                 national poverty incidence, latest year
+      get_poverty_stats(region="Bicol")   one region, PSA label
+      get_poverty_stats(region="NCR")     National Capital Region
+
+    On failure: a discovery failure, a missing Incidence dimension, an
+    unparseable year label, or a query failure sets data_status
+    "unavailable" and upstream_error true. A region PSA does not list sets
+    data_status "invalid_request" and validation_error true. A table with no
+    matching incidence measure, or a cell whose values field is not a list,
+    sets data_status "indeterminate" and upstream_error true. A published
+    ".." cell for the region and year sets no error flag and no data_status.
+    Check caveats instead. A subsistence-table failure sets upstream_error
+    true on an otherwise valid poverty figure, but leaves data_status at
+    "success".
 
     Args:
         region: PH region (None returns national).
@@ -1036,16 +1062,14 @@ async def get_poverty_stats(region: str | None = None) -> dict:
     def _err(msg: str) -> dict:
         # Never cached: a transient PXWeb failure must not pin a null poverty
         # figure for the 24h success TTL.
-        return {
-            "region": region or "Philippines",
-            "poverty_incidence_pct": None,
-            "upstream_error": True,
-            "caveats": [msg],
-            "source": "PSA",
-            "source_url": f"{PSA_API_BASE}/DB/",
-            "license": PSA_LICENSE,
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PSA",
+            f"{PSA_API_BASE}/DB/",
+            msg,
+            license=PSA_LICENSE,
+            region=region or "Philippines",
+            poverty_incidence_pct=None,
+        )
 
     try:
         table_url, meta = await _discover_poverty_table()
@@ -1065,23 +1089,45 @@ async def get_poverty_stats(region: str | None = None) -> dict:
 
     geo_hit = _find_geo_value(meta, region, "Geolocation")
     if geo_hit is None:
-        return {
-            "region": region or "Philippines",
-            "caveats": [f"Region '{region}' not found in PSA poverty table"],
-            "source": "PSA",
-            "data_retrieved_at": _now().isoformat(),
-        }
+        # A caller mistake, not an outage. failure_result sets data_status
+        # "invalid_request" and validation_error true, and keeps
+        # poverty_incidence_pct present as None so a caller that indexes it
+        # does not raise KeyError.
+        return failure_result(
+            "PSA",
+            f"{PSA_API_BASE}/DB/",
+            f"Region '{region}' not found in PSA poverty table",
+            license=PSA_LICENSE,
+            validation_error=True,
+            region=region or "Philippines",
+            poverty_incidence_pct=None,
+        )
     geo_val, geo_text = geo_hit
 
     measure_code, measure_values, measure_texts = _variable_values(meta, "Incidence")
     if not measure_values:
         # Indexing [0] here raised IndexError and killed the whole call.
         return _err("PSA poverty table declares no Incidence dimension; its schema changed.")
-    incidence_val = measure_values[0]
+    incidence_val = None
     for val, txt in zip(measure_values, measure_texts):
         if "poverty incidence" in txt.lower() and "famil" in txt.lower():
             incidence_val = val
             break
+    if incidence_val is None:
+        # Falling back to measure_values[0] here once published a standard
+        # error or a population rate as poverty_incidence_pct. No match
+        # means the table schema changed; never guess which measure to use.
+        offered = ", ".join(repr(t) for t in measure_texts)
+        return failure_result(
+            "PSA",
+            table_url,
+            "PSA poverty table offers no 'poverty incidence among families' "
+            f"measure. Measures found: {offered}.",
+            data_status=DATA_STATUS_INDETERMINATE,
+            license=PSA_LICENSE,
+            region=geo_text,
+            poverty_incidence_pct=None,
+        )
 
     year_code, year_values, year_texts = _variable_values(meta, "Year")
     year_val = year_values[-1] if year_values else "0"
@@ -1115,6 +1161,23 @@ async def get_poverty_stats(region: str | None = None) -> dict:
     poverty_pct = _first_cell(payload)
 
     if poverty_pct is None:
+        data = payload.get("data")
+        row = data[0] if isinstance(data, list) and data else None
+        row_values = row.get("values") if isinstance(row, dict) else None
+        if row_values is not None and (
+            isinstance(row_values, (str, bytes)) or not isinstance(row_values, (list, tuple))
+        ):
+            # PXWeb always sends a list here. A string like "10.9" is drift,
+            # not a published ".." cell, and must not read as a confirmed gap.
+            return failure_result(
+                "PSA",
+                table_url,
+                f"PSA poverty query returned a malformed values field, not a list: {row_values!r}.",
+                data_status=DATA_STATUS_INDETERMINATE,
+                license=PSA_LICENSE,
+                region=geo_text,
+                poverty_incidence_pct=None,
+            )
         # The call worked, so this is a real gap in PSA's data, not an outage.
         # _err would say upstream_error and send the agent back to retry.
         return {
@@ -1136,11 +1199,24 @@ async def get_poverty_stats(region: str | None = None) -> dict:
         sub_geo = _find_geo_value(sub_meta, region, "Geolocation")
         sub_measure_code, sub_mv, sub_mt = _variable_values(sub_meta, "Incidence")
         if sub_geo and sub_mv:
-            sub_incidence_val = sub_mv[0]
+            sub_incidence_val = None
             for v, t in zip(sub_mv, sub_mt):
                 if "subsistence" in t.lower() and "famil" in t.lower():
                     sub_incidence_val = v
                     break
+        else:
+            sub_incidence_val = None
+        if sub_geo and sub_mv and sub_incidence_val is None:
+            # Falling back to sub_mv[0] here once published an unrelated
+            # measure, such as a food threshold amount, as
+            # subsistence_incidence_pct. No match means withhold the figure
+            # rather than guess. The headline poverty figure still publishes.
+            offered = ", ".join(repr(t) for t in sub_mt)
+            partial.append(
+                "PSA subsistence table offers no 'subsistence incidence among "
+                f"families' measure. Measures found: {offered}."
+            )
+        elif sub_geo and sub_mv and sub_incidence_val is not None:
             sub_year_code, sub_yv, sub_yt = _variable_values(sub_meta, "Year")
             sub_year_val = sub_yv[-1] if sub_yv else "0"
             sub_year_int = _year_from_label(sub_yt[-1]) if sub_yt else None
@@ -1193,6 +1269,9 @@ async def get_poverty_stats(region: str | None = None) -> dict:
         "source_table": table_url,
         "license": PSA_LICENSE,
         "caveats": partial,
+        "data_status": DATA_STATUS_SUCCESS,
+        "upstream_error": False,
+        "validation_error": False,
         "data_retrieved_at": _now().isoformat(),
     }
     if partial:
@@ -1323,6 +1402,13 @@ async def _pick_latest_table(
     (backcasted 1958-1994 vs current 2019-2026). Among all predicate matches we
     pick the table whose Year dimension reaches the most recent year, so callers
     always get the current series, never a backcast trap.
+
+    Raises PSAUpstreamError on a transient fetch failure. A matched table that
+    cannot be read is not the same as a table that does not match: swallowing
+    that failure and moving to the next candidate let a live outage on the
+    current-era table silently hand back a backcast table's stale figure,
+    cached as "latest" for 24 hours. fetch_with_retry already retries a
+    transient error before this ever raises.
     """
     must_not = must_not or []
     discovery_key = f"latest::{subpath}::{must_have}::{must_not}"
@@ -1339,7 +1425,13 @@ async def _pick_latest_table(
         if any(n in text for n in must_not):
             continue
         table_url = f"{PSA_API_BASE}/DB/{subpath}/{entry['id']}"
-        meta = await _get_json(table_url)
+        try:
+            meta = await _get_json_or_raise(table_url)
+        except PSANotFoundError:
+            # The listing named an id OpenSTAT no longer serves. Skip this one
+            # candidate, not the whole discovery: a stale catalog entry, never
+            # an outage.
+            continue
         if not isinstance(meta, dict):
             continue
         ymax = _year_max(meta)
@@ -1438,14 +1530,23 @@ async def get_inflation_stats(area: str | None = None) -> dict:
     """Headline consumer-price inflation (year-on-year, all items) from PSA.
 
     Source: PSA OpenSTAT Consumer Price Index, 2018-based. The tool discovers
-    the current CPI series by text (never a hardcoded table id) and returns the
-    most recently published month's year-on-year change. Reports the exact
-    reference period — PSA publishes with a lag, so this is the latest available
-    figure, not necessarily the current month.
+    the current CPI series by text, never a hardcoded table id, and returns
+    the most recently published month's year-on-year change. PSA publishes
+    with a lag, so the reported period is the latest one PSA has, not always
+    the current month. Examples:
+
+      get_inflation_stats()             national headline inflation, latest month
+      get_inflation_stats(area="NCR")   one region
+
+    On failure: every failure, including an area name PSA does not list,
+    sets data_status "unavailable" and upstream_error true, with the real
+    error or a not-found message in caveats. validation_error stays false in
+    every case, because a bad area name is treated as an outage here, not a
+    caller mistake.
 
     Args:
         area: Region or "Philippines". None returns the national figure.
-              e.g. "NCR", "Region VII", "Davao Region".
+              For example "NCR", "Region VII", "Davao Region".
     """
     key = cache_key({"tool": "inflation", "area": area})
     cache = CACHES["psa_prices"]
@@ -1455,17 +1556,15 @@ async def get_inflation_stats(area: str | None = None) -> dict:
     def _err(msg: str) -> dict:
         # Error results are never cached — a transient PXWeb failure must not
         # pin a null inflation figure for the 24h success TTL.
-        return {
-            "area": area or "Philippines",
-            "headline_inflation_pct": None,
-            "reference_period": None,
-            "upstream_error": True,
-            "caveats": [msg],
-            "source": "PSA",
-            "source_url": f"{PSA_API_BASE}/DB/2M/PI/CPI/",
-            "license": PSA_LICENSE,
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PSA",
+            f"{PSA_API_BASE}/DB/2M/PI/CPI/",
+            msg,
+            license=PSA_LICENSE,
+            area=area or "Philippines",
+            headline_inflation_pct=None,
+            reference_period=None,
+        )
 
     try:
         discovered = await _pick_latest_table(
@@ -1481,7 +1580,18 @@ async def get_inflation_stats(area: str | None = None) -> dict:
 
     geo_hit = _find_geo_value(meta, area, "Geolocation")
     if geo_hit is None:
-        return _err(f"Area '{area}' not found in PSA CPI geographic dimension")
+        # A caller mistake, not an outage: PSA answered, the area name did not
+        # match its geographic dimension.
+        return failure_result(
+            "PSA",
+            f"{PSA_API_BASE}/DB/2M/PI/CPI/",
+            f"Area '{area}' not found in PSA CPI geographic dimension",
+            license=PSA_LICENSE,
+            validation_error=True,
+            area=area or "Philippines",
+            headline_inflation_pct=None,
+            reference_period=None,
+        )
     geo_val, geo_text = geo_hit
 
     all_items = _match_value(meta, "Commodity Description", "all item")
@@ -1499,7 +1609,11 @@ async def get_inflation_stats(area: str | None = None) -> dict:
     if "2018=100" in title.replace(" ", ""):
         base_year = "2018"
 
-    # Walk newest year backwards until we find a published month.
+    # Walk newest year backwards until we find a published month. A raised
+    # PSAUpstreamError means the POST itself failed and must not fall back to
+    # an older year as if it were the latest. An empty "data" on a response
+    # that did come back means PSA has no rows for that year yet, which is
+    # the one case that may fall back to the year before it.
     for year_code in reversed(year_codes):
         query = {
             "query": [
@@ -1513,8 +1627,18 @@ async def get_inflation_stats(area: str | None = None) -> dict:
             ],
             "response": {"format": "json"},
         }
-        payload = await _post_json(table_url, query)
-        if not payload or not payload.get("data"):
+        try:
+            payload = await _post_json_or_raise(table_url, query)
+            if not isinstance(payload.get("data"), list):
+                # A 200 with no `data` list is a malformed body, not a real
+                # empty year. Falling back would read this year as published.
+                raise PSAUpstreamError(
+                    f"PSA CPI query for year {year_code} returned a malformed "
+                    "payload with no `data` array"
+                )
+        except PSAUpstreamError as exc:
+            return _err(f"PSA CPI query failed: {exc}")
+        if not payload["data"]:
             continue
         period_code_var = next(
             (c for c in _key_columns(payload) if c.lower() == "period"), "Period"
@@ -1559,6 +1683,9 @@ async def get_inflation_stats(area: str | None = None) -> dict:
         result = {
             **stats.model_dump(mode="json"),
             "source_table": table_url,
+            "data_status": DATA_STATUS_SUCCESS,
+            "upstream_error": False,
+            "validation_error": False,
             "source": "PSA",
             "source_url": table_url,
             "license": PSA_LICENSE,
@@ -1586,12 +1713,20 @@ async def get_labor_stats(region: str | None = None) -> dict:
 
     Returns labor-force participation, employment, unemployment, and
     underemployment rates for the latest published reference period. The PSA
-    key-indicator series is national; a `region` argument is recorded as a
-    caveat because this table has no regional breakdown.
+    key-indicator series is national only. Passing `region` does not filter
+    the figure. It only adds an explanatory caveat, because this table has
+    no regional breakdown. Examples:
+
+      get_labor_stats()               national rates, latest reference period
+      get_labor_stats(region="Cebu")  same national rates, plus a caveat
+
+    On failure: an OpenSTAT discovery or query failure sets data_status
+    "unavailable" and upstream_error true, with the real error in caveats.
+    validation_error stays false in every case.
 
     Args:
         region: Accepted for API symmetry. The LFS key-indicator table is
-                national only; passing a region adds an explanatory caveat.
+                national only. Passing a region adds an explanatory caveat.
     """
     key = cache_key({"tool": "labor", "region": region})
     cache = CACHES["psa_labor"]
@@ -1606,20 +1741,18 @@ async def get_labor_stats(region: str | None = None) -> dict:
 
     def _err(msg: str) -> dict:
         # Error results are never cached (see get_inflation_stats._err).
-        return {
-            "area": "Philippines",
-            "employment_rate_pct": None,
-            "unemployment_rate_pct": None,
-            "underemployment_rate_pct": None,
-            "labor_force_participation_rate_pct": None,
-            "reference_period": None,
-            "upstream_error": True,
-            "caveats": [*caveats, msg],
-            "source": "PSA",
-            "source_url": f"{PSA_API_BASE}/DB/1B/LFS/",
-            "license": PSA_LICENSE,
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PSA",
+            f"{PSA_API_BASE}/DB/1B/LFS/",
+            [*caveats, msg],
+            license=PSA_LICENSE,
+            area="Philippines",
+            employment_rate_pct=None,
+            unemployment_rate_pct=None,
+            underemployment_rate_pct=None,
+            labor_force_participation_rate_pct=None,
+            reference_period=None,
+        )
 
     try:
         discovered = await _pick_latest_table("1B/LFS", ["rates", "key employment indicators"], [])
@@ -1639,6 +1772,9 @@ async def get_labor_stats(region: str | None = None) -> dict:
     rate_codes = rates_var.get("values", [])
     month_codes = month_var.get("values", [])
 
+    # Same shape as get_inflation_stats: a raised PSAUpstreamError is a POST
+    # failure and must not fall back to an older year. An empty "data" on a
+    # real response is the one case that may fall back to the year before.
     for year_code in reversed(year_var.get("values", [])):
         query = {
             "query": [
@@ -1649,8 +1785,18 @@ async def get_labor_stats(region: str | None = None) -> dict:
             ],
             "response": {"format": "json"},
         }
-        payload = await _post_json(table_url, query)
-        if not payload or not payload.get("data"):
+        try:
+            payload = await _post_json_or_raise(table_url, query)
+            if not isinstance(payload.get("data"), list):
+                # Same guard as get_inflation_stats: a malformed body must not
+                # read as a genuine empty year and fall back to an older one.
+                raise PSAUpstreamError(
+                    f"PSA LFS query for year {year_code} returned a malformed "
+                    "payload with no `data` array"
+                )
+        except PSAUpstreamError as exc:
+            return _err(f"PSA LFS query failed: {exc}")
+        if not payload["data"]:
             continue
         cols = _key_columns(payload)
         month_col = next((c for c in cols if c.lower() == "month"), "Month")
@@ -1717,6 +1863,9 @@ async def get_labor_stats(region: str | None = None) -> dict:
             **stats.model_dump(mode="json"),
             "caveats": caveats,
             "source_table": table_url,
+            "data_status": DATA_STATUS_SUCCESS,
+            "upstream_error": False,
+            "validation_error": False,
             "source": "PSA",
             "source_url": table_url,
             "license": PSA_LICENSE,
@@ -1784,12 +1933,20 @@ async def _latest_health_value(
             # A failed POST is not "PSA publishes nothing for this year". Say so,
             # so the caller does not cache a null as a real indicator value.
             return None, None, f"{table_url}: {exc}"
-        if not payload.get("data"):
+        # A 200 whose body is not an object with a `data` list is malformed
+        # upstream data, not an empty year. Falling back to an older year here
+        # served a stale value as latest, the same bug the CPI loop had.
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            return None, None, f"{table_url}: malformed PXWeb body for year {year_code}"
+        if not payload["data"]:
             continue
         for _, val in _rows(payload):
             if val is not None:
                 return val, _value_text(meta, year_var.get("code", "Year"), year_code), None
-    return None, None, None
+    # A 1D health table always carries rows. Zero rows in every year is drift,
+    # never a real "PSA publishes nothing", so it must not cache as a null
+    # indicator (docs/latent-bugs.md item 19).
+    return None, None, f"{table_url}: no data rows in any of {len(year_codes)} published years"
 
 
 @mcp.tool(
@@ -1806,15 +1963,31 @@ async def _latest_health_value(
 async def get_health_indicators(indicator: str | None = None) -> dict:
     """National health indicators from PSA OpenSTAT (subject 1D).
 
-    With no argument, returns the curated national headline set (maternal
-    mortality ratio and total fertility rate). Pass a free-text `indicator` to
-    fuzzy-match any table published under the Health subject — the available
-    list is browse-discovered, never hardcoded.
+    With no argument, returns the curated national headline set: maternal
+    mortality ratio and total fertility rate. Pass a free-text `indicator` to
+    fuzzy-match any table published under the Health subject. The available
+    list is browse-discovered, never hardcoded. Examples:
+
+      get_health_indicators()                     maternal mortality ratio and fertility rate
+      get_health_indicators(indicator="fertility") one matching table
+
+    On failure: a catalog browse failure sets data_status "unavailable" and
+    upstream_error true, with an empty indicators list. A keyword that
+    matches no table sets data_status "success" with an empty indicators
+    list and a caveat, not an error flag. A partial fetch failure across
+    matched tables sets data_status "indeterminate" and upstream_error true.
+    validation_error stays false in every case.
 
     Args:
-        indicator: Optional free-text indicator name, e.g. "maternal mortality",
-                   "fertility". None returns the default headline set.
+        indicator: Optional free-text indicator name, for example "maternal
+                   mortality", "fertility". None returns the default headline set.
     """
+    # A whitespace-only value such as " " is truthy, so it once skipped the
+    # curated default set and, through the substring match below, matched
+    # every catalog table. Strip first, and treat a blank result as None.
+    indicator = indicator.strip() if indicator else indicator
+    indicator = indicator or None
+
     key = cache_key({"tool": "health", "indicator": indicator})
     cache = CACHES["psa_health"]
     if key in cache:
@@ -1822,15 +1995,13 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
 
     def _health_err(msg: str) -> dict:
         # Not cached: discovery failure is usually a transient PXWeb error.
-        return {
-            "indicators": [],
-            "upstream_error": True,
-            "caveats": [msg],
-            "source": "PSA",
-            "source_url": f"{PSA_API_BASE}/DB/1D/",
-            "license": PSA_LICENSE,
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PSA",
+            f"{PSA_API_BASE}/DB/1D/",
+            msg,
+            license=PSA_LICENSE,
+            indicators=[],
+        )
 
     try:
         entries = await _browse("1D")
@@ -1861,6 +2032,15 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
         ]
         caveat = None
 
+    cap_caveat = None
+    if len(chosen) > HEALTH_MATCH_CAP:
+        # No bound here made a broad keyword fan out one metadata fetch per
+        # matched table, against PSA's 10-per-10-second rate limit.
+        cap_caveat = (
+            f"{len(chosen)} PSA Health tables matched; fetching only the first {HEALTH_MATCH_CAP}."
+        )
+        chosen = chosen[:HEALTH_MATCH_CAP]
+
     indicators: list[dict] = []
     unavailable: list[str] = []
     for entry in chosen:
@@ -1889,7 +2069,7 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
         )
         indicators.append({**model.model_dump(mode="json"), "source_table": table_url})
 
-    caveats = [caveat] if caveat else []
+    caveats = [c for c in (caveat, cap_caveat) if c]
     if unavailable:
         caveats.append(
             f"{len(unavailable)} of {len(chosen)} matched tables did not load: {unavailable}"
@@ -1899,6 +2079,9 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
         "indicators": indicators,
         "available_indicators": available,
         "caveats": caveats,
+        "data_status": DATA_STATUS_SUCCESS,
+        "upstream_error": False,
+        "validation_error": False,
         "source": "PSA",
         "source_url": f"{PSA_API_BASE}/DB/1D/",
         "license": PSA_LICENSE,
@@ -1906,6 +2089,7 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
     }
     if unavailable:
         # A partial answer is not a success; do not pin it for the 24h TTL.
+        result["data_status"] = DATA_STATUS_INDETERMINATE
         result["upstream_error"] = True
         return result
     cache[key] = result

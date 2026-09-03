@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from ph_civic_data_mcp import __version__
 
 from ph_civic_data_mcp._mcp import mcp
+from ph_civic_data_mcp.utils import health
+from ph_civic_data_mcp.utils.cache import CACHES
 
 
 SOURCE_CATALOG: list[dict] = [
@@ -132,17 +134,28 @@ SOURCE_CATALOG: list[dict] = [
     },
 )
 async def get_data_freshness() -> dict:
-    """Server health + data-source catalog probe.
+    """Server health and data-source catalog probe.
 
-    Doubles as the canonical version/health endpoint: returns server_version
-    so agents can confirm which release they are talking to. Also returns the
-    full upstream-source catalog with cache TTLs, freshness expectations, and
-    licenses — useful when deciding whether a stale cached response is OK or
-    a re-fetch is needed.
+    Doubles as the version and health endpoint: returns server_version so an
+    agent can confirm which release it is talking to. Also returns the full
+    upstream-source catalog: cache TTLs, freshness expectations, and
+    licenses. Use it to judge whether a stale cached response is fine or a
+    re-fetch is needed.
+
+    Examples:
+      get_data_freshness()  # the only call, it takes no arguments
+
+    On failure: this tool calls no upstream itself, so it always returns a
+    dict. source_health is a process-local, in-memory registry, not a
+    database. It starts empty on a cold process and fills as
+    fetch_with_retry runs calls, so a fresh restart always reports an empty
+    dict here.
 
     Returns: server_version, server_name, transport, tool_count, asof,
     sources (list of {source, source_url, freshness, cache_ttl_seconds,
-    license}), note.
+    license}), source_health (per-host {last_success_at, last_failure_at,
+    last_error, last_latency_ms, success_count, failure_count}), cache_age
+    (per-cache {size, ttl_seconds}), note.
     """
     tools = await mcp.list_tools()
     return {
@@ -152,6 +165,10 @@ async def get_data_freshness() -> dict:
         "tool_count": len(tools),
         "asof": datetime.now(timezone.utc).isoformat(),
         "sources": SOURCE_CATALOG,
+        "source_health": health.snapshot(),
+        "cache_age": {
+            name: {"size": len(cache), "ttl_seconds": cache.ttl} for name, cache in CACHES.items()
+        },
         "note": (
             "Cache TTLs are per-source. Times are server-side wall clock. "
             "Upstream freshness varies independently of our cache window. "
@@ -314,6 +331,7 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import ibtracs  # noqa: F401
     from ph_civic_data_mcp.sources import world_bank  # noqa: F401
     from ph_civic_data_mcp.sources import psa_catalog  # noqa: F401
+    from ph_civic_data_mcp.sources import compare  # noqa: F401
 
 
 def main() -> None:

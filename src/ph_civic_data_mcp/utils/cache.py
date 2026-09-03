@@ -25,6 +25,10 @@ CACHES: dict[str, TTLCache[str, Any]] = {
     # Discovered table locations. A TTL, because a process that ran for weeks
     # kept using a table PSA had since moved.
     "psa_discovery": TTLCache(maxsize=100, ttl=86400),
+    # The flattened {path, title} list for the whole ~2,900-table catalog.
+    # One entry, not one per keyword: search_psa_catalog walks the tree once
+    # and matches in memory, so a repeat search never re-pays the walk.
+    "psa_catalog_index": TTLCache(maxsize=4, ttl=86400),
     "area_profile": TTLCache(maxsize=100, ttl=3600),
     "nasa_power": TTLCache(maxsize=100, ttl=86400),
     "open_meteo_aq": TTLCache(maxsize=50, ttl=900),

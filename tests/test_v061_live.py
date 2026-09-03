@@ -123,7 +123,10 @@ async def test_area_profile_shows_population_or_names_why_not() -> None:
     demo = profile["demographics"]
     status = profile["blocks"]["population"]
     if status == "success":
-        assert isinstance(demo["population"], int) and demo["population"] > 1_000_000
+        # v0.7.0: the profile reports Tacloban's own 2024 Census figure
+        # (259,353), not Region VIII's 4.6 million. The old bound
+        # `> 1_000_000` encoded the region-total bug this release fixed.
+        assert isinstance(demo["population"], int) and 0 < demo["population"] < 1_000_000
         assert demo["population_year"] >= 2020
         assert demo["population_census"]
     else:

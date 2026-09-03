@@ -19,8 +19,12 @@ from bs4 import BeautifulSoup
 from ph_civic_data_mcp.models.weather import DailyForecast, Typhoon, WeatherForecast
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.envelope import failure_envelope
-from ph_civic_data_mcp.utils.geo import city_to_coords, resolve_to_coords
+from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_INDETERMINATE,
+    failure_envelope,
+    failure_result,
+)
+from ph_civic_data_mcp.utils.geo import GeoResolveError, city_to_coords, resolve_to_coords
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 PAGASA_LICENSE = "Public — PAGASA bulletin pages"
@@ -35,6 +39,15 @@ PAGASA_MAIN_URL = "https://bagong.pagasa.dost.gov.ph/"
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class OpenMeteoMalformedResponseError(RuntimeError):
+    """Open-Meteo sent HTTP 200 with no daily forecast entries.
+
+    days is always 1-10, so an empty or missing daily.time array is never a
+    real zero-day forecast. Raised so get_weather_forecast reports this as
+    indeterminate and never caches it as a real answer.
+    """
 
 
 def _wind_direction(degrees: float | None) -> str | None:
@@ -83,9 +96,11 @@ async def _open_meteo_forecast(location: str, lat: float, lng: float, days: int)
     response.raise_for_status()
     payload = response.json()
     daily = payload.get("daily", {})
+    dates = daily.get("time")
+    if not isinstance(dates, list) or not dates:
+        raise OpenMeteoMalformedResponseError("Open-Meteo response carried no daily.time entries")
 
     daily_forecasts: list[DailyForecast] = []
-    dates = daily.get("time", [])
     for i, d in enumerate(dates):
         try:
             iso_date = date_cls.fromisoformat(d)
@@ -177,31 +192,55 @@ async def _pagasa_api_forecast(location: str, days: int, token: str) -> dict | N
                 headers=headers,
             )
         response.raise_for_status()
+        payload = response.json()
     except Exception as exc:
         log_stderr(f"PAGASA TenDay API error: {exc}; falling back to Open-Meteo")
         return None
-
-    payload = response.json()
     if not payload:
         return None
 
-    raw_days = (
-        payload.get("days")
-        or payload.get("forecast")
-        or (payload[0].get("days") if isinstance(payload, list) and payload else [])
-    )
+    # `payload.get(...)` before a shape check crashed on a bare list of
+    # non-dict items: Python evaluates the first `.get()` call regardless of
+    # the isinstance guard later in the same `or` chain, so that guard was
+    # dead code. Check the shape before touching `.get()` anywhere.
+    if isinstance(payload, dict):
+        raw_days = payload.get("days") or payload.get("forecast") or []
+    elif isinstance(payload, list) and payload and isinstance(payload[0], dict):
+        raw_days = payload[0].get("days") or []
+    else:
+        log_stderr(f"PAGASA TenDay API returned an unexpected shape: {type(payload).__name__}")
+        return None
+    if not isinstance(raw_days, list):
+        log_stderr(f"PAGASA TenDay API 'days' field is not a list: {type(raw_days).__name__}")
+        return None
+
     daily_forecasts: list[DailyForecast] = []
     for entry in raw_days[:days]:
+        if not isinstance(entry, dict):
+            continue
         try:
             d = date_cls.fromisoformat(str(entry.get("date", ""))[:10])
         except ValueError:
             continue
+        # A real 0mm rainfall reading is falsy, so `entry.get("rainfall") or
+        # entry.get("precip")` silently replaced it with the fallback key.
+        rainfall = entry.get("rainfall")
+        if rainfall is None:
+            rainfall = entry.get("precip")
+        # Same falsy-zero bug for temperature: a real 0 degree reading (rare
+        # in the lowlands, real on Mount Pulag) fell through to the fallback.
+        temp_min = entry.get("min_temp")
+        if temp_min is None:
+            temp_min = entry.get("tmin")
+        temp_max = entry.get("max_temp")
+        if temp_max is None:
+            temp_max = entry.get("tmax")
         daily_forecasts.append(
             DailyForecast(
                 date=d,
-                temp_min_c=entry.get("min_temp") or entry.get("tmin"),
-                temp_max_c=entry.get("max_temp") or entry.get("tmax"),
-                rainfall_mm=entry.get("rainfall") or entry.get("precip"),
+                temp_min_c=temp_min,
+                temp_max_c=temp_max,
+                rainfall_mm=rainfall,
                 wind_speed_kph=entry.get("wind_speed"),
                 wind_direction=entry.get("wind_direction"),
                 weather_description=entry.get("weather") or entry.get("description"),
@@ -233,13 +272,32 @@ async def _pagasa_api_forecast(location: str, days: int, token: str) -> dict | N
     },
 )
 async def get_weather_forecast(location: str, days: int = 3) -> dict:
-    """Get weather forecast for a Philippine location.
+    """Get the weather forecast for a Philippine location.
 
-    Uses PAGASA TenDay API when PAGASA_API_TOKEN is set, Open-Meteo otherwise.
+    Uses the PAGASA TenDay API when PAGASA_API_TOKEN is set, and falls
+    back to Open-Meteo when the token is absent or the PAGASA call fails.
+    This tool sets no `data_status` field on a success or an
+    unknown-location result. Check `data_source` and `caveats` instead.
+    Examples:
+
+      get_weather_forecast("Manila")             3-day default forecast
+      get_weather_forecast("Cebu City", days=2)  2-day forecast
+      get_weather_forecast("Wakanda")             unknown location, no coordinates found
+
+    On failure, a location with no known coordinates returns days: [] and
+    a caveat, with no data_status or upstream_error key. An Open-Meteo
+    fetch failure, or a PSGC outage during location resolution, returns
+    data_status "unavailable", upstream_error: true, days: [], and the
+    real error in caveats. An Open-Meteo response with no daily forecast
+    entries returns data_status "indeterminate" instead, and is never cached.
 
     Args:
         location: Municipality, city, or province name.
         days: Forecast days (1-10, default 3).
+
+    Returns: location, forecast_issued, days (date, temp_min_c, temp_max_c,
+    rainfall_mm, wind_speed_kph, wind_direction, weather_description),
+    data_source (pagasa_api|open_meteo), data_retrieved_at.
     """
     days = max(1, min(int(days), 10))
     key = cache_key({"tool": "weather", "location": location.lower(), "days": days})
@@ -254,7 +312,18 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
             cache[key] = result
             return result
 
-    coords = await resolve_to_coords(location)
+    try:
+        coords = await resolve_to_coords(location)
+    except GeoResolveError as exc:
+        log_stderr(f"get_weather_forecast PSGC resolve error: {exc}")
+        return failure_result(
+            "Open-Meteo",
+            OPEN_METEO_BASE,
+            f"PSGC location resolution failed ({exc}). Could not resolve '{location}'.",
+            location=location,
+            days=[],
+            data_source="open_meteo",
+        )
     if coords is None:
         coords = city_to_coords(location)
     if coords is None:
@@ -274,18 +343,27 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
     lat, lng = coords
     try:
         result = await _open_meteo_forecast(location, lat, lng, days)
+    except OpenMeteoMalformedResponseError as exc:
+        log_stderr(f"get_weather_forecast malformed response: {exc}")
+        return failure_result(
+            "Open-Meteo",
+            OPEN_METEO_BASE,
+            f"Open-Meteo returned malformed data ({exc})",
+            location=location,
+            days=[],
+            data_source="open_meteo",
+            data_status=DATA_STATUS_INDETERMINATE,
+        )
     except Exception as exc:
         log_stderr(f"get_weather_forecast error: {exc}")
-        return {
-            "location": location,
-            "upstream_error": True,
-            "caveats": [f"Open-Meteo fetch failed ({type(exc).__name__}: {exc})"],
-            "days": [],
-            "data_source": "open_meteo",
-            "data_retrieved_at": _now().isoformat(),
-            "source": "Open-Meteo",
-            "source_url": OPEN_METEO_BASE,
-        }
+        return failure_result(
+            "Open-Meteo",
+            OPEN_METEO_BASE,
+            f"Open-Meteo fetch failed ({type(exc).__name__}: {exc})",
+            location=location,
+            days=[],
+            data_source="open_meteo",
+        )
 
     cache[key] = result
     return result
@@ -305,9 +383,26 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
 async def get_active_typhoons() -> list[dict] | dict:
     """Get active tropical cyclones in/near the Philippine Area of Responsibility (PAR).
 
-    Returns empty list if none active. If the PAGASA bulletin page is
-    unreachable, returns {results: [], upstream_error: true, caveats} instead,
-    so an outage is never read as "no active typhoons".
+    Returns an empty list when no cyclone is active. This tool parses the
+    live PAGASA bulletin page with regular expressions. A bulletin wording
+    change can miss a cyclone, but the "no active" state itself is
+    reliably detected.
+
+    Examples:
+        get_active_typhoons()   # only call form, no arguments
+
+    On failure:
+        When the PAGASA bulletin page is unreachable, this tool returns
+        data_status "unavailable", upstream_error: true, results: [], and
+        the real error in caveats. That shape never matches a genuine "no
+        active typhoons" answer, which is a bare empty list. When the page
+        loads but neither the "no active cyclone" marker nor a cyclone name
+        matches, this tool returns data_status "indeterminate" instead of
+        guessing at "no active typhoons".
+
+    Returns: list of typhoons, each with local_name, international_name,
+    category, max_winds_kph, within_par, signal_numbers, bulletin_number,
+    source, bulletin_url, data_retrieved_at. Or the failure dict above.
     """
     key = cache_key({"endpoint": "typhoons"})
     cache = CACHES["pagasa_typhoons"]
@@ -350,8 +445,18 @@ async def get_active_typhoons() -> list[dict] | dict:
             local_names.append(name)
 
     if not local_names:
-        cache[key] = []
-        return []
+        # Neither the "No Active Tropical Cyclone" marker nor a cyclone name
+        # matched. A wording or markup change would look identical to this,
+        # so caching [] here would read as "no typhoon" for the cache TTL.
+        return failure_result(
+            "PAGASA",
+            PAGASA_TC_BULLETIN_URL,
+            "PAGASA tropical cyclone bulletin format was not recognized: "
+            "neither the 'no active cyclone' marker nor a cyclone name matched.",
+            data_status=DATA_STATUS_INDETERMINATE,
+            license=PAGASA_LICENSE,
+            results=[],
+        )
 
     seen = set()
     unique_names: list[str] = []
@@ -433,18 +538,30 @@ async def get_active_typhoons() -> list[dict] | dict:
 async def get_weather_alerts(region: str | None = None) -> list[dict] | dict:
     """Get active PAGASA weather alerts and advisories.
 
-    The PAGASA homepage embeds alert names ("Heavy Rainfall Warning",
-    "Flood Advisory") in its navigation menu and breadcrumbs as well as
-    in actual active-warning sections. We can reliably detect the
-    "No Active Warnings" state but cannot yet isolate active warnings
-    from chrome text. To avoid fabricated advisories, this tool returns
-    `[]` with a caveat when the page is reachable but the state is
-    ambiguous, and `[]` with the explicit "no active warnings" signal
-    when the homepage says so. For real-time advisories, call
-    `bagong.pagasa.dost.gov.ph` directly.
+    The PAGASA homepage embeds alert names such as "Heavy Rainfall
+    Warning" in its navigation menu and breadcrumbs, as well as in real
+    active-warning sections. This tool reliably detects the "No Active
+    Warnings" state, but it cannot yet isolate a real active warning from
+    that navigation text. To avoid a fabricated advisory, this tool
+    returns a bare empty list only for the confirmed "no active warnings"
+    marker. For real-time advisories, call bagong.pagasa.dost.gov.ph
+    directly.
+    Examples:
+
+      get_weather_alerts()              no region argument
+      get_weather_alerts(region="NCR")  region only changes the cache key
+
+    On failure, when the PAGASA homepage is unreachable, this tool
+    returns data_status "unavailable", upstream_error: true, results: [],
+    and the real error in caveats. When the page is reachable but the "no
+    active warnings" marker does not match, this tool returns data_status
+    "indeterminate" instead of guessing, and never caches that response.
 
     Args:
-        region: e.g. "NCR", "Region VII", "CALABARZON". None returns all.
+        region: For example "NCR", "Region VII", "CALABARZON". None returns all.
+
+    Returns: a bare empty list on the confirmed "no active warnings" state,
+    or the failure dict above on an outage or an unrecognized page.
     """
     key = cache_key({"endpoint": "alerts", "region": region})
     cache = CACHES["pagasa_alerts"]
@@ -472,15 +589,18 @@ async def get_weather_alerts(region: str | None = None) -> list[dict] | dict:
         cache[key] = []
         return []
 
-    # Conservative path: PAGASA homepage embeds alert names ("Heavy Rainfall
-    # Warning", "Flood Advisory", "Gale Warning") in its nav menu, breadcrumbs,
-    # and footer alongside any genuinely active alerts. Until we have a
-    # structural way to isolate the active section, returning [] is safer
-    # than risking fabricated advisories pulled from chrome text. Audit
-    # 2026-05-01 documented the previous regex matching menu strings.
-    log_stderr(
-        "get_weather_alerts: page reachable but parser cannot reliably "
-        "distinguish active alerts from PAGASA homepage chrome — returning []"
+    # Only the explicit "No Active Warnings" marker proves the negative.
+    # PAGASA homepage embeds alert names ("Heavy Rainfall Warning", "Flood
+    # Advisory", "Gale Warning") in its nav menu, breadcrumbs, and footer
+    # alongside any genuinely active alerts, so a reachable page with no
+    # marker match is not proof of "no active warnings" either. Caching []
+    # here would read as a real all-clear for the cache TTL. Same rule
+    # get_active_typhoons applies to its own "no active cyclone" marker.
+    return failure_result(
+        "PAGASA",
+        PAGASA_MAIN_URL,
+        "PAGASA homepage format was not recognized: the 'no active warnings' marker did not match.",
+        data_status=DATA_STATUS_INDETERMINATE,
+        license=PAGASA_LICENSE,
+        results=[],
     )
-    cache[key] = []
-    return []

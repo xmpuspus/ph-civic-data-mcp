@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from datetime import date
 
 import pytest
@@ -76,6 +79,36 @@ SAMPLE_RECORDS = [
 ]
 
 
+# Shaped like the real PhilGEPS Indexes scrape: region is always None
+# (philgeps._fetch_notices never sets it), region signal, if any, lives only
+# in the agency string. SAMPLE_RECORDS above sets region explicitly, which
+# the real fetch never does, so by_region/region-filter tests need this
+# separate fixture to exercise the code path real traffic actually hits.
+REAL_SHAPE_RECORDS = [
+    _record(
+        title="Construction of Farm-to-Market Road",
+        agency="Department of Public Works and Highways - Region V",
+        region=None,
+        approved_budget=None,
+        reference_number="PHILGEPS-REAL-001",
+    ),
+    _record(
+        title="Rehabilitation of Drainage System",
+        agency="DPWH NCR District Engineering Office",
+        region=None,
+        approved_budget=None,
+        reference_number="PHILGEPS-REAL-002",
+    ),
+    _record(
+        title="Supply of Office Chairs",
+        agency="Department of Education Central Office",
+        region=None,
+        approved_budget=None,
+        reference_number="PHILGEPS-REAL-003",
+    ),
+]
+
+
 @pytest.fixture(autouse=True)
 def _mock_notices(monkeypatch):
     async def _stub():
@@ -121,6 +154,54 @@ async def test_search_infra_region_filter():
     for r in results:
         text = f"{r['title']} {r['agency']} {r['region'] or ''}".lower()
         assert "ncr" in text
+
+
+@pytest.mark.asyncio
+async def test_search_infra_year_filter_excludes_undated_record(monkeypatch):
+    """Latent bug 15: a record with no publish date passed any year filter."""
+    undated = _record(
+        title="Construction of Flood Control Structure, drainage phase",
+        date_published=None,
+        reference_number="PHILGEPS-INF-UNDATED",
+    )
+
+    async def _stub():
+        return [*SAMPLE_RECORDS, undated]
+
+    monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _stub)
+    CACHES["infra_projects"].clear()
+
+    by_year = await infra_module.search_infra_projects(year=2025, limit=100)
+    assert "PHILGEPS-INF-UNDATED" not in {r["project_id"] for r in by_year}
+
+    CACHES["infra_projects"].clear()
+    no_year_filter = await infra_module.search_infra_projects(limit=100)
+    assert "PHILGEPS-INF-UNDATED" in {r["project_id"] for r in no_year_filter}
+
+
+@pytest.mark.asyncio
+async def test_summarize_infra_spending_year_filter_excludes_undated_record(monkeypatch):
+    """search_infra_projects excludes undated records under a year filter.
+
+    The summary must agree, so an undated record does not inflate
+    total_count while the matching search call excludes it.
+    """
+    undated = _record(
+        title="Construction of Flood Control Structure, drainage phase",
+        date_published=None,
+        reference_number="PHILGEPS-INF-UNDATED",
+    )
+
+    async def _stub():
+        return [undated]
+
+    monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _stub)
+    CACHES["infra_projects"].clear()
+
+    summary = await infra_module.summarize_infra_spending(year=2026)
+    assert summary["total_count"] == 0
+    assert summary["caveats"]
+    assert "1" in summary["caveats"][0]
 
 
 @pytest.mark.asyncio
@@ -188,3 +269,171 @@ def test_categorize():
     assert (
         infra_module._categorize(R("Construction of School Building Phase 2")) == "school building"
     )
+
+
+# --- R2.8 heuristic audit: region is repaired, funding_source is retired ---
+
+
+@pytest.mark.asyncio
+async def test_search_infra_region_inferred_from_agency_when_field_empty(monkeypatch):
+    """Real fetch shape: region field is None, agency names the region."""
+
+    async def _stub():
+        return list(REAL_SHAPE_RECORDS)
+
+    monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _stub)
+    CACHES["infra_projects"].clear()
+
+    results = await infra_module.search_infra_projects(keyword="farm-to-market")
+    assert results
+    assert results[0]["region"] == "Region V"
+
+
+@pytest.mark.asyncio
+async def test_summarize_infra_spending_by_region_repaired_from_agency(monkeypatch):
+    """by_region must not collapse every real-shape record to 'unspecified'."""
+
+    async def _stub():
+        return list(REAL_SHAPE_RECORDS)
+
+    monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _stub)
+    CACHES["infra_projects"].clear()
+
+    summary = await infra_module.summarize_infra_spending()
+    assert summary["by_region"].get("Region V") == 1
+    assert summary["by_region"].get("NCR") == 1
+
+
+@pytest.mark.asyncio
+async def test_summarize_infra_spending_by_funding_source_retired():
+    """funding_source is not published anywhere; the field stays empty."""
+    summary = await infra_module.summarize_infra_spending()
+    assert summary["by_funding_source"] == {}
+    reasons = {r["rule"]: r["reason"] for r in summary["rules_not_computable"]}
+    assert "by_funding_source" in reasons
+    assert "funding source" in reasons["by_funding_source"]
+
+
+@pytest.mark.asyncio
+async def test_summarize_infra_spending_rules_coverage_consistent():
+    summary = await infra_module.summarize_infra_spending()
+    assert summary["rules_evaluated"] == ["by_category", "by_region"]
+    not_computable_names = {r["rule"] for r in summary["rules_not_computable"]}
+    # A rule cannot be both evaluated and not computable.
+    assert not_computable_names.isdisjoint(summary["rules_evaluated"])
+
+
+@pytest.mark.asyncio
+async def test_summarize_infra_spending_upstream_failure_sets_data_status(monkeypatch):
+    async def _boom():
+        raise RuntimeError("philgeps offline")
+
+    monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _boom)
+    CACHES["infra_projects"].clear()
+
+    summary = await infra_module.summarize_infra_spending()
+    assert summary["data_status"] == "unavailable"
+    assert summary["upstream_error"] is True
+    assert summary["rules_evaluated"] == []
+    assert summary["rules_not_computable"]
+
+
+# --- R2.9 per-capita scoping: withhold the rate below MIN_SAMPLE_FOR_PER_CAPITA ---
+
+
+def test_infra_sample_coverage_below_threshold():
+    coverage = infra_module.infra_sample_coverage(6)
+    assert coverage["sufficient_for_per_capita"] is False
+    assert coverage["coverage_caveat"] is not None
+    assert "6" in coverage["coverage_caveat"]
+
+
+def test_infra_sample_coverage_at_or_above_threshold():
+    coverage = infra_module.infra_sample_coverage(infra_module.MIN_SAMPLE_FOR_PER_CAPITA)
+    assert coverage["sufficient_for_per_capita"] is True
+    assert coverage["coverage_caveat"] is None
+
+
+@pytest.mark.asyncio
+async def test_summarize_infra_spending_coverage_fields_small_sample():
+    summary = await infra_module.summarize_infra_spending()
+    assert summary["sample_size"] == summary["total_count"]
+    assert summary["sufficient_for_per_capita"] is False
+    assert summary["coverage_caveat"] is not None
+
+
+# --- v0.7.0 fix: title-only fallback id collided across agencies ---
+
+
+@pytest.mark.asyncio
+async def test_get_infra_project_fallback_id_distinguishes_same_title_by_agency(monkeypatch):
+    """Two reference-free records sharing a title must get different ids.
+
+    The old fallback id hashed the title alone, so "Road Rehabilitation"
+    from Agency A and Agency B shared one id, and get_infra_project for
+    B's id returned A's record.
+    """
+    record_a = ProcurementRecord(
+        reference_number=None,
+        title="Road Rehabilitation",
+        agency="Agency A",
+        date_published=date(2025, 1, 10),
+    )
+    record_b = ProcurementRecord(
+        reference_number=None,
+        title="Road Rehabilitation",
+        agency="Agency B",
+        date_published=date(2025, 2, 20),
+    )
+
+    async def _stub():
+        return [record_a, record_b]
+
+    monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _stub)
+    CACHES["infra_projects"].clear()
+
+    id_a = infra_module._record_id(record_a)
+    id_b = infra_module._record_id(record_b)
+    assert id_a != id_b
+
+    result_a = await infra_module.get_infra_project(id_a)
+    assert result_a["matched"] is True
+    assert result_a["agency"] == "Agency A"
+
+    result_b = await infra_module.get_infra_project(id_b)
+    assert result_b["matched"] is True
+    assert result_b["agency"] == "Agency B"
+
+
+def test_record_id_fallback_is_stable_across_hash_seeds():
+    """The fallback id must not depend on Python's per-process hash seed.
+
+    Codex cross-model finding: hash() is salted by PYTHONHASHSEED, so the
+    same record got a different fallback id after every process restart.
+    A subprocess run with a fixed PYTHONHASHSEED must always return the
+    same id for the same record, whatever that seed is.
+    """
+    record = ProcurementRecord(
+        reference_number=None,
+        title="Road Rehabilitation",
+        agency="Agency A",
+        date_published=date(2025, 1, 10),
+    )
+    expected_id = "PHILGEPS-3144645480"
+
+    assert infra_module._record_id(record) == expected_id
+
+    script = (
+        "from datetime import date; "
+        "from ph_civic_data_mcp.models.procurement import ProcurementRecord; "
+        "from ph_civic_data_mcp.sources import infra as infra_module; "
+        "r = ProcurementRecord(reference_number=None, title='Road Rehabilitation', "
+        "agency='Agency A', date_published=date(2025, 1, 10)); "
+        "print(infra_module._record_id(r))"
+    )
+    for seed in ("0", "1"):
+        env = dict(os.environ, PYTHONHASHSEED=seed)
+        out = subprocess.run(
+            [sys.executable, "-c", script], env=env, capture_output=True, text=True, check=True
+        )
+        assert out.stdout.strip() == expected_id

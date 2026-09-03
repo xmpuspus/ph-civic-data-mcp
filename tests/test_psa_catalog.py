@@ -13,6 +13,7 @@ import pytest
 from ph_civic_data_mcp.sources import psa as psa_module
 from ph_civic_data_mcp.sources import psa_catalog as cat
 from ph_civic_data_mcp.utils.cache import CACHES
+from ph_civic_data_mcp.utils.envelope import DATA_STATUS_INDETERMINATE
 
 ROOT = [
     {"id": "1A", "type": "l", "text": "Population and Vital Statistics"},
@@ -715,6 +716,67 @@ async def test_an_unreadable_cell_is_flagged_apart_from_a_psa_missing_marker(mon
     joined = " ".join(out["caveats"])
     assert "missing value" in joined, joined
     assert "could not read as a number" in joined, "a parse failure must not read as PSA's '..'"
+    # v0.7.0: a parse failure is drift, so the response is indeterminate.
+    assert out["data_status"] == DATA_STATUS_INDETERMINATE
+    assert out["upstream_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_psa_missing_marker_alone_stays_a_success_with_a_null_cell(monkeypatch):
+    """PSA's own '..' is a legitimate missing value, never drift."""
+    payload = {
+        "columns": [
+            {"code": "Major Island Group", "type": "d"},
+            {"code": "Among Families/Population", "type": "d"},
+            {"code": "Year", "type": "d"},
+            {"code": "V", "type": "c"},
+        ],
+        "data": [{"key": ["0", "0", "2"], "values": [".."]}],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, payload)
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(
+        DATASET,
+        {"Major Island Group": ["0"], "Among Families/Population": ["0"], "Year": ["2"]},
+    )
+    assert out["rows"][0]["value"] is None
+    assert out["data_status"] == "success"
+    assert out["upstream_error"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_string_values_field_is_malformed_not_a_psa_missing_marker(monkeypatch):
+    """A `values` field of "10.9" (a string, not a list) is drift. It must
+    not read as a confirmed PSA '..' gap."""
+    payload = {
+        "columns": [
+            {"code": "Major Island Group", "type": "d"},
+            {"code": "Among Families/Population", "type": "d"},
+            {"code": "Year", "type": "d"},
+            {"code": "V", "type": "c"},
+        ],
+        "data": [{"key": ["0", "0", "2"], "values": "10.9"}],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, payload)
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(
+        DATASET,
+        {"Major Island Group": ["0"], "Among Families/Population": ["0"], "Year": ["2"]},
+    )
+    assert out["rows"][0]["value"] is None
+    assert out["data_status"] == DATA_STATUS_INDETERMINATE
+    assert out["upstream_error"] is True
+    assert all(".." not in c for c in out["caveats"]), out["caveats"]
 
 
 @pytest.mark.asyncio
@@ -736,7 +798,12 @@ async def test_a_misaligned_row_is_reported_not_silently_truncated(monkeypatch):
 
     monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
     out = await cat.query_psa_dataset(DATASET, FULL)
-    assert any("key count" in c for c in out["caveats"]), out["caveats"]
+    # A key of the wrong length cannot map to a place or period, so the whole
+    # response fails instead of publishing a row with no geography attached.
+    assert out["upstream_error"] is True
+    assert out["data_status"] == DATA_STATUS_INDETERMINATE
+    assert out["rows"] == []
+    assert any("1 of 1" in c for c in out["caveats"]), out["caveats"]
 
 
 @pytest.mark.asyncio
@@ -765,6 +832,39 @@ async def test_max_rows_ceiling_is_actually_enforced(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_partial_row_count_is_indeterminate_not_a_quiet_success(monkeypatch):
+    """A 4-cell selection that returns 1 row must not report plain success."""
+    four_cell_meta = {
+        "title": "Four cells",
+        "variables": [
+            {
+                "code": "Year",
+                "text": "Year",
+                "values": ["0", "1", "2", "3"],
+                "valueTexts": ["2020", "2021", "2022", "2023"],
+            }
+        ],
+    }
+    one_row = {
+        "columns": [{"code": "Year", "type": "d"}, {"code": "V", "type": "c"}],
+        "data": [{"key": ["0"], "values": ["1.0"]}],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, one_row)
+        return _resp(method, url, four_cell_meta)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset("1F/FY/four.px", {"Year": ["0", "1", "2", "3"]})
+    assert out["data_status"] == DATA_STATUS_INDETERMINATE
+    assert out["upstream_error"] is True
+    assert out["row_count"] == 1
+    assert out["requested_cells"] == 4
+    assert any("1 row(s) for a 4-cell selection" in c for c in out["caveats"]), out["caveats"]
+
+
+@pytest.mark.asyncio
 async def test_a_response_with_no_data_array_is_an_upstream_error(monkeypatch):
     """A 200 with a malformed body is drift, not an empty result set."""
 
@@ -778,6 +878,24 @@ async def test_a_response_with_no_data_array_is_an_upstream_error(monkeypatch):
     assert out["upstream_error"] is True
     assert out["rows"] == []
     assert any("no `data` array" in c for c in out["caveats"]), out["caveats"]
+
+
+@pytest.mark.asyncio
+async def test_a_nonzero_selection_with_zero_rows_is_indeterminate(monkeypatch):
+    """PSA writes a missing cell as '..' inside a row, never as zero rows."""
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, {"columns": [], "data": []})
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    one_cell = {"Major Island Group": ["0"], "Among Families/Population": ["0"], "Year": ["2"]}
+    out = await cat.query_psa_dataset(DATASET, one_cell)
+    assert out["data_status"] == DATA_STATUS_INDETERMINATE
+    assert out["upstream_error"] is True
+    assert out["rows"] == []
+    assert any("1-cell" in c for c in out["caveats"]), out["caveats"]
 
 
 @pytest.mark.asyncio
@@ -961,8 +1079,37 @@ async def test_a_malformed_row_does_not_crash_the_tool(monkeypatch):
 
     monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
     out = await cat.query_psa_dataset(DATASET, FULL)
-    assert not out.get("upstream_error")
-    assert any("key count" in c for c in out["caveats"]), out["caveats"]
+    # Neither row has a usable key, so the tool must not crash and must not
+    # publish a value with no geography or period.
+    assert out["upstream_error"] is True
+    assert out["rows"] == []
+    assert any("2 of 2" in c for c in out["caveats"]), out["caveats"]
+
+
+@pytest.mark.asyncio
+async def test_a_non_list_key_does_not_publish_a_bare_value(monkeypatch):
+    """A key that is not a list must not turn into keys: {}, value: 1.0."""
+    payload = {
+        "columns": [
+            {"code": "Major Island Group", "type": "d"},
+            {"code": "Among Families/Population", "type": "d"},
+            {"code": "Year", "type": "d"},
+            {"code": "V", "type": "c"},
+        ],
+        "data": [{"key": "abc", "values": ["1.0"]}],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, payload)
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(DATASET, FULL)
+    assert out["data_status"] == DATA_STATUS_INDETERMINATE
+    assert out["upstream_error"] is True
+    assert out["rows"] == []
+    assert any("1 of 1" in c for c in out["caveats"]), out["caveats"]
 
 
 @pytest.mark.asyncio
