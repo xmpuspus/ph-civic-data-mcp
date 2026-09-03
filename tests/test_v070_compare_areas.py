@@ -245,3 +245,41 @@ async def test_compare_csv_export_round_trips(monkeypatch):
     assert len(lines) == 3
     assert lines[1][0] == "Cebu City"
     assert lines[2][0] == "Davao City"
+
+
+@pytest.mark.asyncio
+async def test_compare_a_failed_block_inside_a_resolved_profile_is_not_success(monkeypatch):
+    """Codex cross-model finding: `matched: true` with a dead population block
+    read as data_status success and comparable true around two null rows."""
+    cebu = _profile(name="Cebu City", population=None, population_year=None)
+    cebu["blocks"] = {"resolve": "success", "population": "unavailable"}
+    cebu["upstream_error"] = True
+    davao = _profile(
+        name="Davao City", psgc_code="112402000", population=None, population_year=None
+    )
+    davao["blocks"] = {"resolve": "success", "population": "unavailable"}
+    davao["upstream_error"] = True
+    _install(monkeypatch, {"Cebu City": cebu, "Davao City": davao})
+
+    result = await compare.compare_areas(["Cebu City", "Davao City"], metrics=["population"])
+
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert result["comparable"] is False
+    assert any("failed upstream" in c for c in result["caveats"]), result["caveats"]
+    assert all(row["population"] is None for row in result["rows"])
+
+
+@pytest.mark.asyncio
+async def test_compare_a_healthy_block_the_caller_did_not_ask_for_does_not_degrade(monkeypatch):
+    """A dead hazard block must not degrade a population-only comparison."""
+    cebu = _profile(name="Cebu City")
+    cebu["blocks"] = {"resolve": "success", "population": "success", "hazard": "unavailable"}
+    davao = _profile(name="Davao City", psgc_code="112402000")
+    davao["blocks"] = {"resolve": "success", "population": "success", "hazard": "unavailable"}
+    _install(monkeypatch, {"Cebu City": cebu, "Davao City": davao})
+
+    result = await compare.compare_areas(["Cebu City", "Davao City"], metrics=["population"])
+
+    assert result["data_status"] == "success"
+    assert result["comparable"] is True

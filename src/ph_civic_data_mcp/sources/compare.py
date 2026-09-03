@@ -52,6 +52,20 @@ LICENSE = "Public - PSA OpenSTAT, PSGC, PhilGEPS, PHIVOLCS, PAGASA"
 # The two metrics that need a vintage check before rows count as comparable.
 _VINTAGE_METRICS = ("population", "poverty_incidence_pct")
 
+# Which get_area_profile block each metric reads. The health rollup checks
+# these blocks, so a failed PSA fetch inside a resolved profile cannot hide
+# behind `matched: true`.
+_METRIC_BLOCK: dict[str, str] = {
+    "population": "population",
+    "population_year": "population",
+    "poverty_incidence_pct": "poverty",
+    "poverty_year": "poverty",
+    "headline_inflation_pct": "inflation",
+    "employment_rate_pct": "labor",
+    "infra_notice_count": "infra",
+    "earthquake_risk_level": "hazard",
+}
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -253,7 +267,31 @@ async def compare_areas(
             "is a scale mismatch."
         )
 
-    if resolved_count == len(locations):
+    # Codex cross-model finding on the v0.7.0 diff: a resolved profile can
+    # still carry a failed block (PSA down, population None). Health must
+    # read the blocks a requested metric depends on, not only resolution.
+    degraded_blocks: set[str] = set()
+    for location, result in zip(locations, gathered):
+        if isinstance(result, BaseException):
+            continue
+        result_blocks = result.get("blocks") or {}
+        for metric in effective_metrics:
+            block = _METRIC_BLOCK.get(metric)
+            status = result_blocks.get(block) if block else None
+            if status in (DATA_STATUS_UNAVAILABLE, DATA_STATUS_INDETERMINATE):
+                degraded_blocks.add(f"{location}:{block}")
+    if degraded_blocks:
+        caveats.append(
+            "one or more requested metrics come from a block that failed upstream: "
+            + ", ".join(sorted(degraded_blocks))
+        )
+        for metric in _VINTAGE_METRICS:
+            if metric in effective_metrics and any(
+                row[metric] is None and row["resolved_name"] is not None for row in rows
+            ):
+                comparable = False
+
+    if resolved_count == len(locations) and not degraded_blocks:
         data_status = DATA_STATUS_SUCCESS
     elif resolved_count == 0:
         data_status = DATA_STATUS_UNAVAILABLE

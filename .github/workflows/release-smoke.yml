@@ -20,7 +20,7 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -51,8 +51,26 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Wait briefly for PyPI to index
-        run: sleep 30
+      # PyPI lags its own upload by a minute or more, and when publish.yml
+      # runs on the GitHub Release event it starts after this tag push. A
+      # fixed sleep raced both. Poll the JSON API for the exact version
+      # instead, up to 20 minutes, and fail with the last status seen.
+      - name: Wait for PyPI to serve this version
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          for i in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              "https://pypi.org/pypi/ph-civic-data-mcp/$VERSION/json")
+            if [ "$code" = "200" ]; then
+              echo "PyPI serves $VERSION after $i checks"
+              exit 0
+            fi
+            echo "check $i: HTTP $code, waiting 30s"
+            sleep 30
+          done
+          echo "PyPI never served $VERSION within 20 minutes" >&2
+          exit 1
 
       - name: Install from PyPI in fresh venv
         env:
