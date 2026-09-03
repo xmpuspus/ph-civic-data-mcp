@@ -119,6 +119,16 @@ SOURCE_CATALOG: list[dict] = [
         "cache_ttl_seconds": 86400,
         "license": "World Bank Open Data CC-BY 4.0",
     },
+    {
+        "source": "PAGASA public files",
+        "source_url": "https://pubfiles.pagasa.dost.gov.ph/tamss/weather/",
+        "freshness": (
+            "weather_advisory updates about every 6 hours; bulletin only while a "
+            "cyclone is active; stormsurge has not published since 2019-12-02"
+        ),
+        "cache_ttl_seconds": 900,
+        "license": "PAGASA public files (pubfiles.pagasa.dost.gov.ph), government record",
+    },
 ]
 
 
@@ -332,6 +342,7 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import world_bank  # noqa: F401
     from ph_civic_data_mcp.sources import psa_catalog  # noqa: F401
     from ph_civic_data_mcp.sources import compare  # noqa: F401
+    from ph_civic_data_mcp.sources import pagasa_files  # noqa: F401
 
 
 def main() -> None:

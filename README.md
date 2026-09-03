@@ -267,6 +267,7 @@ actually reports.
 | USGS FDSN | Philippine-region earthquakes, cross-checked against PHIVOLCS | Real-time global feed | 10 min | Public domain (USGS) |
 | NOAA IBTrACS | Historical tropical cyclone tracks through the Philippine AOR | Annual update | 24 h | Public domain (NOAA) |
 | World Bank Open Data | Philippine macroeconomic indicators | Annual; lag varies by indicator | 24 h | World Bank Open Data CC-BY 4.0 |
+| PAGASA public files | Raw advisory, bulletin, and storm surge PDF file listing | weather_advisory updates about every 6 hours; bulletin only while a cyclone is active; stormsurge has not published since 2019-12-02 | 15 min | PAGASA public files (pubfiles.pagasa.dost.gov.ph), government record |
 <!-- source-matrix:end -->
 
 `PAGASA_API_TOKEN` is the only environment variable, and it is optional.
