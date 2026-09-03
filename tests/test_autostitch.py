@@ -109,3 +109,4 @@ async def test_area_profile_population_is_city_scale_not_region() -> None:
     population = profile["demographics"]["population"]
     assert population is not None, profile["caveats"]
     assert population < 500_000, population
+    assert profile["national_reference"]["population"] > 100_000_000
