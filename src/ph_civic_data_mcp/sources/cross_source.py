@@ -46,12 +46,16 @@ def _parse_dt(raw: object) -> datetime | None:
 
 
 def _child_failed(result: object) -> bool:
-    """True when a gathered child call failed, by exception or by envelope.
+    """True when a gathered child call failed, by exception, envelope, or type.
 
     `is_failure` only reads a dict envelope. `asyncio.gather(return_exceptions=True)`
-    can also hand back a raw exception, so that case is checked here too.
+    can also hand back a raw exception, so that case is checked here too. A
+    child that returns neither a list nor a dict (None, or another wrong
+    type) is not a real empty answer either, so it counts as failed too.
     """
-    return isinstance(result, BaseException) or is_failure(result)
+    if isinstance(result, BaseException) or is_failure(result):
+        return True
+    return not isinstance(result, (list, dict))
 
 
 def _unwrap_list(result: object, caveats: list[str], label: str) -> list:
@@ -59,7 +63,9 @@ def _unwrap_list(result: object, caveats: list[str], label: str) -> list:
 
     Upstream list tools return a dict failure envelope (results: [],
     upstream_error: true) on outage; exceptions surface via
-    asyncio.gather(return_exceptions=True). Both become caveats here.
+    asyncio.gather(return_exceptions=True). Both become caveats here. A
+    result that is neither a list nor a dict (None, or a wrong type from a
+    broken upstream call) is a failed child too, not a quiet empty list.
     """
     if isinstance(result, BaseException):
         caveats.append(f"{label} failed: {type(result).__name__}")
@@ -68,7 +74,10 @@ def _unwrap_list(result: object, caveats: list[str], label: str) -> list:
         upstream_caveats = result.get("caveats") or []
         caveats.append(f"{label} failed: {'; '.join(upstream_caveats) or 'upstream error'}")
         return []
-    return result or []
+    if isinstance(result, list):
+        return result
+    caveats.append(f"{label} failed: unexpected result type {type(result).__name__}")
+    return []
 
 
 # Geographic chrome that PHIVOLCS/PAGASA include in location strings but that

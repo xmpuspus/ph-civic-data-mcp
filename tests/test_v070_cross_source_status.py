@@ -83,6 +83,29 @@ async def test_one_degraded_volcano_entry_gives_indeterminate_not_success(monkey
 
 
 @pytest.mark.asyncio
+async def test_a_none_child_is_a_failure_not_a_clean_empty_list(monkeypatch):
+    """Codex cross-model finding: a child returning None (a wrong type, not a
+    list or a dict) fell through `result or []` as a clean empty list, so a
+    broken PHIVOLCS call read as a "Low" risk with no caveat."""
+
+    async def _none(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(cs, "get_latest_earthquakes", _none)
+    monkeypatch.setattr(cs, "get_active_typhoons", _empty())
+    monkeypatch.setattr(cs, "get_weather_alerts", _empty())
+    monkeypatch.setattr(cs, "get_volcano_status", _empty())
+
+    result = await cs.assess_area_risk("Manila")
+
+    assert result["data_status"] in ("indeterminate", "unavailable")
+    assert result["upstream_error"] is True
+    assert result["earthquake_risk_level"] is None
+    assert result["blocks"]["earthquakes"] == "unavailable"
+    assert any("PHIVOLCS earthquake query" in c for c in result["caveats"])
+
+
+@pytest.mark.asyncio
 async def test_only_typhoon_child_down_gives_indeterminate_and_keeps_risk_level(monkeypatch):
     monkeypatch.setattr(cs, "get_latest_earthquakes", _empty())
     monkeypatch.setattr(cs, "get_active_typhoons", _down())

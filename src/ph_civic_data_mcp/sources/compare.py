@@ -128,6 +128,11 @@ def _validate_request(locations: object, metrics: object, format: object) -> str
     if metrics is not None:
         if not isinstance(metrics, list) or not metrics:
             return "metrics must be a non-empty list when given"
+        if len(metrics) > len(COMPARE_METRICS) or len(set(metrics)) != len(metrics):
+            return (
+                f"metrics must have at most {len(COMPARE_METRICS)} unique entries, "
+                f"got {len(metrics)}"
+            )
         bad = [m for m in metrics if m not in COMPARE_METRICS]
         if bad:
             return f"unknown metric(s) {bad}; pick from {list(COMPARE_METRICS)}"
@@ -194,11 +199,13 @@ async def compare_areas(
       compare_areas(["Cebu City", "Davao City"])
       compare_areas(["Cebu City", "Davao City"], metrics=["population"])
 
-    On failure: a rejected request, such as a wrong location count, an
-    unknown metric, or a bad format, never calls get_area_profile. It
-    returns validation_error: true and data_status "invalid_request". A
-    place that fails to resolve still gets a row, with resolved_name None,
-    and the overall data_status becomes "indeterminate" or "unavailable".
+    On failure: a rejected request, such as a wrong location count, too many
+    or duplicate metrics, an unknown metric, or a bad format, never calls
+    get_area_profile. It returns validation_error: true and data_status
+    "invalid_request". A place that fails to resolve still gets a row, with
+    resolved_name None, the overall data_status becomes "indeterminate" or
+    "unavailable", and comparable turns false with a caveat naming the
+    unresolved place.
 
     Args:
         locations: 2 to 5 place names, e.g. ["Cebu City", "Davao City"].
@@ -282,6 +289,13 @@ async def compare_areas(
                 unresolved_failed += 1
 
     comparable = True
+    unresolved_rows = [row["location"] for row in rows if row["resolved_name"] is None]
+    if unresolved_rows:
+        comparable = False
+        caveats.append(
+            "comparability needs every place to resolve; unresolved: " + ", ".join(unresolved_rows)
+        )
+
     for metric in _VINTAGE_METRICS:
         if metric not in effective_metrics:
             continue
