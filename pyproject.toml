@@ -58,11 +58,17 @@ packages = ["src/ph_civic_data_mcp"]
 # docs/archive/, every demo GIF and tape, tests/, uv.lock. None of that is
 # needed to build or run the package, so list what ships instead of what to
 # drop.
+# Leading slashes anchor each pattern to the repo root. Without them a bare
+# "README.md" matches at any depth, and a nested agent worktree under
+# .claude/ shipped its own README and LICENSE copies into the sdist.
 [tool.hatch.build.targets.sdist]
 include = [
-    "src/ph_civic_data_mcp",
-    "README.md",
-    "LICENSE",
+    "/src/ph_civic_data_mcp",
+    "/README.md",
+    "/LICENSE",
+]
+exclude = [
+    "/.claude",
 ]
 
 [tool.pytest.ini_options]
