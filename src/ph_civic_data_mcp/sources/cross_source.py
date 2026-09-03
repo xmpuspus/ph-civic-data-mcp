@@ -57,35 +57,62 @@ def _unwrap_list(result: object, caveats: list[str], label: str) -> list:
 
 
 # Geographic chrome that PHIVOLCS/PAGASA include in location strings but that
-# match too broadly against project titles. Compared in lowercase. Curated on
-# audit 2026-05-01 from observed false-positive evidence.
+# match too broadly against project titles. Compared in lowercase.
+#
+# Two tiers make up this set. Generic descriptor words, such as city, island,
+# and north, plus the Spanish norte, oriental, occidental, and nueva, came
+# from the 2026-05-01 false-positive audit. Whole-region and archipelago-
+# scale proper names sit here too, such as luzon, manila, mindanao, visayas,
+# and metro. On 2026-09-03, 11 more region names joined this set, pulled
+# live from the 17 official PSGC regions. One region spans many separate
+# provinces, so a shared token there is too broad to prove one earthquake
+# overlaps one specific project.
+#
+# PSGC province names (samar, surigao, batanes, pampanga, and the rest) stay
+# OFF this list on purpose. tests/test_v031_fixes.py pins "samar" and
+# "surigao" surviving the filter, and tests/test_v030_cross_source.py pins
+# "batanes" firing a real hazard_overlap match. A province is specific
+# enough that a shared token there is real signal, not chrome.
 _HAZARD_STOPWORDS: frozenset[str] = frozenset(
     {
         "area",
         "areas",
         "barangay",
-        "city",
-        "cities",
+        "barmm",
+        "bicol",
+        "cagayan",
+        "calabarzon",
+        "caraga",
         "central",
+        "cities",
+        "city",
         "coast",
         "coastal",
+        "davao",
         "deep",
         "district",
         "east",
         "eastern",
+        "ilocos",
         "island",
         "islands",
         "isle",
         "luzon",
-        "metro",
         "manila",
+        "metro",
+        "mimaropa",
         "mindanao",
         "mountain",
         "municipal",
         "municipality",
         "north",
         "northern",
+        "norte",
+        "nueva",
+        "occidental",
         "ocean",
+        "oriental",
+        "peninsula",
         "philippine",
         "philippines",
         "province",
@@ -95,12 +122,14 @@ _HAZARD_STOPWORDS: frozenset[str] = frozenset(
         "regions",
         "river",
         "sea",
+        "soccsksargen",
         "south",
         "southern",
         "valley",
         "visayas",
         "west",
         "western",
+        "zamboanga",
     }
 )
 
@@ -321,8 +350,10 @@ async def flag_infra_anomalies(
     # Use only capitalized words from the original (un-lowercased) location string
     # to keep generic words ("city", "road", "area") out of the keyword set, then
     # apply an explicit stoplist of common geographic chrome that survives the
-    # capitalization filter. Audit 2026-05-01 found tokens like "city" and
-    # "surigao" matching project titles like "Pasig City" with no real overlap.
+    # capitalization filter. Audit 2026-05-01 found "city" matching an
+    # unrelated project titled "Pasig City" with no real overlap.
+    # _HAZARD_STOPWORDS documents which words this stoplist excludes, and why
+    # province names such as "surigao" stay in the keyword set on purpose.
     cutoff = retrieved_at - timedelta(days=30)
     hazard_keywords: set[str] = set()
     recent_quake_count_30d = 0
