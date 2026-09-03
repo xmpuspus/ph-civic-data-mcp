@@ -103,10 +103,12 @@ def test_province_search_terms_empty():
 
 
 @pytest.mark.asyncio
-async def test_get_weather_alerts_returns_list_or_empty(monkeypatch):
-    """The tool must never embed PAGASA navigation chrome as a real alert.
-    Either [] or a list of objects whose descriptions are not the homepage
-    breadcrumb. Audit C1 (2026-05-01)."""
+async def test_get_weather_alerts_returns_indeterminate_not_a_fabricated_empty(monkeypatch):
+    """The tool must never embed PAGASA navigation chrome as a real alert,
+    and must never read an unrecognized page as a confirmed "no active
+    warnings" all-clear either. Audit C1 (2026-05-01), tightened v0.7.0:
+    only the explicit marker proves the negative; anything else is
+    indeterminate and uncached, the same rule get_active_typhoons applies."""
     from ph_civic_data_mcp.sources import pagasa
     from ph_civic_data_mcp.utils.cache import CACHES
 
@@ -135,9 +137,9 @@ async def test_get_weather_alerts_returns_list_or_empty(monkeypatch):
     monkeypatch.setattr(pagasa, "fetch_with_retry", _fake_fetch)
 
     alerts = await pagasa.get_weather_alerts(region="some-unique-region-xyz")
-    # Must be empty: page doesn't say "No Active Warnings" but parser cannot
-    # reliably isolate active alerts, so we return [] rather than fabricate.
-    assert alerts == []
+    assert alerts["upstream_error"] is True
+    assert alerts["data_status"] == "indeterminate"
+    assert len(CACHES["pagasa_alerts"]) == 0
 
 
 @pytest.mark.asyncio

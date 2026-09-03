@@ -166,6 +166,7 @@ async def _fetch_earthquake_list() -> list[dict]:
         )
 
     results: list[dict] = []
+    data_row_count = 0
     rows = target_table.find_all("tr")
     min_cells = max(column_map.values()) + 1
     for row in rows[1:]:
@@ -175,6 +176,7 @@ async def _fetch_earthquake_list() -> list[dict]:
         datetime_text = cells[column_map["date"]].get_text(" ", strip=True)
         if not datetime_text or "date" in datetime_text.lower():
             continue
+        data_row_count += 1
 
         bulletin_href = None
         link = row.find("a", href=True)
@@ -206,6 +208,16 @@ async def _fetch_earthquake_list() -> list[dict]:
                 "location": location,
                 "bulletin_url": bulletin_href,
             }
+        )
+
+    if not results:
+        # Zero parsed rows is HTML drift. A magnitude cell that is not a
+        # number causes it, or a layout change that drops every row below
+        # min_cells before parsing even starts. This page always carries
+        # rows, so it must raise the same way a missing table or column
+        # does. It must never cache a false all-clear.
+        raise RuntimeError(
+            f"PHIVOLCS earthquake table parsed 0 of {data_row_count} data row(s) (HTML drift?)"
         )
 
     cache[key] = results

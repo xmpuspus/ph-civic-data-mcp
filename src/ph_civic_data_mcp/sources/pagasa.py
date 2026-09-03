@@ -96,8 +96,8 @@ async def _open_meteo_forecast(location: str, lat: float, lng: float, days: int)
     response.raise_for_status()
     payload = response.json()
     daily = payload.get("daily", {})
-    dates = daily.get("time") or []
-    if not dates:
+    dates = daily.get("time")
+    if not isinstance(dates, list) or not dates:
         raise OpenMeteoMalformedResponseError("Open-Meteo response carried no daily.time entries")
 
     daily_forecasts: list[DailyForecast] = []
@@ -192,11 +192,10 @@ async def _pagasa_api_forecast(location: str, days: int, token: str) -> dict | N
                 headers=headers,
             )
         response.raise_for_status()
+        payload = response.json()
     except Exception as exc:
         log_stderr(f"PAGASA TenDay API error: {exc}; falling back to Open-Meteo")
         return None
-
-    payload = response.json()
     if not payload:
         return None
 
@@ -544,10 +543,9 @@ async def get_weather_alerts(region: str | None = None) -> list[dict] | dict:
     active-warning sections. This tool reliably detects the "No Active
     Warnings" state, but it cannot yet isolate a real active warning from
     that navigation text. To avoid a fabricated advisory, this tool
-    returns a bare empty list for the confirmed "no active warnings"
-    state. It returns the same bare empty list for the ambiguous state,
-    where the page is reachable but the warning text cannot be trusted.
-    For real-time advisories, call bagong.pagasa.dost.gov.ph directly.
+    returns a bare empty list only for the confirmed "no active warnings"
+    marker. For real-time advisories, call bagong.pagasa.dost.gov.ph
+    directly.
     Examples:
 
       get_weather_alerts()              no region argument
@@ -555,14 +553,15 @@ async def get_weather_alerts(region: str | None = None) -> list[dict] | dict:
 
     On failure, when the PAGASA homepage is unreachable, this tool
     returns data_status "unavailable", upstream_error: true, results: [],
-    and the real error in caveats. A reachable page always returns a bare
-    empty list, whether warnings are active or the text is ambiguous.
+    and the real error in caveats. When the page is reachable but the "no
+    active warnings" marker does not match, this tool returns data_status
+    "indeterminate" instead of guessing, and never caches that response.
 
     Args:
         region: For example "NCR", "Region VII", "CALABARZON". None returns all.
 
-    Returns: list of alerts (currently always empty, pending a reliable
-    parser), or the failure dict above on an outage.
+    Returns: a bare empty list on the confirmed "no active warnings" state,
+    or the failure dict above on an outage or an unrecognized page.
     """
     key = cache_key({"endpoint": "alerts", "region": region})
     cache = CACHES["pagasa_alerts"]
@@ -590,15 +589,18 @@ async def get_weather_alerts(region: str | None = None) -> list[dict] | dict:
         cache[key] = []
         return []
 
-    # Conservative path: PAGASA homepage embeds alert names ("Heavy Rainfall
-    # Warning", "Flood Advisory", "Gale Warning") in its nav menu, breadcrumbs,
-    # and footer alongside any genuinely active alerts. Until we have a
-    # structural way to isolate the active section, returning [] is safer
-    # than risking fabricated advisories pulled from chrome text. Audit
-    # 2026-05-01 documented the previous regex matching menu strings.
-    log_stderr(
-        "get_weather_alerts: page reachable but parser cannot reliably "
-        "distinguish active alerts from PAGASA homepage chrome — returning []"
+    # Only the explicit "No Active Warnings" marker proves the negative.
+    # PAGASA homepage embeds alert names ("Heavy Rainfall Warning", "Flood
+    # Advisory", "Gale Warning") in its nav menu, breadcrumbs, and footer
+    # alongside any genuinely active alerts, so a reachable page with no
+    # marker match is not proof of "no active warnings" either. Caching []
+    # here would read as a real all-clear for the cache TTL. Same rule
+    # get_active_typhoons applies to its own "no active cyclone" marker.
+    return failure_result(
+        "PAGASA",
+        PAGASA_MAIN_URL,
+        "PAGASA homepage format was not recognized: the 'no active warnings' marker did not match.",
+        data_status=DATA_STATUS_INDETERMINATE,
+        license=PAGASA_LICENSE,
+        results=[],
     )
-    cache[key] = []
-    return []
