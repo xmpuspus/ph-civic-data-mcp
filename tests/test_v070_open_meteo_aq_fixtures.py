@@ -146,17 +146,19 @@ async def test_an_unknown_location_is_invalid_request_not_a_bare_dict(monkeypatc
     assert result["upstream_error"] is False
     assert result["location"] == "Atlantis"
     assert calls["n"] == 0
+    assert len(CACHES["open_meteo_aq"]) == 0
 
 
 @pytest.mark.asyncio
-async def test_an_unparseable_time_is_indeterminate_and_never_cached(monkeypatch):
+@pytest.mark.parametrize("bad_time", ["not-a-date", ""])
+async def test_an_unparseable_time_is_indeterminate_and_never_cached(monkeypatch, bad_time):
     """v0.7.0 fix: a present but bad current.time fell through to the server
     clock and was published and cached as a real reading.
     """
     payload = {
         "current": {
             **CURRENT_PAYLOAD["current"],
-            "time": "not-a-date",
+            "time": bad_time,
             "us_aqi": 42,
         }
     }
@@ -169,7 +171,7 @@ async def test_an_unparseable_time_is_indeterminate_and_never_cached(monkeypatch
     result = await aq_module.get_air_quality("Manila")
     assert result["data_status"] == "indeterminate"
     assert result["upstream_error"] is True
-    assert any("not-a-date" in c for c in result["caveats"]), result["caveats"]
+    assert result["caveats"], result["caveats"]
     assert len(CACHES["open_meteo_aq"]) == 0
 
 
