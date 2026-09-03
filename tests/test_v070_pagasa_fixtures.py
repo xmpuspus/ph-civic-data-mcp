@@ -247,6 +247,95 @@ async def test_open_meteo_empty_daily_time_is_indeterminate_not_cached(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_an_unrecognized_alerts_page_is_indeterminate_not_cached_empty(monkeypatch):
+    """Neither the 'no active warnings' marker nor a recognized shape
+    matches, so this must not be read as, and cached as, 'no active
+    warnings'."""
+    CACHES["pagasa_alerts"].clear()
+
+    async def _fake(client, method, url, **kwargs):
+        return _html_response(
+            method,
+            url,
+            "<html><body><section>Heavy Rainfall Warning for NCR</section></body></html>",
+        )
+
+    monkeypatch.setattr(pagasa_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_module.get_weather_alerts()
+    assert isinstance(result, dict)
+    assert result["upstream_error"] is True
+    assert result["data_status"] == "indeterminate"
+    assert len(CACHES["pagasa_alerts"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_the_explicit_no_active_warnings_marker_still_returns_and_caches_empty(monkeypatch):
+    """The confirmed 'no active warnings' state must keep returning a bare []."""
+    CACHES["pagasa_alerts"].clear()
+
+    async def _fake(client, method, url, **kwargs):
+        return _html_response(method, url, "<html><body>No Active Warnings</body></html>")
+
+    monkeypatch.setattr(pagasa_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_module.get_weather_alerts()
+    assert result == []
+    assert len(CACHES["pagasa_alerts"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_open_meteo_scalar_daily_time_is_indeterminate_not_cached(monkeypatch):
+    """A 200 with daily.time as a bare string must not iterate character by
+    character into a garbage days list. It must take the same malformed
+    path as a missing or empty daily.time list."""
+
+    async def _fake(client, method, url, **kwargs):
+        if "tenday" in url:
+            raise httpx.ConnectError("tenday down")
+        return _json_response(method, url, {"daily": {"time": "2026-09-04"}})
+
+    monkeypatch.setattr(pagasa_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_module.get_weather_forecast("Manila", days=1)
+    assert result["upstream_error"] is True
+    assert result["data_status"] == "indeterminate"
+    assert len(CACHES["pagasa_forecast"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_tenday_non_json_body_falls_back_to_open_meteo(monkeypatch):
+    """A 200 whose body is not JSON must fall back like a fetch failure,
+    never raise JSONDecodeError out of the tool."""
+
+    async def _fake(client, method, url, **kwargs):
+        if "tenday" in url:
+            return httpx.Response(200, text="not-json", request=httpx.Request(method, url))
+        return _json_response(
+            method,
+            url,
+            {
+                "daily": {
+                    "time": ["2026-09-04"],
+                    "temperature_2m_max": [31.0],
+                    "temperature_2m_min": [24.0],
+                    "precipitation_sum": [0.0],
+                    "windspeed_10m_max": [10.0],
+                    "winddirection_10m_dominant": [90.0],
+                    "weathercode": [1],
+                }
+            },
+        )
+
+    monkeypatch.setattr(pagasa_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_module.get_weather_forecast("Manila", days=1)
+    assert result["data_source"] == "open_meteo"
+    assert not result.get("upstream_error")
+    assert len(result["days"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_both_sources_down_is_reported_and_not_cached(monkeypatch):
     os.environ.pop("PAGASA_API_TOKEN", None)
 
