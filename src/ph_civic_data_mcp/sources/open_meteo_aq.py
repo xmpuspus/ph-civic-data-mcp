@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from ph_civic_data_mcp.models.climate import AirQuality
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import failure_result
 from ph_civic_data_mcp.utils.geo import city_to_coords
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
@@ -52,6 +53,10 @@ def _to_int(val: float | int | None) -> int | None:
         return int(round(float(val)))
     except (TypeError, ValueError):
         return None
+
+
+def _as_dict(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
 
 
 @mcp.tool(
@@ -106,25 +111,31 @@ async def get_air_quality(location: str) -> dict:
                 "us_aqi",
             ]
         ),
-        "timezone": "Asia/Manila",
+        # UTC, not Asia/Manila: Open-Meteo's "current.time" carries no offset
+        # of its own, so whatever zone we request is the zone we get back.
+        # Requesting Manila local time and then labelling it UTC below shifted
+        # every reading 8 hours into the future.
+        "timezone": "UTC",
     }
 
     try:
         response = await fetch_with_retry(CLIENT, "GET", OPEN_METEO_AQ_URL, params=params)
         response.raise_for_status()
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError(f"Open-Meteo AQ returned a non-object body: {type(payload).__name__}")
     except Exception as exc:
         log_stderr(f"Open-Meteo AQ error: {exc}")
-        return {
-            "location": location,
-            "latitude": lat,
-            "longitude": lng,
-            "caveats": [f"Open-Meteo AQ fetch failed: {type(exc).__name__}"],
-            "source": "Open-Meteo Air Quality",
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "Open-Meteo Air Quality",
+            OPEN_METEO_AQ_URL,
+            f"Open-Meteo AQ fetch failed: {type(exc).__name__}: {exc}",
+            location=location,
+            latitude=lat,
+            longitude=lng,
+        )
 
-    current = payload.get("current", {}) or {}
+    current = _as_dict(payload.get("current"))
     measured_at_raw = current.get("time")
     try:
         measured_at = datetime.fromisoformat(measured_at_raw) if measured_at_raw else _now()

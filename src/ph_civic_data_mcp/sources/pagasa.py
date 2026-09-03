@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 from ph_civic_data_mcp.models.weather import DailyForecast, Typhoon, WeatherForecast
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.envelope import failure_envelope
+from ph_civic_data_mcp.utils.envelope import failure_envelope, failure_result
 from ph_civic_data_mcp.utils.geo import city_to_coords, resolve_to_coords
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
@@ -185,23 +185,40 @@ async def _pagasa_api_forecast(location: str, days: int, token: str) -> dict | N
     if not payload:
         return None
 
-    raw_days = (
-        payload.get("days")
-        or payload.get("forecast")
-        or (payload[0].get("days") if isinstance(payload, list) and payload else [])
-    )
+    # `payload.get(...)` before a shape check crashed on a bare list of
+    # non-dict items: Python evaluates the first `.get()` call regardless of
+    # the isinstance guard later in the same `or` chain, so that guard was
+    # dead code. Check the shape before touching `.get()` anywhere.
+    if isinstance(payload, dict):
+        raw_days = payload.get("days") or payload.get("forecast") or []
+    elif isinstance(payload, list) and payload and isinstance(payload[0], dict):
+        raw_days = payload[0].get("days") or []
+    else:
+        log_stderr(f"PAGASA TenDay API returned an unexpected shape: {type(payload).__name__}")
+        return None
+    if not isinstance(raw_days, list):
+        log_stderr(f"PAGASA TenDay API 'days' field is not a list: {type(raw_days).__name__}")
+        return None
+
     daily_forecasts: list[DailyForecast] = []
     for entry in raw_days[:days]:
+        if not isinstance(entry, dict):
+            continue
         try:
             d = date_cls.fromisoformat(str(entry.get("date", ""))[:10])
         except ValueError:
             continue
+        # A real 0mm rainfall reading is falsy, so `entry.get("rainfall") or
+        # entry.get("precip")` silently replaced it with the fallback key.
+        rainfall = entry.get("rainfall")
+        if rainfall is None:
+            rainfall = entry.get("precip")
         daily_forecasts.append(
             DailyForecast(
                 date=d,
                 temp_min_c=entry.get("min_temp") or entry.get("tmin"),
                 temp_max_c=entry.get("max_temp") or entry.get("tmax"),
-                rainfall_mm=entry.get("rainfall") or entry.get("precip"),
+                rainfall_mm=rainfall,
                 wind_speed_kph=entry.get("wind_speed"),
                 wind_direction=entry.get("wind_direction"),
                 weather_description=entry.get("weather") or entry.get("description"),
@@ -276,16 +293,14 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
         result = await _open_meteo_forecast(location, lat, lng, days)
     except Exception as exc:
         log_stderr(f"get_weather_forecast error: {exc}")
-        return {
-            "location": location,
-            "upstream_error": True,
-            "caveats": [f"Open-Meteo fetch failed ({type(exc).__name__}: {exc})"],
-            "days": [],
-            "data_source": "open_meteo",
-            "data_retrieved_at": _now().isoformat(),
-            "source": "Open-Meteo",
-            "source_url": OPEN_METEO_BASE,
-        }
+        return failure_result(
+            "Open-Meteo",
+            OPEN_METEO_BASE,
+            f"Open-Meteo fetch failed ({type(exc).__name__}: {exc})",
+            location=location,
+            days=[],
+            data_source="open_meteo",
+        )
 
     cache[key] = result
     return result

@@ -1,0 +1,134 @@
+"""Offline fixtures for Open-Meteo air quality. No live coverage existed
+before v0.7.0; tests/test_v020_sources.py hits the real API and is `live`-marked.
+
+Covers: the UTC timezone fix, a real success, an empty-but-valid current
+block, an upstream failure, and a schema-drift body.
+"""
+
+from __future__ import annotations
+
+import httpx
+import pytest
+
+from ph_civic_data_mcp.sources import open_meteo_aq as aq_module
+from ph_civic_data_mcp.utils.cache import CACHES
+
+
+def _json_response(method: str, url: str, payload: object) -> httpx.Response:
+    return httpx.Response(200, json=payload, request=httpx.Request(method, url))
+
+
+CURRENT_PAYLOAD = {
+    "current": {
+        "time": "2026-09-03T15:00",
+        "pm10": 8.5,
+        "pm2_5": 6.9,
+        "carbon_monoxide": 120.0,
+        "nitrogen_dioxide": 5.1,
+        "sulphur_dioxide": 1.2,
+        "ozone": 40.0,
+        "european_aqi": 22,
+        "us_aqi": 29,
+    }
+}
+
+
+@pytest.fixture(autouse=True)
+def _clear_cache():
+    CACHES["open_meteo_aq"].clear()
+    yield
+    CACHES["open_meteo_aq"].clear()
+
+
+@pytest.mark.asyncio
+async def test_the_request_asks_open_meteo_for_utc_not_manila(monkeypatch):
+    seen_params: dict = {}
+
+    async def _fake(client, method, url, **kwargs):
+        seen_params.update(kwargs.get("params", {}))
+        return _json_response(method, url, CURRENT_PAYLOAD)
+
+    monkeypatch.setattr(aq_module, "fetch_with_retry", _fake)
+
+    await aq_module.get_air_quality("Manila")
+    assert seen_params.get("timezone") == "UTC"
+
+
+@pytest.mark.asyncio
+async def test_the_returned_timestamp_carries_an_explicit_utc_marker(monkeypatch):
+    """A naive Manila-local reading must never be mislabelled as UTC."""
+
+    async def _fake(client, method, url, **kwargs):
+        return _json_response(method, url, CURRENT_PAYLOAD)
+
+    monkeypatch.setattr(aq_module, "fetch_with_retry", _fake)
+
+    result = await aq_module.get_air_quality("Manila")
+    measured_at = result["measured_at"]
+    assert measured_at.endswith("Z") or measured_at.endswith("+00:00"), measured_at
+    # "15:00" is the UTC value only because the request itself asked for UTC;
+    # reading it back confirms the label and the wall-clock value agree.
+    assert measured_at.startswith("2026-09-03T15:00")
+
+
+@pytest.mark.asyncio
+async def test_a_success_response_caches(monkeypatch):
+    calls = {"n": 0}
+
+    async def _fake(client, method, url, **kwargs):
+        calls["n"] += 1
+        return _json_response(method, url, CURRENT_PAYLOAD)
+
+    monkeypatch.setattr(aq_module, "fetch_with_retry", _fake)
+
+    first = await aq_module.get_air_quality("Manila")
+    assert first["pm2_5"] == pytest.approx(6.9)
+    assert first["us_aqi"] == 29
+    assert first["aqi_category"] == "Good"
+    assert len(CACHES["open_meteo_aq"]) == 1
+
+    before = calls["n"]
+    again = await aq_module.get_air_quality("Manila")
+    assert again == first
+    assert calls["n"] == before
+
+
+@pytest.mark.asyncio
+async def test_an_empty_current_block_is_a_valid_response_and_still_caches(monkeypatch):
+    async def _fake(client, method, url, **kwargs):
+        return _json_response(method, url, {"current": {}})
+
+    monkeypatch.setattr(aq_module, "fetch_with_retry", _fake)
+
+    result = await aq_module.get_air_quality("Manila")
+    assert not result.get("upstream_error")
+    assert result["pm2_5"] is None
+    assert result["us_aqi"] is None
+    assert len(CACHES["open_meteo_aq"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_failure_is_never_cached(monkeypatch):
+    async def _boom(client, method, url, **kwargs):
+        raise httpx.ConnectError("open-meteo down")
+
+    monkeypatch.setattr(aq_module, "fetch_with_retry", _boom)
+
+    result = await aq_module.get_air_quality("Manila")
+    assert result["upstream_error"] is True
+    assert any("ConnectError" in c for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["open_meteo_aq"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_schema_drift_body_is_reported_not_a_crash(monkeypatch):
+    """A bare list instead of the documented object body must not raise."""
+
+    async def _drifted(client, method, url, **kwargs):
+        return _json_response(method, url, ["unexpected", "shape"])
+
+    monkeypatch.setattr(aq_module, "fetch_with_retry", _drifted)
+
+    result = await aq_module.get_air_quality("Manila")
+    assert result["upstream_error"] is True
+    assert len(CACHES["open_meteo_aq"]) == 0
