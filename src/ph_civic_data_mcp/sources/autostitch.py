@@ -115,10 +115,10 @@ async def get_area_profile(location: str) -> dict:
     provenance), economy, procurement, hazard, weather, national_reference
     (the country's population and poverty for comparison), derived
     correlations (infra_notices_per_100k_population is null and carries an
-    infra_coverage_caveat when the PhilGEPS sample is below the 500-notice
-    threshold for a population-representative rate), per-block reference
-    periods, caveats listing any upstream that failed, and the public-data
-    disclaimer.
+    infra_coverage_caveat when the PhilGEPS sample is nonzero but below the
+    500-notice threshold for a population-representative rate), per-block
+    reference periods, caveats listing any upstream that failed, and the
+    public-data disclaimer.
 
     The first call in a process pays the PSA rate limit for every block at
     once, so it can take about 15 seconds. A later call for any place reuses
@@ -252,10 +252,12 @@ async def get_area_profile(location: str) -> dict:
 
     pop_value = population.get("population")
     infra_count: int | None = len(infra) if infra is not None else None
-    infra_coverage = infra_sample_coverage(infra_count) if infra_count is not None else None
+    # Zero notices is a genuine negative, not an undersized sample of a real
+    # signal, so it takes no coverage caveat and keeps its plain 0.0 rate.
+    infra_coverage = infra_sample_coverage(infra_count) if infra_count else None
     infra_sufficient = bool(infra_coverage and infra_coverage["sufficient_for_per_capita"])
     infra_per_100k: float | None = None
-    if infra_sufficient and isinstance(pop_value, int) and pop_value > 0:
+    if (infra_sufficient or infra_count == 0) and isinstance(pop_value, int) and pop_value > 0:
         infra_per_100k = round(infra_count / pop_value * 100_000, 2)
 
     correlations = {
