@@ -199,6 +199,32 @@ async def test_differing_vintages_withhold_the_share_and_the_gap(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_unknown_vintage_withholds_share_and_gap_instead_of_matching_on_none(monkeypatch):
+    _install_common_mocks(monkeypatch)
+
+    async def _population(*, psgc_code=None, region=None, year=None):
+        if psgc_code is not None:
+            return {**_city_population(psgc_code), "population": 100, "year": None}
+        return {**_national_population(), "population": 1_000, "year": None}
+
+    async def _poverty(*, region=None):
+        if region is None:
+            return {**_national_poverty(), "reference_year": None}
+        return {**_province_poverty(region), "reference_year": None}
+
+    monkeypatch.setattr(autostitch_module, "get_population_stats", _population)
+    monkeypatch.setattr(autostitch_module, "get_poverty_stats", _poverty)
+
+    profile = await autostitch_module.get_area_profile("Tacloban")
+    ref = profile["national_reference"]
+
+    assert ref["population_share_pct"] is None
+    assert ref["poverty_gap_pct_points"] is None
+    assert any("population vintage unknown" in c for c in profile["caveats"])
+    assert any("poverty vintage unknown" in c for c in profile["caveats"])
+
+
+@pytest.mark.asyncio
 async def test_a_national_fetch_failure_never_crashes_the_profile(monkeypatch):
     _install_common_mocks(monkeypatch)
 
