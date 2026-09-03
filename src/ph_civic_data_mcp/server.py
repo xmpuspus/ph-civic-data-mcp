@@ -119,6 +119,13 @@ SOURCE_CATALOG: list[dict] = [
         "cache_ttl_seconds": 86400,
         "license": "World Bank Open Data CC-BY 4.0",
     },
+    {
+        "source": "HDX",
+        "source_url": "https://data.humdata.org/api/3/action/package_search",
+        "freshness": "Per-dataset metadata_modified; the catalog is searched fresh each query",
+        "cache_ttl_seconds": 21600,
+        "license": "HDX (Humanitarian Data Exchange) CKAN API, per-dataset license",
+    },
 ]
 
 
@@ -332,6 +339,7 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import world_bank  # noqa: F401
     from ph_civic_data_mcp.sources import psa_catalog  # noqa: F401
     from ph_civic_data_mcp.sources import compare  # noqa: F401
+    from ph_civic_data_mcp.sources import hdx  # noqa: F401
 
 
 def main() -> None:

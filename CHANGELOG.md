@@ -4,6 +4,14 @@ All notable changes to `ph-civic-data-mcp` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `search_hdx_datasets`: keyword search over the Philippine datasets on the
+  Humanitarian Data Exchange (HDX) CKAN API, with each dataset's own
+  `license_id`, resources, and last-modified date passed through.
+
 ## [0.7.0] - 2026-09-04
 
 `v0.7.0` adds two tools, `compare_areas` and `search_psa_catalog`, and raises

@@ -69,6 +69,10 @@ mcp = FastMCP(
     - USGS FDSN: Philippine-region earthquakes from global network (cross-ref to PHIVOLCS)
     - NOAA IBTrACS: historical tropical cyclone tracks through Philippine AOR
     - World Bank Open Data: Philippine macro indicators (GDP, poverty, inflation, etc.)
+    - HDX (Humanitarian Data Exchange): search_hdx_datasets(query) finds
+      Philippine humanitarian datasets by keyword. Each dataset carries its
+      own license (license_id) and up to 20 resources; check the license
+      before you reuse a resource.
 
     Failure semantics: list tools return a real list on success. On upstream
     failure they return {results: [], upstream_error: true, caveats: [...]}

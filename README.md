@@ -6,7 +6,7 @@
 > statistical catalog, PSGC location codes, infra-spending accountability,
 > earthquakes, weather, typhoons, procurement, poverty, solar radiation, air
 > quality, satellite vegetation, and macro indicators. Population figures
-> reach barangay level. 34 tools, no API keys.
+> reach barangay level. 35 tools, no API keys.
 
 [![PyPI](https://img.shields.io/pypi/v/ph-civic-data-mcp.svg)](https://pypi.org/project/ph-civic-data-mcp/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://www.python.org/downloads/)
@@ -107,7 +107,7 @@ recorded. The population turn answers from the 2024 Census of Population
 
 ## What can I ask?
 
-`ph-civic-data-mcp` exposes 34 tools across 13 public sources. Start with
+`ph-civic-data-mcp` exposes 35 tools across 14 public sources. Start with
 `get_area_profile` for any place-based question. It resolves the name to a
 PSGC code once, then composes demographics, economy, procurement, hazards,
 and the 3-day outlook in a single turn, with infra notices already normalized
@@ -161,7 +161,7 @@ request with an HTTP 403, so `describe_psa_dataset` first is the only way in.
 - "What is today's air quality in Manila?" `get_air_quality`
 - "How has Mindanao's vegetation changed this year?" `get_vegetation_index`
 
-Full signatures, arguments, and limits for all 34 tools:
+Full signatures, arguments, and limits for all 35 tools:
 **[docs/tool-reference.md](docs/tool-reference.md)**.
 
 ## Get a full profile for one place
@@ -267,11 +267,12 @@ actually reports.
 | USGS FDSN | Philippine-region earthquakes, cross-checked against PHIVOLCS | Real-time global feed | 10 min | Public domain (USGS) |
 | NOAA IBTrACS | Historical tropical cyclone tracks through the Philippine AOR | Annual update | 24 h | Public domain (NOAA) |
 | World Bank Open Data | Philippine macroeconomic indicators | Annual; lag varies by indicator | 24 h | World Bank Open Data CC-BY 4.0 |
+| HDX | Humanitarian dataset search, with a per-dataset license | Per-dataset metadata_modified; the catalog is searched fresh each query | 6 h | HDX (Humanitarian Data Exchange) CKAN API, per-dataset license |
 <!-- source-matrix:end -->
 
 `PAGASA_API_TOKEN` is the only environment variable, and it is optional.
 PAGASA gates it behind a formal request. Without it, forecasts use
-Open-Meteo. Every one of the 34 tools works with no token at all.
+Open-Meteo. Every one of the 35 tools works with no token at all.
 
 Three vintages worth stating plainly:
 
@@ -330,7 +331,7 @@ uvx twine check dist/*
 
 CI runs the offline suite on Python 3.11, 3.12, 3.13, and 3.14, plus Ruff
 lint, Ruff format, a build, and a fresh-process check that a bare import
-exposes all 34 tools. CI action refs are pinned to a commit SHA, not a
+exposes all 35 tools. CI action refs are pinned to a commit SHA, not a
 floating tag.
 
 The `docker build` step above produces a non-root image with a healthcheck.
@@ -338,7 +339,7 @@ The server pins `fastmcp>=3.0.0,<4.0.0`, currently 3.4.7.
 
 ## More
 
-- **[docs/tool-reference.md](docs/tool-reference.md)** for all 34 tools
+- **[docs/tool-reference.md](docs/tool-reference.md)** for all 35 tools
 - **[CHANGELOG.md](CHANGELOG.md)** for release history
 - **[docs/SUBMISSIONS.md](docs/SUBMISSIONS.md)** for directory listings
 - **[docs/fastmcp-4-evaluation.md](docs/fastmcp-4-evaluation.md)** for the
