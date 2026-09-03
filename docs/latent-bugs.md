@@ -218,6 +218,19 @@ Severity: low.
 Fixed. The value rounds to the nearest whole person, and a `caveats` entry
 names the non-integral cell.
 
+## 22. The PAGASA homepage no longer carries the "No Active Warnings" marker
+
+Found 2026-09-04 while v0.7.0 made `get_weather_alerts` return an empty list
+only on that explicit marker. A live fetch of `bagong.pagasa.dost.gov.ph`
+shows no such phrase, only El Niño and La Niña advisories inside embedded
+JSON and alert names in the nav menu. So on a normal day the tool now
+returns `data_status: "indeterminate"`, which is honest but rarely useful.
+
+The old code returned a bare `[]` here, a false all-clear that cached for 10
+minutes. v0.7.0 removed that. The remaining work is to find the page or
+endpoint that carries the current warnings state, and parse that instead of
+the homepage. Until then the live test accepts the indeterminate envelope.
+
 ## Suggested order
 
 1, then 10, then 2, then 6 and 7 together, then 3 and 5, then 4, 8, 9 and 11.
