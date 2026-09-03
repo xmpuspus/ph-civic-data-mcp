@@ -375,9 +375,9 @@ async def get_earthquake_bulletin(bulletin_url: str) -> dict:
 
     On failure: an empty, malformed, or non-PHIVOLCS bulletin_url, or a 404
     on the page itself, returns a dict with url, source, caveats, and
-    data_retrieved_at only, with no magnitude or location fields. A fetch
-    that raises an exception also sets upstream_error true. This tool has
-    no data_status field.
+    data_retrieved_at only, with no data_status, upstream_error, magnitude,
+    or location fields. A fetch that raises an exception sets data_status
+    "unavailable" and upstream_error true.
 
     Args:
         bulletin_url: Full URL returned by get_latest_earthquakes.bulletin_url.
@@ -419,13 +419,12 @@ async def get_earthquake_bulletin(bulletin_url: str) -> dict:
         response.raise_for_status()
     except Exception as exc:
         log_stderr(f"get_earthquake_bulletin fetch error: {exc}")
-        return {
-            "url": bulletin_url,
-            "source": "PHIVOLCS",
-            "upstream_error": True,
-            "caveats": [f"bulletin fetch failed ({type(exc).__name__}: {exc})"],
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PHIVOLCS",
+            bulletin_url,
+            f"bulletin fetch failed ({type(exc).__name__}: {exc})",
+            url=bulletin_url,
+        )
 
     soup = BeautifulSoup(response.text, "lxml")
     text = soup.get_text("\n", strip=True)

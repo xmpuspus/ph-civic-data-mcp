@@ -380,10 +380,12 @@ async def flag_infra_anomalies(
       flag_infra_anomalies()
       flag_infra_anomalies(min_cost_php=100_000_000)
 
-    On failure: this tool never raises and carries no data_status field. A
-    failed PHIVOLCS, PAGASA, or PhilGEPS sub-call shows up only as a
-    caveats entry naming the source. The flagged list still returns data
-    from every source that did respond.
+    On failure: this tool never raises. data_status is "success" when
+    PhilGEPS, PHIVOLCS, and PAGASA all load, "indeterminate" when one or two
+    fail, and "unavailable" when all three fail; upstream_error is true for
+    the last two. A failed sub-call shows up as a caveats entry naming the
+    source, and the flagged list still returns data from every source that
+    did respond.
 
     Args:
         region: PH region filter for the project list.
@@ -406,6 +408,16 @@ async def flag_infra_anomalies(
     projects_result, earthquakes_result, typhoons_result = await asyncio.gather(
         projects_task, earthquakes_task, typhoons_task, return_exceptions=True
     )
+
+    child_results = (projects_result, earthquakes_result, typhoons_result)
+    failed_count = sum(_child_failed(r) for r in child_results)
+    if failed_count == 0:
+        data_status = DATA_STATUS_SUCCESS
+    elif failed_count == len(child_results):
+        data_status = DATA_STATUS_UNAVAILABLE
+    else:
+        data_status = DATA_STATUS_INDETERMINATE
+    upstream_error = data_status in (DATA_STATUS_UNAVAILABLE, DATA_STATUS_INDETERMINATE)
 
     projects = _unwrap_list(projects_result, caveats, "PhilGEPS fetch")
     earthquakes = _unwrap_list(earthquakes_result, caveats, "PHIVOLCS fetch")
@@ -532,6 +544,8 @@ async def flag_infra_anomalies(
             "active_typhoon_count": len(typhoons),
         },
         "caveats": caveats,
+        "data_status": data_status,
+        "upstream_error": upstream_error,
         "assessment_datetime": retrieved_at.isoformat(),
         "source": "PhilGEPS + PHIVOLCS + PAGASA",
         "source_url": (
