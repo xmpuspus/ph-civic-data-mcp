@@ -88,7 +88,7 @@ Fixed: `_fetch_barangay_by_code` and `_fetch_one` raise `PSGCFetchError` on a
 real transport failure and return `None` only for a clean non-200/404 miss.
 `get_location_hierarchy` folds that into `upstream_error`.
 
-## 6. MODIS transport failures cache as an empty observation window
+## 6. FIXED in v0.7.0. MODIS transport failures cache as an empty observation window
 
 `sources/modis_ndvi.py`. An outage becomes a legitimate-looking empty result
 and enters the cache.
@@ -116,14 +116,14 @@ Severity: low, but it is a fabricated reference period.
 Fixed: `_year_from_label` returns None and the tool returns an envelope rather
 than publish a year nobody measured.
 
-## 9. PAGASA: the list-response fallback is unreachable
+## 9. FIXED in v0.7.0. PAGASA: the list-response fallback is unreachable
 
 `sources/pagasa.py`. `.get()` runs before the branch meant to handle a list
 response, so the fallback never executes.
 
 Severity: low.
 
-## 10. PAGASA: zero rainfall reads as absent
+## 10. FIXED in v0.7.0. PAGASA: zero rainfall reads as absent
 
 `sources/pagasa.py`. A truthiness check treats `0` rainfall as missing and
 substitutes a different precipitation field, so a genuinely dry day reports
@@ -139,7 +139,7 @@ empty result.
 
 Severity: low.
 
-## 12. A failed metadata fetch can let an older PSA table win discovery
+## 12. FIXED in v0.7.0. A failed metadata fetch can let an older PSA table win discovery
 
 `sources/psa.py`, in `_pick_latest_table`. When the metadata GET for a
 candidate fails, that candidate is skipped, so an older backcast table can win
@@ -185,7 +185,7 @@ the default window rather than telling the caller the argument was wrong.
 
 Severity: medium.
 
-## 18. Open-Meteo air-quality timestamps are labelled UTC but are Manila-local
+## 18. FIXED in v0.7.0. Open-Meteo air-quality timestamps are labelled UTC but are Manila-local
 
 `sources/open_meteo_aq.py`. The API returns naive local timestamps and the
 parser attaches UTC, so every reading is off by eight hours.
