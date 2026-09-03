@@ -192,7 +192,7 @@ parser attaches UTC, so every reading is off by eight hours.
 
 Severity: medium. It is a wrong published time on every air-quality result.
 
-## 19. An empty health-query data array becomes a cached null indicator
+## 19. FIXED in v0.7.0. An empty health-query data array becomes a cached null indicator
 
 `sources/psa.py`, in `_latest_health_value`. When a year's query returns an
 empty `data` array the loop moves on, and if every year is empty the indicator
