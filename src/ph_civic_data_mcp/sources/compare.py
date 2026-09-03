@@ -136,13 +136,26 @@ def _validate_request(locations: object, metrics: object, format: object) -> str
     return None
 
 
+# A cell that starts with one of these reads as a formula in Excel or
+# Sheets, not as text. `location` comes straight from the caller, so the
+# CSV export must neutralize it. The JSON `rows` stay untouched, since JSON
+# never runs a formula.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def _csv_safe_cell(value: object) -> object:
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 def _rows_to_csv(rows: list[dict], metrics: list[str]) -> str:
     fieldnames = ["location", "resolved_name", "psgc_code", "level", *metrics]
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fieldnames)
     writer.writeheader()
     for row in rows:
-        writer.writerow({key: row.get(key) for key in fieldnames})
+        writer.writerow({key: _csv_safe_cell(row.get(key)) for key in fieldnames})
     return buf.getvalue()
 
 
@@ -219,9 +232,12 @@ async def compare_areas(
     caveats: list[str] = []
     vintages: dict[str, dict[str, object]] = {}
     resolved_count = 0
+    had_exception = False
+    unresolved_failed = 0
 
     for location, result in zip(locations, gathered):
         if isinstance(result, BaseException):
+            had_exception = True
             caveats.append(
                 f"{location}: get_area_profile failed: {type(result).__name__}: {result}"
             )
@@ -234,7 +250,8 @@ async def compare_areas(
 
         resolved = result.get("resolved") or {}
         matched = bool(resolved.get("matched"))
-        blocks[location] = result.get("blocks") or {}
+        result_blocks = result.get("blocks") or {}
+        blocks[location] = result_blocks
         row = {
             "location": location,
             "resolved_name": resolved.get("name"),
@@ -251,12 +268,30 @@ async def compare_areas(
         else:
             for c in result.get("caveats") or [f"'{location}' did not resolve to a place"]:
                 caveats.append(f"{location}: {c}")
+            # A resolve block that reports "success" still searched and
+            # found no match; that is the caller's place name, not an
+            # outage. Any other resolve status is a real upstream failure.
+            if result_blocks.get("resolve") != DATA_STATUS_SUCCESS:
+                unresolved_failed += 1
 
     comparable = True
     for metric in _VINTAGE_METRICS:
         if metric not in effective_metrics:
             continue
-        years = {str(v[metric]) for v in vintages.values() if v.get(metric) is not None}
+        # Only resolved rows carry a real vintage to compare. A set drops
+        # None on its own, so a resolved row with an unknown vintage next
+        # to a dated row used to read as comparable. Flag it by name
+        # instead of letting it disappear.
+        present = [row["location"] for row in rows if row["resolved_name"] is not None]
+        known = [loc for loc in present if vintages.get(loc, {}).get(metric) is not None]
+        unknown = [loc for loc in present if vintages.get(loc, {}).get(metric) is None]
+        if known and unknown:
+            comparable = False
+            caveats.append(
+                f"{metric} vintage is unknown for {', '.join(unknown)}, "
+                "so comparability cannot be confirmed"
+            )
+        years = {str(vintages[loc][metric]) for loc in known}
         if len(years) > 1:
             comparable = False
             caveats.append(f"{metric} vintage differs across locations: {sorted(years)}")
@@ -294,12 +329,28 @@ async def compare_areas(
             ):
                 comparable = False
 
+    # An unmatched place with no failed block behind it is a caller mistake,
+    # not an outage: no exception, no failed resolve block, no degraded
+    # block for a requested metric. Codex cross-model finding: two clean
+    # no-matches used to read as an "unavailable" outage.
+    all_unresolved_are_clean = not had_exception and unresolved_failed == 0 and not degraded_blocks
+
     if resolved_count == len(locations) and not degraded_blocks:
         data_status = DATA_STATUS_SUCCESS
+        validation_error = False
+        upstream_error = False
+    elif resolved_count == 0 and all_unresolved_are_clean:
+        data_status = DATA_STATUS_INVALID_REQUEST
+        validation_error = True
+        upstream_error = False
     elif resolved_count == 0:
         data_status = DATA_STATUS_UNAVAILABLE
+        validation_error = False
+        upstream_error = True
     else:
         data_status = DATA_STATUS_INDETERMINATE
+        validation_error = False
+        upstream_error = not all_unresolved_are_clean
 
     out = {
         "rows": rows,
@@ -308,8 +359,8 @@ async def compare_areas(
         "blocks": blocks,
         "caveats": caveats,
         "data_status": data_status,
-        "upstream_error": data_status in (DATA_STATUS_UNAVAILABLE, DATA_STATUS_INDETERMINATE),
-        "validation_error": False,
+        "upstream_error": upstream_error,
+        "validation_error": validation_error,
         "source": SOURCE,
         "source_url": SOURCE_URL,
         "license": LICENSE,

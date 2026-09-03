@@ -77,6 +77,19 @@ def _install_never_called(monkeypatch):
     monkeypatch.setattr(compare, "get_area_profile", _fake)
 
 
+def _clean_no_match(name: str) -> dict:
+    """A profile that resolved without error and simply found no place.
+
+    This is a caller mistake, not an outage: `blocks.resolve` reports
+    "success", so a wrong place name must not read as a failed upstream call.
+    """
+    profile = _profile(
+        matched=False, name=name, caveats=[f"'{name}' did not resolve to a PSGC record"]
+    )
+    profile["blocks"] = {"resolve": "success"}
+    return profile
+
+
 @pytest.mark.asyncio
 async def test_compare_two_locations_returns_rows_and_comparable_true(monkeypatch):
     by_location = {
@@ -284,3 +297,81 @@ async def test_compare_a_healthy_block_the_caller_did_not_ask_for_does_not_degra
 
     assert result["data_status"] == "success"
     assert result["comparable"] is True
+
+
+@pytest.mark.asyncio
+async def test_compare_csv_export_escapes_a_formula_prefixed_location(monkeypatch):
+    """A location string is caller input. In CSV it must not run as a
+    formula in Excel or Sheets; the JSON rows stay exact."""
+    formula = '=WEBSERVICE("x")'
+    by_location = {
+        formula: _profile(name=formula),
+        "Davao City": _profile(name="Davao City", psgc_code="112402000"),
+    }
+    _install(monkeypatch, by_location)
+
+    out = await compare.compare_areas([formula, "Davao City"], metrics=["population"], format="csv")
+
+    reader = csv.reader(io.StringIO(out["export"]))
+    lines = list(reader)
+    assert lines[1][0] == "'" + formula
+    assert out["rows"][0]["location"] == formula
+
+
+@pytest.mark.asyncio
+async def test_compare_two_clean_no_matches_is_invalid_request(monkeypatch):
+    """Two places that resolve cleanly to no match are a caller mistake,
+    not an outage."""
+    by_location = {
+        "Qwxzv Nonesuch": _clean_no_match("Qwxzv Nonesuch"),
+        "Zzyx Placeholder": _clean_no_match("Zzyx Placeholder"),
+    }
+    _install(monkeypatch, by_location)
+
+    out = await compare.compare_areas(
+        ["Qwxzv Nonesuch", "Zzyx Placeholder"], metrics=["population"]
+    )
+
+    assert out["data_status"] == "invalid_request"
+    assert out["validation_error"] is True
+    assert out["upstream_error"] is False
+    joined = " ".join(out["caveats"])
+    assert "Qwxzv Nonesuch" in joined
+    assert "Zzyx Placeholder" in joined
+
+
+@pytest.mark.asyncio
+async def test_compare_one_resolved_one_clean_no_match_is_indeterminate_not_an_outage(
+    monkeypatch,
+):
+    """A mix of one real place and one clean no-match is neither a full
+    outage nor a full caller mistake, so upstream_error stays false."""
+    by_location = {
+        "Cebu City": _profile(name="Cebu City"),
+        "Qwxzv Nonesuch": _clean_no_match("Qwxzv Nonesuch"),
+    }
+    _install(monkeypatch, by_location)
+
+    out = await compare.compare_areas(["Cebu City", "Qwxzv Nonesuch"], metrics=["population"])
+
+    assert out["data_status"] == "indeterminate"
+    assert out["upstream_error"] is False
+    assert out["validation_error"] is False
+
+
+@pytest.mark.asyncio
+async def test_compare_unknown_vintage_next_to_a_dated_row_is_not_comparable(monkeypatch):
+    """A resolved row with no population_year must not hide behind a set
+    comprehension that drops None, next to a row that does carry a year."""
+    by_location = {
+        "Cebu City": _profile(name="Cebu City", population_year=None),
+        "Davao City": _profile(name="Davao City", psgc_code="112402000", population_year=2024),
+    }
+    _install(monkeypatch, by_location)
+
+    out = await compare.compare_areas(["Cebu City", "Davao City"], metrics=["population"])
+
+    assert out["comparable"] is False
+    joined = " ".join(out["caveats"])
+    assert "population" in joined
+    assert "Cebu City" in joined

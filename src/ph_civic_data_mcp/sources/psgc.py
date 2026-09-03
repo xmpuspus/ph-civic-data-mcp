@@ -149,12 +149,20 @@ async def _region_name_for_code(region_code: str | None) -> str | None:
 async def _record_to_psgc(item: dict[str, Any], level_hint: str | None = None) -> PSGCRecord:
     code = item.get("code") or item.get("psgcCode") or ""
     name = item.get("name") or ""
+    # Most specific parent first, so a city record with both provinceCode
+    # and regionCode set does not read its region as its parent. A barangay's
+    # parent is cityCode, municipalityCode, cityMunicipalityCode, or
+    # subMunicipalityCode, a city's or municipality's parent is provinceCode
+    # or districtCode, and only a province falls back to regionCode. Mirrors
+    # `_walk_hierarchy` below and `_list_children`'s child_parent_keys.
     parent_code = (
-        item.get("regionCode")
-        or item.get("provinceCode")
-        or item.get("cityCode")
+        item.get("cityCode")
         or item.get("municipalityCode")
+        or item.get("cityMunicipalityCode")
+        or item.get("subMunicipalityCode")
+        or item.get("provinceCode")
         or item.get("districtCode")
+        or item.get("regionCode")
     )
     region_code = item.get("regionCode")
     level = _classify_level(item, level_hint)

@@ -167,6 +167,23 @@ async def test_resolve_ph_location_labels_a_plain_municipality_as_municipality()
 
 
 @pytest.mark.asyncio
+async def test_resolve_ph_location_city_parent_is_its_province_not_its_region():
+    """v0.7.0 Codex cross-model finding: `_record_to_psgc` checked regionCode
+    before provinceCode, so a city's parent read as its region. Cebu City
+    carries both regionCode and provinceCode; the province must win."""
+    result = await psgc_module.resolve_ph_location("Cebu City")
+    assert result["parent_code"] == "072200000"
+
+
+@pytest.mark.asyncio
+async def test_resolve_ph_location_province_parent_stays_its_region():
+    """A province has no provinceCode or districtCode of its own, so its
+    region must still resolve as the parent."""
+    result = await psgc_module.resolve_ph_location("Pampanga")
+    assert result["parent_code"] == "030000000"
+
+
+@pytest.mark.asyncio
 async def test_list_admin_units_labels_cities_and_municipalities_apart():
     result = await psgc_module.list_admin_units(level="city-municipality")
     by_name = {r["name"]: r["level"] for r in result}
