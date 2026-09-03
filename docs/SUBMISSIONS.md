@@ -1,8 +1,9 @@
-# Directory listings
+# Where the package is listed, and its update state at each destination
 
 Where `ph-civic-data-mcp` is listed, how each listing updates, and what a
-release still needs a human to click. Inventory taken live on 2026-08-06, then
-updated the same day after the v0.6.0 release shipped.
+release still needs a human to click. Inventory taken live on 2026-08-06,
+then updated the same day after the v0.6.0 release shipped. Updated again
+on 2026-09-03 after the v0.6.1 release.
 
 Identifiers, so every form gets the same values:
 
@@ -16,6 +17,7 @@ Identifiers, so every form gets the same values:
 | Transport | stdio |
 | Auth | None required. `PAGASA_API_TOKEN` is optional. |
 | Tools / prompts / resources | 32 / 3 / 2 |
+| Current version | 0.6.1 |
 
 ## Copy to paste into a form
 
@@ -54,23 +56,23 @@ accountability
 
 ## Where it is listed today
 
-State after the v0.6.0 release on 2026-08-06.
+State after the v0.6.1 release on 2026-09-03.
 
-| Destination | v0.6.0 status | How it updates | What is left |
+| Destination | v0.6.1 status | How it updates | What is left |
 |---|---|---|---|
-| [PyPI](https://pypi.org/project/ph-civic-data-mcp/) | active | `twine upload` | Nothing |
-| [GitHub Release](https://github.com/xmpuspus/ph-civic-data-mcp/releases/tag/v0.6.0) | active | `gh release create` on the merge SHA | Nothing |
+| [PyPI](https://pypi.org/project/ph-civic-data-mcp/0.6.1/) | active, checked live | `twine upload` | Nothing |
+| [GitHub Release](https://github.com/xmpuspus/ph-civic-data-mcp/releases/tag/v0.6.1) | active, checked live | `gh release create` on the merge SHA | Nothing |
 | Repository description and topics | active | `gh repo edit` | Nothing |
-| [MCP Registry](https://registry.modelcontextprotocol.io) | active | `mcp-publisher publish server.json` | Nothing. The JWT expires between releases; run `mcp-publisher login github` on a 401 |
-| [Glama](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp) | active, showed 0.6.0 and 32 tools on 2026-09-03 | Auto-crawls GitHub and PyPI | Check the page after each release. Claiming the server is a separate one-time step |
-| [PulseMCP](https://www.pulsemcp.com/servers/xmpuspus-ph-civic-data) | auto-indexed, unverified | Tracks the registry record | Check the page shows 0.6.0 once its crawler catches up |
-| [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers/pull/6824) | submitted, pending review | Pull request | Their merge |
-| [TensorBlock/awesome-mcp-servers](https://github.com/TensorBlock/awesome-mcp-servers/pull/1597) | active, merged 2026-08-09 | Pull request | Nothing. The merged entry carries `auth.type: none` |
+| [MCP Registry](https://registry.modelcontextprotocol.io) | active, isLatest true, checked live | `mcp-publisher publish server.json` | Nothing. The JWT expires between releases; run `mcp-publisher login github` on a 401 |
+| [Glama](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp) | showed 0.6.0 and 32 tools on 2026-09-03, before this release. Auto-crawl not yet caught up | Auto-crawls GitHub and PyPI | Check the page again after this release. Claiming the server is a separate one-time step |
+| [PulseMCP](https://www.pulsemcp.com/servers/xmpuspus-ph-civic-data) | auto-indexed, unverified | Tracks the registry record | Check the page shows 0.6.1 once its crawler catches up |
+| [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers/pull/6824) | submitted, still open, checked live 2026-09-03 | Pull request | Their merge |
+| [TensorBlock/awesome-mcp-servers](https://github.com/TensorBlock/awesome-mcp-servers/pull/1597) | active, merged 2026-08-09, checked live 2026-09-03 | Pull request | Nothing. The merged entry carries `auth.type: none` |
 | [Smithery](https://smithery.ai) | not listed | Connect the repository from a logged-in dashboard | New submission, needs a login |
 | [MCP.so](https://mcp.so/submit) | not listed | Web form | New submission, JS form |
 | [mcpservers.org](https://mcpservers.org/submit) | not listed | Web form | New submission, JS form |
-| [LobeHub](https://lobehub.com/mcp/xmpuspus-ph-civic-data-mcp) | listed, showing 0.1.2 | Unknown, the page sits behind bot protection | Needs a real browser to find the update path |
-| [Vibehackers](https://vibehackers.io/mcp/ph-civic-data-mcp) | listed, tool count stale | "Submit Project" link | Needs a real browser |
+| [LobeHub](https://lobehub.com/mcp/xmpuspus-ph-civic-data-mcp) | listed, showing 0.1.2 as of 2026-08-06, not re-checked this release | Unknown, the page sits behind bot protection | Needs a real browser to find the update path |
+| [Vibehackers](https://vibehackers.io/mcp/ph-civic-data-mcp) | listed, tool count stale as of 2026-08-06, not re-checked this release | "Submit Project" link | Needs a real browser |
 
 Two lists closed a submission without a review comment:
 `brandonhimpfen/awesome-civic-tech` (PR 7) and

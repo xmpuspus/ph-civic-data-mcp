@@ -4,7 +4,7 @@
 # Turns:
 #   1. weather      → PAGASA / Open-Meteo
 #   2. earthquakes  → PHIVOLCS
-#   3. population   → PSA OpenSTAT
+#   3. population   → PSA OpenSTAT, 2024 Census
 #
 # Pre-requisite (run before vhs):
 #   cd /tmp && echo '{"mcpServers":{"ph-civic":{"command":"uvx","args":["ph-civic-data-mcp"]}}}' > ph-mcp.json
@@ -42,19 +42,19 @@ Sleep 900ms
 Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "How hot is Metro Manila this week? Use ph-civic MCP. Under 25 words."`
 Sleep 150ms
 Enter
-Sleep 10s
+Sleep 40s
 
 # Scene 3 — earthquakes (PHIVOLCS)
 Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "Any earthquakes in Luzon today? Use ph-civic MCP. Under 25 words."`
 Sleep 150ms
 Enter
-Sleep 9s
+Sleep 40s
 
-# Scene 4 — population (PSA)
+# Scene 4 — population (PSA, 2024 Census)
 Type `claude -p --mcp-config ph-mcp.json --strict-mcp-config --permission-mode bypassPermissions "NCR population per latest PSA census? Use ph-civic MCP. Under 15 words."`
 Sleep 150ms
 Enter
-Sleep 12s
+Sleep 40s
 
 # Tail
 Sleep 800ms
