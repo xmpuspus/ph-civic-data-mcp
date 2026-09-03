@@ -233,3 +233,37 @@ async def test_profile_keeps_every_pre_existing_top_level_key(_same_vintage_mock
     for key in _PRE_EXISTING_TOP_LEVEL_KEYS:
         assert key in profile, key
     assert "national_reference" in profile
+
+
+def _infra_of_size(n):
+    async def _fake(*args, **kwargs):
+        return [{"notice_id": str(i)} for i in range(n)]
+
+    return _fake
+
+
+@pytest.mark.asyncio
+async def test_infra_per_100k_withheld_below_the_sample_threshold(_same_vintage_mocks, monkeypatch):
+    monkeypatch.setattr(autostitch_module, "search_infra_projects", _infra_of_size(80))
+
+    profile = await autostitch_module.get_area_profile("Tacloban")
+    corr = profile["correlations"]
+
+    assert corr["infra_notices_per_100k_population"] is None
+    assert corr["infra_sample_size"] == 80
+    assert "500-notice" in corr["infra_coverage_caveat"]
+    assert any("500-notice" in c for c in profile["caveats"])
+
+
+@pytest.mark.asyncio
+async def test_infra_per_100k_computed_above_the_sample_threshold(_same_vintage_mocks, monkeypatch):
+    monkeypatch.setattr(autostitch_module, "search_infra_projects", _infra_of_size(600))
+
+    profile = await autostitch_module.get_area_profile("Tacloban")
+    corr = profile["correlations"]
+
+    assert corr["infra_notices_per_100k_population"] == pytest.approx(
+        round(600 / 259_353 * 100_000, 2)
+    )
+    assert corr["infra_sample_size"] == 600
+    assert "infra_coverage_caveat" not in corr

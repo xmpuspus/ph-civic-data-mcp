@@ -12,6 +12,8 @@ is unavailable (tests) the resolver falls back to the cheap CITY_COORDS-only pat
 
 from __future__ import annotations
 
+from math import atan2, cos, radians, sin, sqrt
+
 REGION_ALIASES: dict[str, str] = {
     "metro manila": "NCR",
     "national capital region": "NCR",
@@ -142,6 +144,20 @@ CITY_COORDS: dict[str, tuple[float, float]] = {
     "laoag city": (18.1978, 120.5937),
     "tagaytay": (14.1153, 120.9621),
 }
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km between two lat/lon points.
+
+    Shared by usgs.py and phivolcs.py, which each kept a private copy before
+    v0.7.0.
+    """
+    earth_radius_km = 6371.0
+    p1, p2 = radians(lat1), radians(lat2)
+    dphi = radians(lat2 - lat1)
+    dlambda = radians(lon2 - lon1)
+    a = sin(dphi / 2) ** 2 + cos(p1) * cos(p2) * sin(dlambda / 2) ** 2
+    return 2 * earth_radius_km * atan2(sqrt(a), sqrt(1 - a))
 
 
 def normalize_region(name: str | None) -> str | None:
