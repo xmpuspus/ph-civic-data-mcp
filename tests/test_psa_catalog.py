@@ -716,6 +716,37 @@ async def test_an_unreadable_cell_is_flagged_apart_from_a_psa_missing_marker(mon
     joined = " ".join(out["caveats"])
     assert "missing value" in joined, joined
     assert "could not read as a number" in joined, "a parse failure must not read as PSA's '..'"
+    # v0.7.0: a parse failure is drift, so the response is indeterminate.
+    assert out["data_status"] == DATA_STATUS_INDETERMINATE
+    assert out["upstream_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_psa_missing_marker_alone_stays_a_success_with_a_null_cell(monkeypatch):
+    """PSA's own '..' is a legitimate missing value, never drift."""
+    payload = {
+        "columns": [
+            {"code": "Major Island Group", "type": "d"},
+            {"code": "Among Families/Population", "type": "d"},
+            {"code": "Year", "type": "d"},
+            {"code": "V", "type": "c"},
+        ],
+        "data": [{"key": ["0", "0", "2"], "values": [".."]}],
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        if method == "POST":
+            return _resp(method, url, payload)
+        return _resp(method, url, META)
+
+    monkeypatch.setattr(psa_module, "fetch_with_retry", _fake)
+    out = await cat.query_psa_dataset(
+        DATASET,
+        {"Major Island Group": ["0"], "Among Families/Population": ["0"], "Year": ["2"]},
+    )
+    assert out["rows"][0]["value"] is None
+    assert out["data_status"] == "success"
+    assert out["upstream_error"] is False
 
 
 @pytest.mark.asyncio
