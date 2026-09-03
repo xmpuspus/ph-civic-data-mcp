@@ -16,6 +16,9 @@ jobs:
   live:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      issues: write
     env:
       UV_PYTHON: "3.12"
     steps:
@@ -45,3 +48,30 @@ jobs:
 
       - name: Run live suite against real upstreams
         run: uv run --no-sync pytest tests/ -q -m live
+
+      # A failed run only shows in the Actions tab, so 8 of the last 12
+      # weekly runs failed and nobody noticed. File or update one issue
+      # instead, so drift surfaces where someone actually looks.
+      - name: File or update an issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create live-drift --force --color d73a4a \
+            --description "Weekly live upstream check failed"
+
+          today=$(date -u +%Y-%m-%d)
+          existing=$(gh issue list --label live-drift --state open \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" \
+              --body "The run on ${today} failed too. See ${RUN_URL}."
+          else
+            gh issue create \
+              --title "Live-drift run failed" \
+              --label live-drift \
+              --body "The weekly live-drift run failed on ${today}. See ${RUN_URL}. Read the run log to find which upstream source changed."
+          fi
