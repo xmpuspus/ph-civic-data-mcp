@@ -3,7 +3,7 @@
 Where `ph-civic-data-mcp` is listed, how each listing updates, and what a
 release still needs a human to click. Inventory taken live on 2026-08-06,
 then updated the same day after the v0.6.0 release shipped. Updated again
-on 2026-09-03 after the v0.6.1 release.
+on 2026-09-03 after the v0.6.1 release, and on 2026-09-04 after v0.7.0.
 
 Identifiers, so every form gets the same values:
 
@@ -16,8 +16,8 @@ Identifiers, so every form gets the same values:
 | License | MIT |
 | Transport | stdio |
 | Auth | None required. `PAGASA_API_TOKEN` is optional. |
-| Tools / prompts / resources | 32 / 3 / 2 |
-| Current version | 0.6.1 |
+| Tools / prompts / resources | 34 / 3 / 2 |
+| Current version | 0.7.0 |
 
 ## Copy to paste into a form
 
@@ -25,7 +25,7 @@ Identifiers, so every form gets the same values:
 
 > Philippine civic data as MCP tools: browse, describe, and query the full PSA
 > OpenSTAT statistical catalog, plus hazards, weather, procurement, and
-> one-call area profiles. 32 tools, no API keys.
+> one-call area profiles. 34 tools, no API keys.
 
 **Long:**
 
@@ -46,6 +46,12 @@ Identifiers, so every form gets the same values:
 > failure, tools return an explicit error envelope rather than an empty list,
 > so an outage never reads as "no data".
 >
+> Version 0.7.0 adds `compare_areas`, which lines up 2 to 5 places on the
+> same metrics and vintages, and `search_psa_catalog`, a keyword search over
+> the OpenSTAT catalog. Every tool now carries a `data_status` field, so an
+> agent can tell success, empty, unavailable, indeterminate, and a bad
+> request apart.
+>
 > Install: `uvx ph-civic-data-mcp`
 
 **Categories:** Government, Open Data, Civic Tech, Research, Statistics
@@ -56,18 +62,18 @@ accountability
 
 ## Where it is listed today
 
-State after the v0.6.1 release on 2026-09-03.
+State after the v0.7.0 release on 2026-09-04.
 
-| Destination | v0.6.1 status | How it updates | What is left |
+| Destination | v0.7.0 status | How it updates | What is left |
 |---|---|---|---|
-| [PyPI](https://pypi.org/project/ph-civic-data-mcp/0.6.1/) | active, checked live | `twine upload` | Nothing |
-| [GitHub Release](https://github.com/xmpuspus/ph-civic-data-mcp/releases/tag/v0.6.1) | active, checked live | `gh release create` on the merge SHA | Nothing |
-| Repository description and topics | active | `gh repo edit` | Nothing |
-| [MCP Registry](https://registry.modelcontextprotocol.io) | active, isLatest true, checked live | `mcp-publisher publish server.json` | Nothing. The JWT expires between releases; run `mcp-publisher login github` on a 401 |
-| [Glama](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp) | showed 0.6.0 and 32 tools on 2026-09-03, before this release. Auto-crawl not yet caught up | Auto-crawls GitHub and PyPI | Check the page again after this release. Claiming the server is a separate one-time step |
-| [PulseMCP](https://www.pulsemcp.com/servers/xmpuspus-ph-civic-data) | auto-indexed, unverified | Tracks the registry record | Check the page shows 0.6.1 once its crawler catches up |
-| [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers/pull/6824) | submitted, still open, checked live 2026-09-03 | Pull request | Their merge |
-| [TensorBlock/awesome-mcp-servers](https://github.com/TensorBlock/awesome-mcp-servers/pull/1597) | active, merged 2026-08-09, checked live 2026-09-03 | Pull request | Nothing. The merged entry carries `auth.type: none` |
+| [PyPI](https://pypi.org/project/ph-civic-data-mcp/0.7.0/) | active, checked live | `twine upload` | Nothing |
+| [GitHub Release](https://github.com/xmpuspus/ph-civic-data-mcp/releases/tag/v0.7.0) | active, checked live, release-smoke green | `gh release create` on the merge SHA | Nothing |
+| Repository description and topics | active, description says 34 tools | `gh repo edit` | Nothing |
+| [MCP Registry](https://registry.modelcontextprotocol.io) | 0.6.1 still latest. The publish returned 401 on an expired JWT, and the device login waits on a human | `mcp-publisher publish server.json` | Complete `mcp-publisher login github`, then publish and read back the versions list |
+| [Glama](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp) | showed 0.6.0 and 32 tools on 2026-09-04, two releases behind | Auto-crawls GitHub and PyPI | Check the page again in a week. Claiming the server is a separate one-time step |
+| [PulseMCP](https://www.pulsemcp.com/servers/xmpuspus-ph-civic-data) | auto-indexed. The page showed no version string on 2026-09-04 | Tracks the registry record | Nothing to do by hand |
+| [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers/pull/6824) | submitted, still open, last activity 2026-08-07, checked live 2026-09-04 | Pull request | Their merge |
+| [TensorBlock/awesome-mcp-servers](https://github.com/TensorBlock/awesome-mcp-servers/pull/1597) | active. The entry moved from the README into `docs/science--research.md`, checked live 2026-09-04 | Pull request | Nothing. The merged entry carries `auth.type: none` |
 | [Smithery](https://smithery.ai) | not listed | Connect the repository from a logged-in dashboard | New submission, needs a login |
 | [MCP.so](https://mcp.so/submit) | not listed | Web form | New submission, JS form |
 | [mcpservers.org](https://mcpservers.org/submit) | not listed | Web form | New submission, JS form |
@@ -91,7 +97,7 @@ PyPI first. Every downstream check reads the package version from there.
 2. `gh release create vX.Y.Z`, which triggers release-smoke against the live
    wheel.
 3. `mcp-publisher publish server.json`. Bump both the top-level `version` and
-   `packages[].version` first; they are manual.
+   `packages[].version` first. Both are manual.
 4. Read the full registry version list, not the search summary. Search shows
    the oldest version by default.
 5. Glama and PulseMCP follow on their own within about 48 hours.
