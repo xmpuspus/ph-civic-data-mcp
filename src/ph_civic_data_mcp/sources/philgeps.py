@@ -11,6 +11,7 @@ Landmine (from validation log):
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from datetime import date as date_cls, datetime, timezone
 
@@ -20,11 +21,45 @@ from dateutil import parser as date_parser
 from ph_civic_data_mcp.models.procurement import ProcurementRecord
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.envelope import failure_envelope
+from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_SUCCESS,
+    DATA_STATUS_UNAVAILABLE,
+    failure_envelope,
+    failure_result,
+)
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 PHILGEPS_INDEX_URL = "https://www.philgeps.gov.ph/Indexes/index"
 PHILGEPS_LICENSE = "Public — PhilGEPS open notice listing"
+
+# The Indexes page scrape never fills ProcurementRecord.region (see
+# _fetch_notices below), but the agency string often names one, for example
+# "DPWH - Region III" or "DepEd NCR". _infer_region reads this populated
+# field instead of the always-empty one, so region breakdowns get a real
+# signal on the notices that carry it. Matches numbered regions (I to XIII,
+# with the IV-A / IV-B split) and the named regions (NCR, CAR, BARMM,
+# CARAGA, MIMAROPA, CALABARZON, SOCCSKSARGEN).
+_REGION_NUMERAL_RE = re.compile(r"\bREGION\s+([IVX]{1,4}(?:-[AB])?)\b", re.IGNORECASE)
+_REGION_NAME_RE = re.compile(
+    r"\b(NCR|CAR|BARMM|CARAGA|MIMAROPA|CALABARZON|SOCCSKSARGEN)\b", re.IGNORECASE
+)
+
+
+def _infer_region(agency: str | None, region: str | None = None) -> str | None:
+    """Best-effort region label from a structured field or agency text.
+
+    Returns `region` when the caller already has one. Otherwise it searches
+    `agency` for a region token and returns that. Returns None when neither
+    source names a region, so a caller can tell "no signal" from "NCR".
+    """
+    if region:
+        return region
+    text = agency or ""
+    numeral = _REGION_NUMERAL_RE.search(text)
+    if numeral:
+        return f"Region {numeral.group(1).upper()}"
+    name = _REGION_NAME_RE.search(text)
+    return name.group(1).upper() if name else None
 
 
 def _now() -> datetime:
@@ -195,15 +230,42 @@ async def get_procurement_summary(
         Totals, breakdown by procurement mode, top agencies, reference period.
     """
     retrieved_at = _now()
-    summary_caveats: list[str] = []
     try:
         records = await _fetch_notices()
     except Exception as exc:
         log_stderr(f"procurement_summary error: {exc}")
-        records = []
-        summary_caveats.append(
+        return failure_result(
+            "PhilGEPS",
+            PHILGEPS_INDEX_URL,
             f"PhilGEPS notice listing unavailable ({type(exc).__name__}: {exc}); "
-            "totals below are zero because of the outage, not zero activity."
+            "totals below are zero because of the outage, not zero activity.",
+            license=PHILGEPS_LICENSE,
+            data_status=DATA_STATUS_UNAVAILABLE,
+            total_count=0,
+            total_value_php=None,
+            by_mode={},
+            by_region={},
+            top_agencies=[],
+            reference_period={"from": None, "to": None},
+            note=(
+                "Summary computed over latest ~100 PhilGEPS bid notices (6h cache). "
+                "Approved budget totals are not published in the open listing."
+            ),
+            rules_evaluated=[],
+            rules_not_computable=[
+                {
+                    "rule": "by_mode",
+                    "reason": "PhilGEPS notice listing unavailable; no notices to aggregate.",
+                },
+                {
+                    "rule": "by_region",
+                    "reason": "PhilGEPS notice listing unavailable; no notices to aggregate.",
+                },
+                {
+                    "rule": "total_value_php",
+                    "reason": "PhilGEPS open notices do not publish approved budget amounts.",
+                },
+            ],
         )
 
     agency_lc = agency.lower().strip() if agency else None
@@ -224,9 +286,12 @@ async def get_procurement_summary(
         filtered.append(r)
 
     mode_counts: Counter[str] = Counter()
+    region_counts: Counter[str] = Counter()
     agency_totals: defaultdict[str, int] = defaultdict(int)
     for r in filtered:
         mode_counts[r.mode_of_procurement or "Unknown"] += 1
+        region_label = _infer_region(r.agency, r.region)
+        region_counts[region_label or "unspecified"] += 1
         agency_totals[r.agency] += 1
 
     publish_dates = [r.date_published for r in filtered if r.date_published]
@@ -237,7 +302,7 @@ async def get_procurement_summary(
         "total_count": len(filtered),
         "total_value_php": None,
         "by_mode": dict(mode_counts),
-        "by_region": {},
+        "by_region": dict(region_counts),
         "top_agencies": [
             {"agency": a, "count": c}
             for a, c in sorted(agency_totals.items(), key=lambda kv: -kv[1])[:10]
@@ -247,8 +312,16 @@ async def get_procurement_summary(
             "Summary computed over latest ~100 PhilGEPS bid notices (6h cache). "
             "Approved budget totals are not published in the open listing."
         ),
-        "caveats": summary_caveats,
-        "upstream_error": bool(summary_caveats),
+        "rules_evaluated": ["by_mode", "by_region"],
+        "rules_not_computable": [
+            {
+                "rule": "total_value_php",
+                "reason": "PhilGEPS open notices do not publish approved budget amounts.",
+            }
+        ],
+        "caveats": [],
+        "upstream_error": False,
+        "data_status": DATA_STATUS_SUCCESS,
         "source": "PhilGEPS",
         "data_retrieved_at": retrieved_at.isoformat(),
     }

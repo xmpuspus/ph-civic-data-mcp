@@ -20,9 +20,14 @@ from datetime import date as date_cls, datetime, timezone
 
 from ph_civic_data_mcp.models.infra import InfraProject, InfraSpendingSummary
 from ph_civic_data_mcp._mcp import mcp
-from ph_civic_data_mcp.sources.philgeps import _fetch_notices  # type: ignore
+from ph_civic_data_mcp.sources.philgeps import _fetch_notices, _infer_region  # type: ignore
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.envelope import failure_envelope
+from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_SUCCESS,
+    DATA_STATUS_UNAVAILABLE,
+    failure_envelope,
+    failure_result,
+)
 from ph_civic_data_mcp.utils.http import log_stderr
 
 PHILGEPS_PORTAL = "https://www.philgeps.gov.ph/"
@@ -30,6 +35,39 @@ INFRA_LICENSE = "Public — PhilGEPS open notice listing"
 INFRA_DISCLAIMER = (
     "Statistical indicators derived from public data. Patterns may have legitimate explanations."
 )
+
+# A ~100-notice PhilGEPS sample cannot support a population-representative
+# per-100k rate for a region with a multi-million population. The current
+# fetch window (see philgeps._fetch_notices) is capped at the latest ~100
+# notices, so it never reaches this threshold today; a caller normalizing
+# by population should treat the rate as unavailable until it does.
+MIN_SAMPLE_FOR_PER_CAPITA = 500
+
+
+def infra_sample_coverage(sample_size: int) -> dict:
+    """Coverage verdict for a per-capita rate built from an infra notice count.
+
+    Returns whether `sample_size` clears MIN_SAMPLE_FOR_PER_CAPITA, plus a
+    reason a caller can show when it does not. A caller computing a
+    notices-per-100k figure (for example autostitch.get_area_profile) should
+    withhold that figure, or ship it with this caveat attached, when
+    `sufficient_for_per_capita` is False.
+    """
+    sufficient = sample_size >= MIN_SAMPLE_FOR_PER_CAPITA
+    return {
+        "sample_size": sample_size,
+        "sufficient_for_per_capita": sufficient,
+        "coverage_caveat": (
+            None
+            if sufficient
+            else (
+                f"Sample of {sample_size} PhilGEPS notices is below the "
+                f"{MIN_SAMPLE_FOR_PER_CAPITA}-notice threshold for a "
+                "population-representative per-100k rate."
+            )
+        ),
+    }
+
 
 # Province -> additional terms that commonly appear in DPWH agency / PhilGEPS
 # region strings. Used by the province filter to widen substring match beyond
@@ -225,7 +263,7 @@ def _to_infra_project(record: object) -> InfraProject:
         project_id=_record_id(record),
         title=getattr(record, "title", "(untitled)"),
         agency=getattr(record, "agency", "(unknown)"),
-        region=getattr(record, "region", None),
+        region=_infer_region(getattr(record, "agency", None), getattr(record, "region", None)),
         province=None,
         category=_categorize(record),
         cost_php=getattr(record, "approved_budget", None),
@@ -291,8 +329,10 @@ async def search_infra_projects(
         region: PH region filter (partial match against agency text).
         province: Province name filter (partial match).
         year: Filter publish date to this calendar year.
-        min_cost_php: Minimum approved cost in PHP (filters out null-cost
-                      records when set).
+        min_cost_php: Minimum approved cost in PHP. The open notice listing
+                      does not publish approved budget for almost any
+                      record, so setting this today returns few or no
+                      results rather than a true cost-ranked subset.
         status: Status filter (partial match, e.g. 'open', 'awarded').
         limit: Max results (default 25, capped at 100).
 
@@ -461,26 +501,58 @@ async def summarize_infra_spending(
                         no-op today.
 
     Returns: total_count, total_value_php (null where costs not exposed),
-    by_category, by_funding_source, by_region, top_agencies,
-    reference_period, note, source, source_url, license, disclaimer.
+    by_category, by_funding_source (always empty, see rules_not_computable),
+    by_region, top_agencies, reference_period, note, rules_evaluated,
+    rules_not_computable, sample_size, sufficient_for_per_capita,
+    coverage_caveat, source, source_url, license, disclaimer.
     """
     retrieved_at = _now()
 
-    summary_caveats: list[str] = []
+    rules_not_computable = [
+        {
+            "rule": "by_funding_source",
+            "reason": (
+                "PhilGEPS open notices carry no funding source field, so this "
+                "breakdown is always empty rather than a guessed 'unknown' total."
+            ),
+        }
+    ]
+
     try:
         records = await _load_infra_records()
     except Exception as exc:
         log_stderr(f"summarize_infra_spending error: {exc}")
-        records = []
-        summary_caveats.append(
+        empty_coverage = infra_sample_coverage(0)
+        return failure_result(
+            "PhilGEPS",
+            PHILGEPS_PORTAL,
             f"PhilGEPS notice listing unavailable ({type(exc).__name__}: {exc}); "
-            "totals below are zero because of the outage, not zero activity."
+            "totals below are zero because of the outage, not zero activity.",
+            license=INFRA_LICENSE,
+            data_status=DATA_STATUS_UNAVAILABLE,
+            total_count=0,
+            total_value_php=None,
+            by_category={},
+            by_funding_source={},
+            by_region={},
+            top_agencies=[],
+            reference_period={"from": None, "to": None},
+            note=(
+                "Computed over the latest infra-keyword-matched PhilGEPS notice "
+                "window (cached 6h). Approved budget totals are not published in "
+                "the open notice listing, so total_value_php is typically null."
+            ),
+            rules_evaluated=[],
+            rules_not_computable=rules_not_computable,
+            sample_size=empty_coverage["sample_size"],
+            sufficient_for_per_capita=empty_coverage["sufficient_for_per_capita"],
+            coverage_caveat=empty_coverage["coverage_caveat"],
+            disclaimer=INFRA_DISCLAIMER,
         )
 
     region_lc = (region or "").lower().strip() or None
 
     by_category: Counter[str] = Counter()
-    by_funding_source: Counter[str] = Counter()
     by_region: Counter[str] = Counter()
     agency_totals: defaultdict[str, int] = defaultdict(int)
     publish_dates: list[date_cls] = []
@@ -501,11 +573,10 @@ async def summarize_infra_spending(
         filtered += 1
         category = _categorize(record)
         by_category[category] += 1
-        by_funding_source["unknown"] += 1
-        if record_region:
-            by_region[record_region.title()] += 1
-        else:
-            by_region["unspecified"] += 1
+        # by_funding_source is intentionally not populated: PhilGEPS notices
+        # carry no funding source field. See rules_not_computable below.
+        region_label = _infer_region(agency, getattr(record, "region", None))
+        by_region[region_label or "unspecified"] += 1
         agency_totals[agency or "(unknown)"] += 1
         cost = getattr(record, "approved_budget", None)
         if cost is not None:
@@ -518,7 +589,7 @@ async def summarize_infra_spending(
         total_count=filtered,
         total_value_php=cost_total if cost_known > 0 else None,
         by_category=dict(by_category),
-        by_funding_source=dict(by_funding_source),
+        by_funding_source={},
         by_region=dict(by_region),
         top_agencies=[
             {"agency": a, "count": c}
@@ -536,10 +607,17 @@ async def summarize_infra_spending(
         source_url=PHILGEPS_PORTAL,
         license=INFRA_LICENSE,
     )
+    coverage = infra_sample_coverage(filtered)
     return {
         **summary.model_dump(mode="json"),
-        "caveats": summary_caveats,
-        "upstream_error": bool(summary_caveats),
+        "caveats": [],
+        "upstream_error": False,
+        "data_status": DATA_STATUS_SUCCESS,
         "data_retrieved_at": retrieved_at.isoformat(),
         "disclaimer": INFRA_DISCLAIMER,
+        "rules_evaluated": ["by_category", "by_region"],
+        "rules_not_computable": rules_not_computable,
+        "sample_size": coverage["sample_size"],
+        "sufficient_for_per_capita": coverage["sufficient_for_per_capita"],
+        "coverage_caveat": coverage["coverage_caveat"],
     }

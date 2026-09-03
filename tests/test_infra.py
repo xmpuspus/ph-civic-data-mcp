@@ -76,6 +76,36 @@ SAMPLE_RECORDS = [
 ]
 
 
+# Shaped like the real PhilGEPS Indexes scrape: region is always None
+# (philgeps._fetch_notices never sets it), region signal, if any, lives only
+# in the agency string. SAMPLE_RECORDS above sets region explicitly, which
+# the real fetch never does, so by_region/region-filter tests need this
+# separate fixture to exercise the code path real traffic actually hits.
+REAL_SHAPE_RECORDS = [
+    _record(
+        title="Construction of Farm-to-Market Road",
+        agency="Department of Public Works and Highways - Region V",
+        region=None,
+        approved_budget=None,
+        reference_number="PHILGEPS-REAL-001",
+    ),
+    _record(
+        title="Rehabilitation of Drainage System",
+        agency="DPWH NCR District Engineering Office",
+        region=None,
+        approved_budget=None,
+        reference_number="PHILGEPS-REAL-002",
+    ),
+    _record(
+        title="Supply of Office Chairs",
+        agency="Department of Education Central Office",
+        region=None,
+        approved_budget=None,
+        reference_number="PHILGEPS-REAL-003",
+    ),
+]
+
+
 @pytest.fixture(autouse=True)
 def _mock_notices(monkeypatch):
     async def _stub():
@@ -188,3 +218,94 @@ def test_categorize():
     assert (
         infra_module._categorize(R("Construction of School Building Phase 2")) == "school building"
     )
+
+
+# --- R2.8 heuristic audit: region is repaired, funding_source is retired ---
+
+
+@pytest.mark.asyncio
+async def test_search_infra_region_inferred_from_agency_when_field_empty(monkeypatch):
+    """Real fetch shape: region field is None, agency names the region."""
+
+    async def _stub():
+        return list(REAL_SHAPE_RECORDS)
+
+    monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _stub)
+    CACHES["infra_projects"].clear()
+
+    results = await infra_module.search_infra_projects(keyword="farm-to-market")
+    assert results
+    assert results[0]["region"] == "Region V"
+
+
+@pytest.mark.asyncio
+async def test_summarize_infra_spending_by_region_repaired_from_agency(monkeypatch):
+    """by_region must not collapse every real-shape record to 'unspecified'."""
+
+    async def _stub():
+        return list(REAL_SHAPE_RECORDS)
+
+    monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _stub)
+    CACHES["infra_projects"].clear()
+
+    summary = await infra_module.summarize_infra_spending()
+    assert summary["by_region"].get("Region V") == 1
+    assert summary["by_region"].get("NCR") == 1
+
+
+@pytest.mark.asyncio
+async def test_summarize_infra_spending_by_funding_source_retired():
+    """funding_source is not published anywhere; the field stays empty."""
+    summary = await infra_module.summarize_infra_spending()
+    assert summary["by_funding_source"] == {}
+    reasons = {r["rule"]: r["reason"] for r in summary["rules_not_computable"]}
+    assert "by_funding_source" in reasons
+    assert "funding source" in reasons["by_funding_source"]
+
+
+@pytest.mark.asyncio
+async def test_summarize_infra_spending_rules_coverage_consistent():
+    summary = await infra_module.summarize_infra_spending()
+    assert summary["rules_evaluated"] == ["by_category", "by_region"]
+    not_computable_names = {r["rule"] for r in summary["rules_not_computable"]}
+    # A rule cannot be both evaluated and not computable.
+    assert not_computable_names.isdisjoint(summary["rules_evaluated"])
+
+
+@pytest.mark.asyncio
+async def test_summarize_infra_spending_upstream_failure_sets_data_status(monkeypatch):
+    async def _boom():
+        raise RuntimeError("philgeps offline")
+
+    monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _boom)
+    CACHES["infra_projects"].clear()
+
+    summary = await infra_module.summarize_infra_spending()
+    assert summary["data_status"] == "unavailable"
+    assert summary["upstream_error"] is True
+    assert summary["rules_evaluated"] == []
+    assert summary["rules_not_computable"]
+
+
+# --- R2.9 per-capita scoping: withhold the rate below MIN_SAMPLE_FOR_PER_CAPITA ---
+
+
+def test_infra_sample_coverage_below_threshold():
+    coverage = infra_module.infra_sample_coverage(6)
+    assert coverage["sufficient_for_per_capita"] is False
+    assert coverage["coverage_caveat"] is not None
+    assert "6" in coverage["coverage_caveat"]
+
+
+def test_infra_sample_coverage_at_or_above_threshold():
+    coverage = infra_module.infra_sample_coverage(infra_module.MIN_SAMPLE_FOR_PER_CAPITA)
+    assert coverage["sufficient_for_per_capita"] is True
+    assert coverage["coverage_caveat"] is None
+
+
+@pytest.mark.asyncio
+async def test_summarize_infra_spending_coverage_fields_small_sample():
+    summary = await infra_module.summarize_infra_spending()
+    assert summary["sample_size"] == summary["total_count"]
+    assert summary["sufficient_for_per_capita"] is False
+    assert summary["coverage_caveat"] is not None

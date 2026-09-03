@@ -8,15 +8,22 @@ https://www.ncei.noaa.gov/products/international-best-track-archive
 
 from __future__ import annotations
 
+import asyncio
 import csv
-import io
 from datetime import datetime, timezone
 
 from ph_civic_data_mcp.models.climate import HistoricalTyphoon
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import failure_envelope
-from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
+from ph_civic_data_mcp.utils.http import (
+    CLIENT,
+    MAX_RETRIES,
+    RETRY_DELAYS,
+    RETRY_STATUSES,
+    RETRYABLE_EXCEPTIONS,
+    log_stderr,
+)
 
 ERDDAP_LAST3Y_URL = "https://erddap.aoml.noaa.gov/hdb/erddap/tabledap/IBTRACS_last3years.csv"
 ERDDAP_SINCE1980_URL = "https://erddap.aoml.noaa.gov/hdb/erddap/tabledap/IBTrACS_since1980_1.csv"
@@ -72,6 +79,128 @@ def _in_par(lat: float | None, lng: float | None) -> bool:
     return PAR_MIN_LAT <= lat <= PAR_MAX_LAT and PAR_MIN_LNG <= lng <= PAR_MAX_LNG
 
 
+def _accumulate_storm(header: list[str], row: list[str], storms: dict[str, dict]) -> None:
+    """Parse one IBTrACS CSV data row and fold it into its storm's aggregate.
+
+    Exact port of the per-row logic the old buffer-then-loop version ran, one
+    row at a time, so the streaming rewrite in _stream_storms changes nothing
+    about which storms match the PAR filter or what their aggregated stats
+    come out to.
+    """
+
+    def col(name: str) -> str | None:
+        if name not in header:
+            return None
+        idx = header.index(name)
+        return row[idx] if idx < len(row) else None
+
+    sid = col("sid")
+    if not sid:
+        return
+    lat = _f(col("latitude"))
+    lng = _f(col("longitude"))
+    # wmo_wind is often null for WP storms; fall back to JTWC (usa) then JMA (tokyo).
+    wind = _f(col("wmo_wind"))
+    if wind is None:
+        wind = _f(col("usa_wind"))
+    if wind is None:
+        wind = _f(col("tokyo_wind"))
+    pres = _f(col("wmo_pres"))
+    if pres is None:
+        pres = _f(col("usa_pres"))
+    if pres is None:
+        pres = _f(col("tokyo_pres"))
+    t = _parse_time(col("iso_time"))
+
+    entry = storms.setdefault(
+        sid,
+        {
+            "sid": sid,
+            "name": col("name") or "UNNAMED",
+            "season": int(float(col("season") or 0)) or 0,
+            "basin": col("basin") or "WP",
+            "max_wind_kt": None,
+            "min_pressure_mb": None,
+            "start_time_utc": None,
+            "end_time_utc": None,
+            "track_points": 0,
+            "passed_within_par": False,
+        },
+    )
+    entry["track_points"] += 1
+    if wind is not None:
+        prev = entry["max_wind_kt"]
+        if prev is None or wind > prev:
+            entry["max_wind_kt"] = wind
+    if pres is not None:
+        prev = entry["min_pressure_mb"]
+        if prev is None or pres < prev:
+            entry["min_pressure_mb"] = pres
+    if t is not None:
+        if entry["start_time_utc"] is None or t < entry["start_time_utc"]:
+            entry["start_time_utc"] = t
+        if entry["end_time_utc"] is None or t > entry["end_time_utc"]:
+            entry["end_time_utc"] = t
+    if _in_par(lat, lng):
+        entry["passed_within_par"] = True
+
+
+async def _stream_storms(url: str) -> tuple[int, dict[str, dict]]:
+    """Stream the ERDDAP CSV and aggregate storms row by row.
+
+    Reads response.aiter_lines() instead of buffering the whole body into
+    response.text and then a full list(reader) of every row, which is what
+    the old code did before parsing a single one. The since-1980 file runs
+    to tens of thousands of rows, most for storms nobody asked for.
+
+    No early exit once `limit` storms match: the caller sorts matches by
+    start_time_utc descending and keeps the most recent `limit`, and this
+    feed arrives in the archive's own (oldest-first) row order, so stopping
+    early would silently swap "the `limit` most recent PAR storms" for "the
+    first `limit` PAR storms encountered" — the wrong set, not just a
+    truncated one. This function still reads every row; it only avoids
+    holding the whole body and every parsed row in memory at once.
+
+    Retries the connection the way fetch_with_retry does, reusing the same
+    status codes, exception classes, and delay ladder. fetch_with_retry
+    itself can't wrap a streaming response, and a streaming read can't be
+    resumed mid-body, so a retry here restarts the whole read and resets its
+    own row count and storms dict per attempt.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(MAX_RETRIES):
+        line_count = 0
+        header: list[str] | None = None
+        seen_units_row = False
+        storms: dict[str, dict] = {}
+        try:
+            async with CLIENT.stream("GET", url) as response:
+                if response.status_code in RETRY_STATUSES and attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(RETRY_DELAYS[attempt])
+                    continue
+                response.raise_for_status()
+                async for raw_line in response.aiter_lines():
+                    line_count += 1
+                    row = next(csv.reader([raw_line]))
+                    if header is None:
+                        header = row
+                        continue
+                    if not seen_units_row:
+                        seen_units_row = True
+                        continue
+                    _accumulate_storm(header, row, storms)
+            return line_count, storms
+        except RETRYABLE_EXCEPTIONS as exc:
+            last_exc = exc
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(RETRY_DELAYS[attempt])
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("unreachable")
+
+
 @mcp.tool(
     title="Historical typhoon tracks through the PAR",
     tags={"ibtracs", "noaa", "philippines", "typhoon"},
@@ -110,9 +239,7 @@ async def get_historical_typhoons_ph(year: int | None = None, limit: int = 30) -
     full_url = f"{base_url}?{'&'.join(query_parts)}"
 
     try:
-        response = await fetch_with_retry(CLIENT, "GET", full_url)
-        response.raise_for_status()
-        text = response.text
+        line_count, storms = await _stream_storms(full_url)
     except Exception as exc:
         log_stderr(f"IBTrACS error: {exc}")
         return failure_envelope(
@@ -122,77 +249,13 @@ async def get_historical_typhoons_ph(year: int | None = None, limit: int = 30) -
             license="Public domain (NOAA)",
         )
 
-    reader = csv.reader(io.StringIO(text))
-    rows = list(reader)
-    if len(rows) < 3:
+    if line_count < 3:
         return failure_envelope(
             "NOAA IBTrACS",
             base_url,
             "IBTrACS response had no data rows — likely an upstream/format issue.",
             license="Public domain (NOAA)",
         )
-
-    header = rows[0]
-    # rows[1] is units, rows[2:] is data
-    data_rows = rows[2:]
-
-    def col(name: str, row: list[str]) -> str | None:
-        if name not in header:
-            return None
-        idx = header.index(name)
-        return row[idx] if idx < len(row) else None
-
-    storms: dict[str, dict] = {}
-    for row in data_rows:
-        sid = col("sid", row)
-        if not sid:
-            continue
-        lat = _f(col("latitude", row))
-        lng = _f(col("longitude", row))
-        # wmo_wind is often null for WP storms; fall back to JTWC (usa) then JMA (tokyo).
-        wind = _f(col("wmo_wind", row))
-        if wind is None:
-            wind = _f(col("usa_wind", row))
-        if wind is None:
-            wind = _f(col("tokyo_wind", row))
-        pres = _f(col("wmo_pres", row))
-        if pres is None:
-            pres = _f(col("usa_pres", row))
-        if pres is None:
-            pres = _f(col("tokyo_pres", row))
-        t = _parse_time(col("iso_time", row))
-
-        entry = storms.setdefault(
-            sid,
-            {
-                "sid": sid,
-                "name": col("name", row) or "UNNAMED",
-                "season": int(float(col("season", row) or 0)) or 0,
-                "basin": col("basin", row) or "WP",
-                "max_wind_kt": None,
-                "min_pressure_mb": None,
-                "start_time_utc": None,
-                "end_time_utc": None,
-                "track_points": 0,
-                "passed_within_par": False,
-            },
-        )
-        entry["track_points"] += 1
-        if wind is not None:
-            prev = entry["max_wind_kt"]
-            if prev is None or wind > prev:
-                entry["max_wind_kt"] = wind
-        if pres is not None:
-            prev = entry["min_pressure_mb"]
-            if prev is None or pres < prev:
-                entry["min_pressure_mb"] = pres
-        if t is not None:
-            if entry["start_time_utc"] is None or t < entry["start_time_utc"]:
-                entry["start_time_utc"] = t
-            if entry["end_time_utc"] is None or t > entry["end_time_utc"]:
-                entry["end_time_utc"] = t
-        if _in_par(lat, lng):
-            entry["passed_within_par"] = True
 
     results: list[dict] = []
     par_storms = [s for s in storms.values() if s["passed_within_par"]]
