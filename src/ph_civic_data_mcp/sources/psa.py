@@ -1023,7 +1023,23 @@ async def get_population_stats(
     },
 )
 async def get_poverty_stats(region: str | None = None) -> dict:
-    """Poverty incidence from PSA (latest: 2023 Full-Year).
+    """Poverty incidence from the PSA Full Year Poverty Statistics table.
+
+    PSA publishes this once a year, with a lag. As of 2026-09 the latest
+    published year is 2023. The tool discovers the current table live, so a
+    later release shows up without a code change. It also returns the
+    subsistence incidence when PSA publishes both tables for the same year. Examples:
+
+      get_poverty_stats()                 national poverty incidence, latest year
+      get_poverty_stats(region="Bicol")   one region, PSA label
+      get_poverty_stats(region="NCR")     National Capital Region
+
+    On failure: this tool does not set data_status. An OpenSTAT outage during
+    discovery or the query sets upstream_error true, with the real error in
+    caveats. A region PSA does not list, or a year with no published figure,
+    sets no error flag at all. Check caveats, not only the flags. A
+    subsistence-table mismatch also sets upstream_error true on a valid
+    poverty figure.
 
     Args:
         region: PH region (None returns national).
@@ -1451,14 +1467,21 @@ async def get_inflation_stats(area: str | None = None) -> dict:
     """Headline consumer-price inflation (year-on-year, all items) from PSA.
 
     Source: PSA OpenSTAT Consumer Price Index, 2018-based. The tool discovers
-    the current CPI series by text (never a hardcoded table id) and returns the
-    most recently published month's year-on-year change. Reports the exact
-    reference period — PSA publishes with a lag, so this is the latest available
-    figure, not necessarily the current month.
+    the current CPI series by text, never a hardcoded table id, and returns
+    the most recently published month's year-on-year change. PSA publishes
+    with a lag, so the reported period is the latest one PSA has, not always
+    the current month. Examples:
+
+      get_inflation_stats()             national headline inflation, latest month
+      get_inflation_stats(area="NCR")   one region
+
+    On failure: this tool does not set data_status or validation_error. Every
+    failure, including an area name PSA does not list, sets upstream_error
+    true, with the real error or a not-found message in caveats.
 
     Args:
         area: Region or "Philippines". None returns the national figure.
-              e.g. "NCR", "Region VII", "Davao Region".
+              For example "NCR", "Region VII", "Davao Region".
     """
     key = cache_key({"tool": "inflation", "area": area})
     cache = CACHES["psa_prices"]
@@ -1599,12 +1622,20 @@ async def get_labor_stats(region: str | None = None) -> dict:
 
     Returns labor-force participation, employment, unemployment, and
     underemployment rates for the latest published reference period. The PSA
-    key-indicator series is national; a `region` argument is recorded as a
-    caveat because this table has no regional breakdown.
+    key-indicator series is national only. Passing `region` does not filter
+    the figure. It only adds an explanatory caveat, because this table has
+    no regional breakdown. Examples:
+
+      get_labor_stats()               national rates, latest reference period
+      get_labor_stats(region="Cebu")  same national rates, plus a caveat
+
+    On failure: this tool does not set data_status or validation_error. An
+    OpenSTAT discovery or query failure sets upstream_error true, with the
+    real error in caveats.
 
     Args:
         region: Accepted for API symmetry. The LFS key-indicator table is
-                national only; passing a region adds an explanatory caveat.
+                national only. Passing a region adds an explanatory caveat.
     """
     key = cache_key({"tool": "labor", "region": region})
     cache = CACHES["psa_labor"]
@@ -1819,14 +1850,23 @@ async def _latest_health_value(
 async def get_health_indicators(indicator: str | None = None) -> dict:
     """National health indicators from PSA OpenSTAT (subject 1D).
 
-    With no argument, returns the curated national headline set (maternal
-    mortality ratio and total fertility rate). Pass a free-text `indicator` to
-    fuzzy-match any table published under the Health subject — the available
-    list is browse-discovered, never hardcoded.
+    With no argument, returns the curated national headline set: maternal
+    mortality ratio and total fertility rate. Pass a free-text `indicator` to
+    fuzzy-match any table published under the Health subject. The available
+    list is browse-discovered, never hardcoded. Examples:
+
+      get_health_indicators()                     maternal mortality ratio and fertility rate
+      get_health_indicators(indicator="fertility") one matching table
+
+    On failure: this tool does not set data_status or validation_error. A
+    catalog browse failure sets upstream_error true with an empty indicators
+    list. A keyword that matches no table returns the success shape with an
+    empty indicators list and a caveat, not an error flag. A partial fetch
+    failure across matched tables also sets upstream_error true.
 
     Args:
-        indicator: Optional free-text indicator name, e.g. "maternal mortality",
-                   "fertility". None returns the default headline set.
+        indicator: Optional free-text indicator name, for example "maternal
+                   mortality", "fertility". None returns the default headline set.
     """
     key = cache_key({"tool": "health", "indicator": indicator})
     cache = CACHES["psa_health"]
