@@ -150,10 +150,23 @@ async def _fetch_observations(code: str, per_page: int) -> tuple[str | None, lis
     },
 )
 async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
-    """World Bank macroeconomic/social indicator for the Philippines.
+    """World Bank macroeconomic and social indicator for the Philippines.
 
-    Accepts a World Bank indicator code (e.g. 'NY.GDP.MKTP.CD') or a friendly
-    alias (e.g. 'gdp', 'poverty_ratio', 'inflation', 'urban_population_pct').
+    Accepts a World Bank indicator code, such as "NY.GDP.MKTP.CD", or a
+    friendly alias, such as "gdp", "poverty_ratio", "inflation", or
+    "urban_population_pct". The tool checks the indicator code shape before
+    it reaches the URL, so a bad value cannot redirect the request to
+    another country's data. Examples:
+
+      get_world_bank_indicator("gdp")                        # GDP, latest 20 years
+      get_world_bank_indicator("NY.GDP.MKTP.CD", per_page=5)  # same indicator, 5 years
+      get_world_bank_indicator("poverty_ratio")               # poverty headcount ratio
+
+    On failure: an indicator code or alias that fails the shape check
+    returns data_status "invalid_request", with validation_error true and
+    observations []. An upstream fetch failure returns data_status
+    "unavailable", with upstream_error true, observations [], and the real
+    error text in caveats.
 
     Args:
         indicator: WB code or alias. See INDICATOR_ALIASES in source for the

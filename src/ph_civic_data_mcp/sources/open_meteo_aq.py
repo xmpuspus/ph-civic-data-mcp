@@ -73,13 +73,23 @@ def _as_dict(value: object) -> dict:
 async def get_air_quality(location: str) -> dict:
     """Real-time air quality for a Philippine city via Open-Meteo (no API key).
 
-    Returns PM2.5, PM10, CO, NO2, SO2, O3 plus European AQI and US AQI with
-    category interpretation. Covers ~80 major PH cities via local coordinate
-    table. For unlisted locations, caller can pass coordinates directly via
-    the latitude/longitude form in a future version.
+    Returns PM2.5, PM10, CO, NO2, SO2, and O3, plus European AQI and US AQI
+    with category interpretation. Covers about 80 major PH cities through a
+    local coordinate table. measured_at is always UTC, never Asia/Manila
+    time. Examples:
+
+      get_air_quality("Manila")     # current readings for Metro Manila
+      get_air_quality("Cebu City")  # current readings for Cebu City
+      get_air_quality("Davao")      # current readings for Davao City
+
+    On failure: a location not in the coordinate table returns only
+    caveats, location, source, and data_retrieved_at, with a caveat naming
+    the location. An Open-Meteo fetch failure returns data_status
+    "unavailable", with upstream_error true and the real error text in
+    caveats.
 
     Args:
-        location: City or municipality name (e.g. "Manila", "Cebu City", "Davao").
+        location: City or municipality name, such as "Manila", "Cebu City", or "Davao".
     """
     ckey = cache_key({"tool": "aq", "loc": location.strip().lower()})
     cache = CACHES["open_meteo_aq"]

@@ -134,17 +134,22 @@ SOURCE_CATALOG: list[dict] = [
     },
 )
 async def get_data_freshness() -> dict:
-    """Server health + data-source catalog probe.
+    """Server health and data-source catalog probe.
 
-    Doubles as the canonical version/health endpoint: returns server_version
-    so agents can confirm which release they are talking to. Also returns the
-    full upstream-source catalog with cache TTLs, freshness expectations, and
-    licenses, useful when deciding whether a stale cached response is OK or
-    a re-fetch is needed.
+    Doubles as the version and health endpoint: returns server_version so an
+    agent can confirm which release it is talking to. Also returns the full
+    upstream-source catalog: cache TTLs, freshness expectations, and
+    licenses. Use it to judge whether a stale cached response is fine or a
+    re-fetch is needed.
 
-    source_health is a process-local, in-memory registry, not a database. It
-    starts empty on a cold process and fills as fetch_with_retry runs calls,
-    so a fresh restart always reports an empty dict here.
+    Examples:
+      get_data_freshness()  # the only call, it takes no arguments
+
+    On failure: this tool calls no upstream itself, so it always returns a
+    dict. source_health is a process-local, in-memory registry, not a
+    database. It starts empty on a cold process and fills as
+    fetch_with_retry runs calls, so a fresh restart always reports an empty
+    dict here.
 
     Returns: server_version, server_name, transport, tool_count, asof,
     sources (list of {source, source_url, freshness, cache_ttl_seconds,
