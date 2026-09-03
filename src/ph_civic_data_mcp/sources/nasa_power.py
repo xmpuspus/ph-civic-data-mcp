@@ -11,7 +11,7 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 from ph_civic_data_mcp.models.climate import SolarClimate, SolarClimateDay
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
-from ph_civic_data_mcp.utils.envelope import failure_result
+from ph_civic_data_mcp.utils.envelope import DATA_STATUS_INDETERMINATE, failure_result
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 NASA_POWER_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
@@ -77,11 +77,13 @@ async def get_solar_and_climate(
       get_solar_and_climate(14.5995, 120.9842)                              # Manila, last 14 days
       get_solar_and_climate(14.5995, 120.9842, "2026-04-01", "2026-04-02")  # a fixed 2-day window
 
-    On failure: an upstream fetch failure or a malformed response body
+    On failure: an upstream fetch failure or a non-object response body
     returns data_status "unavailable", with upstream_error true, days [],
-    and the real error text in caveats. A bad start_date or end_date string
-    falls back to the default window instead of failing. An end_date before
-    start_date, or a span over 366 days, returns data_status
+    and the real error text in caveats. A non-dict properties or parameter
+    field returns data_status "indeterminate", with upstream_error true and
+    days []. A bad start_date or end_date string falls back to the default
+    window instead of failing. An end_date before start_date, a span over
+    366 days, or a latitude or longitude out of range, returns data_status
     "invalid_request", with validation_error true and days [].
 
     Args:
@@ -91,6 +93,20 @@ async def get_solar_and_climate(
         end_date: ISO date string (YYYY-MM-DD). Defaults to today. The span
                   from start_date to end_date cannot exceed 366 days.
     """
+    if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+        return failure_result(
+            "NASA POWER",
+            NASA_POWER_URL,
+            f"latitude {latitude} or longitude {longitude} is out of range. "
+            "Latitude must be -90 to 90. Longitude must be -180 to 180.",
+            validation_error=True,
+            latitude=latitude,
+            longitude=longitude,
+            start_date=start_date,
+            end_date=end_date,
+            days=[],
+        )
+
     today = _now().date()
     try:
         sd = date_cls.fromisoformat(start_date) if start_date else today - timedelta(days=14)
@@ -172,8 +188,35 @@ async def get_solar_and_climate(
             days=[],
         )
 
-    properties = _as_dict(payload.get("properties"))
-    data = _as_dict(properties.get("parameter"))
+    raw_properties = payload.get("properties")
+    if raw_properties is not None and not isinstance(raw_properties, dict):
+        return failure_result(
+            "NASA POWER",
+            NASA_POWER_URL,
+            f"NASA POWER sent a non-object 'properties' field: {type(raw_properties).__name__}.",
+            data_status=DATA_STATUS_INDETERMINATE,
+            latitude=latitude,
+            longitude=longitude,
+            start_date=sd.isoformat(),
+            end_date=ed.isoformat(),
+            days=[],
+        )
+    properties = _as_dict(raw_properties)
+
+    raw_parameter = properties.get("parameter")
+    if raw_parameter is not None and not isinstance(raw_parameter, dict):
+        return failure_result(
+            "NASA POWER",
+            NASA_POWER_URL,
+            f"NASA POWER sent a non-object 'parameter' field: {type(raw_parameter).__name__}.",
+            data_status=DATA_STATUS_INDETERMINATE,
+            latitude=latitude,
+            longitude=longitude,
+            start_date=sd.isoformat(),
+            end_date=ed.isoformat(),
+            days=[],
+        )
+    data = _as_dict(raw_parameter)
     solar = _as_dict(data.get("ALLSKY_SFC_SW_DWN"))
     t2m = _as_dict(data.get("T2M"))
     precip = _as_dict(data.get("PRECTOTCORR"))

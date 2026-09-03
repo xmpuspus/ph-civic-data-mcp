@@ -124,3 +124,17 @@ async def test_a_schema_drift_body_raises_instead_of_crashing(monkeypatch):
     result = await modis_module.get_vegetation_index(15.58, 121.0, "2026-08-01", "2026-08-15")
     assert result["upstream_error"] is True
     assert len(CACHES["modis_ndvi"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_body_with_no_subset_list_raises_instead_of_reading_as_empty(monkeypatch):
+    """An object body without a list 'subset' field must raise, not become []."""
+
+    async def _degraded(client, method, url, **kwargs):
+        return _json_response(method, url, {"error": "temporarily unavailable"})
+
+    monkeypatch.setattr(modis_module, "fetch_with_retry", _degraded)
+
+    result = await modis_module.get_vegetation_index(15.58, 121.0, "2026-08-01", "2026-08-15")
+    assert result["upstream_error"] is True
+    assert len(CACHES["modis_ndvi"]) == 0
