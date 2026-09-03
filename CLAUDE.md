@@ -14,11 +14,11 @@ lives in [CHANGELOG.md](CHANGELOG.md).
 | Package | `ph-civic-data-mcp` (PyPI) |
 | Registry name | `io.github.xmpuspus/ph-civic-data-mcp` |
 | Repository | `xmpuspus/ph-civic-data-mcp` |
-| Current version | 0.6.0 |
-| Surface | 32 tools, 3 prompts, 2 resources, 12 sources |
+| Current version | 0.7.0 |
+| Surface | 34 tools, 3 prompts, 2 resources, 13 public sources |
 | Transport | stdio only, zero hosting cost |
 | Python | 3.11+, tested on 3.11 through 3.14 |
-| Framework | `fastmcp>=3.0.0,<4.0.0` (3.4.6 as of 2026-08-06) |
+| Framework | `fastmcp>=3.0.0,<4.0.0` (3.4.7 as of 2026-09-04, 4.x evaluated in `docs/fastmcp-4-evaluation.md`) |
 | Auth | None required. `PAGASA_API_TOKEN` optional. |
 
 Deeper background sits in project memory: `project_ph_civic_data_mcp`,
@@ -210,8 +210,17 @@ request that adds or renames a tool. The v0.5.0 audit found instructions a full
 version behind, which hid the flagship tool from agents.
 
 Every tool carries a `title`, `tags`, and `annotations`. All are read-only and
-idempotent. Everything that calls an upstream declares `openWorldHint: true`;
+idempotent. Everything that calls an upstream declares `openWorldHint: true`.
 `get_data_freshness` is the only one with `false`.
+
+**FastMCP cuts the client-facing description at the first standalone
+Google-style header.** `Args:`, `Returns:`, and a bare `Examples:` line all
+stop it. Before v0.7.0, 25 of 34 tools reached an agent with no failure shape
+and 29 with no example, because both sat after `Args:`. Put the one-line
+summary, the example calls, and the `On failure:` sentence before `Args:`.
+Fold the `Examples:` label onto the tail of the prior sentence, never on its
+own line. Check with `mcp.list_tools()`: every description must contain
+`Examples:` and `On failure` and must not contain `Args:`.
 
 ## CI and packaging landmines
 
