@@ -4,6 +4,100 @@ All notable changes to `ph-civic-data-mcp` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-09-03
+
+Trust hotfix. `get_population_stats` returned no figure for every input since
+PSA moved its census folders, and `get_area_profile` hid that. No tool name
+changed. Every new response field is additive.
+
+### Fixed
+
+- **Population discovery.** PSA moved the 2020 Census from `DB/1A/PO/` to
+  `DB/1A/PO_2020/` and left one projection table under `PO/`, so the pinned
+  path matched nothing. The failure dict omitted `upstream_error`, so an agent
+  read it as a sparse answer. Discovery now reads the census folders by title
+  under subject 1A, picks the latest census, and publishes a figure only after
+  the table's title, geography dimension and Total Population measure pass a
+  shape check. Live on 2026-09-03: Philippines 112,729,484 and NCR 14,001,751
+  from the 2024 Census of Population, and 109,033,245 for 2020 by `year`.
+- **`get_area_profile` hid a sibling failure.** It folded a raised exception
+  into `caveats` but passed a returned `upstream_error` envelope through as
+  data, so a profile showed `population: null` beside an empty `caveats` list.
+  Every block now folds both shapes into `caveats`, and the profile carries
+  `blocks` (one status per block) and a top-level `upstream_error`.
+- **WOVODAT volcano bulletins fetched any host.** The volcano path resolved
+  upstream hrefs with a bare `urljoin` and fetched them on the
+  certificate-blind PHIVOLCS client with redirects on. Every PHIVOLCS fetch
+  now passes an https host allowlist, the client never follows a redirect on
+  its own, and every hop is re-checked. Adversarial tests cover other hosts,
+  scheme-relative links, userinfo, http downgrade, suffix confusion, private
+  and loopback addresses, odd ports and redirect loops.
+- **CI ran every `uv run` without `--python`.** The environment was right,
+  but nothing proved it. Each matrix leg now binds `UV_PYTHON` and asserts
+  `sys.version` matches the leg before any test runs. Same for live-drift.
+- **Live tests skipped on any `caveats` entry.** So the weekly live-drift run
+  stayed green while the population tool returned nothing. The guards now
+  skip on a positively found outage only. A new live contract asserts the
+  national, regional, city and barangay figures with their vintage, level
+  and source table.
+- **Discovered table locations never expired.** A process that ran for weeks
+  kept serving a table PSA moved. Discovery results now live in a 24-hour
+  TTL cache.
+- **`get_area_profile` also missed a PSGC resolver or hierarchy outage.**
+  It checked `matched` but never `upstream_error` on `resolve_ph_location`
+  and `get_location_hierarchy`, so an outage there read as "no such place".
+  Both now fold into `blocks` and `caveats` the same way every sibling call
+  does.
+- **A rate-limited PSGC mirror read as an unknown code.** `lookup_psgc_code`
+  raised only on a 5xx. A 429 or 403 now raises too, so
+  `get_population_stats(psgc_code=...)` reports `upstream_error`, not
+  `validation_error`, when a rate limit or a block hits the mirror.
+- **`get_location_hierarchy` turned a lookup outage into "record not
+  found".** `_fetch_barangay_by_code` and `_fetch_one` swallowed a transport
+  failure into `None`, the same shape as an unknown code. Both now raise on
+  a real failure and return `None` only for a clean miss.
+- **A single volcano bulletin timeout read as a confirmed normal reading.**
+  `_fetch_volcano_alert` returned `(None, None)` on any failure, so
+  `get_volcano_status` published a null alert level with no warning. Each
+  entry now carries `upstream_error` and a `caveats` entry when its own
+  bulletin fetch failed.
+
+### Added
+
+- `get_population_stats(psgc_code=...)` reaches the 2024 Census down to
+  barangay level through the PSGC-coded regional tables. Accepts a 9- or
+  10-digit code from `resolve_ph_location`. `year` now selects a census
+  (2010, 2015, 2020, 2024). A year with no census returns `validation_error`
+  with `available_vintages`.
+- Population responses carry `geography`, `geography_level`, `psgc_code`,
+  `census`, `reference_date`, `parent_region`, `available_vintages` and
+  `data_status`. `region` keeps naming a region. For a place below region
+  level it now holds the containing region, and `geography` holds the place.
+- `failure_result` in `utils/envelope.py`, the one builder every single-value
+  tool uses for a failure, with `data_status` in `success`, `empty`,
+  `unavailable`, `indeterminate`, `invalid_request`. `failure_envelope`
+  delegates to it, so list envelopes gain `data_status` and
+  `validation_error: false`.
+- `resolve_ph_location` records carry `psgc_10digit_code`.
+- `get_area_profile` demographics carry `population_year` and
+  `population_census`.
+
+### Changed
+
+- FastMCP 3.4.6 to 3.4.7 (2026-08-10 security patch for OAuthProxy, a path
+  this server never uses). Still `<4.0.0`.
+- README, tool reference, server instructions and the source catalog now
+  name the 2024 Census of Population instead of "2020 Census, no later count".
+
+### Known limitations
+
+- The 2024 barangay tables carry no geography values in their metadata, so a
+  barangay is reachable by PSGC code only, never by name.
+- Two official PSA tables disagree on the 2020 national total by 2,098
+  (109,033,245 in the 2020 census table, 109,035,343 in the 2024 growth
+  table). The server reports the census table and names it in `source_table`.
+- The other single-value tools adopt `data_status` in 0.7.0.
+
 ## [0.6.0] - 2026-08-06
 
 Opens the whole PSA OpenSTAT catalog, repairs two production defects, and

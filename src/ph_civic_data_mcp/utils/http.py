@@ -81,11 +81,15 @@ CLIENT = httpx.AsyncClient(
     follow_redirects=True,
 )
 
+# follow_redirects is OFF here on purpose. This client skips certificate
+# checks, so an upstream redirect must never carry it to another host.
+# sources/phivolcs.py follows redirects by hand and checks every hop against
+# its host allowlist.
 PHIVOLCS_CLIENT = httpx.AsyncClient(
     verify=False,
     timeout=httpx.Timeout(30.0, connect=10.0),
     headers={"User-Agent": USER_AGENT},
-    follow_redirects=True,
+    follow_redirects=False,
 )
 
 

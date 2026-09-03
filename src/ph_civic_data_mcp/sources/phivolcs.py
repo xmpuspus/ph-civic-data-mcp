@@ -13,6 +13,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
+import httpx
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 
@@ -24,18 +25,58 @@ from ph_civic_data_mcp.utils.http import PHIVOLCS_CLIENT, fetch_with_retry, log_
 
 PHIVOLCS_LICENSE = "Public — PHIVOLCS public bulletin pages"
 
-# get_earthquake_bulletin takes an agent-supplied URL and fetches it through
-# the SSL-disabled PHIVOLCS client. Restrict it to PHIVOLCS hosts so the tool
-# cannot be steered into fetching arbitrary URLs (e.g. via prompt injection).
+# Every URL that reaches PHIVOLCS_CLIENT passes this allowlist first, whether
+# an agent supplied it (get_earthquake_bulletin) or an upstream page did
+# (the WOVODAT bulletin links). The client skips certificate checks, so a URL
+# that escapes to another host would be fetched with no TLS check at all.
 ALLOWED_BULLETIN_HOST_SUFFIX = ".phivolcs.dost.gov.ph"
+MAX_REDIRECT_HOPS = 3
+
+
+class PhivolcsHostError(ValueError):
+    """A URL, or a redirect target, is not an https PHIVOLCS host."""
 
 
 def _is_phivolcs_url(url: str) -> bool:
+    """True only for an https URL on a PHIVOLCS host, with no userinfo or odd port.
+
+    Parses the authority instead of matching a string, so
+    `https://wovodat.phivolcs.dost.gov.ph@evil.example/` (userinfo),
+    `//evil.example/` (scheme-relative), `http://` (downgrade) and
+    `https://wovodat.phivolcs.dost.gov.ph.evil.example/` (suffix) all fail.
+    """
     try:
-        host = (urlparse(url).hostname or "").lower()
+        parsed = urlparse(str(url))
+        port = parsed.port
     except ValueError:
         return False
-    return host.endswith(ALLOWED_BULLETIN_HOST_SUFFIX) or host == "phivolcs.dost.gov.ph"
+    if parsed.scheme != "https":
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    host = (parsed.hostname or "").lower()
+    if not (host.endswith(ALLOWED_BULLETIN_HOST_SUFFIX) or host == "phivolcs.dost.gov.ph"):
+        return False
+    return port in (None, 443)
+
+
+async def _fetch_phivolcs(url: str) -> httpx.Response:
+    """GET through the TLS-relaxed client, checking every hop against the allowlist.
+
+    The client never follows a redirect on its own. Each Location is resolved
+    against the URL that sent it and re-checked, so a redirect off
+    *.phivolcs.dost.gov.ph, to http://, or to a private address raises
+    PhivolcsHostError before any connection is made.
+    """
+    current = str(url)
+    for _ in range(MAX_REDIRECT_HOPS + 1):
+        if not _is_phivolcs_url(current):
+            raise PhivolcsHostError(f"refusing to fetch non-PHIVOLCS URL {current!r}")
+        response = await fetch_with_retry(PHIVOLCS_CLIENT, "GET", current, follow_redirects=False)
+        if not response.has_redirect_location:
+            return response
+        current = urljoin(current, response.headers["location"])
+    raise PhivolcsHostError(f"too many redirects fetching {url!r}")
 
 
 PHIVOLCS_EQ_LIST_URL = "https://earthquake.phivolcs.dost.gov.ph/"
@@ -64,7 +105,7 @@ async def _fetch_earthquake_list() -> list[dict]:
     if key in cache:
         return cache[key]
 
-    response = await fetch_with_retry(PHIVOLCS_CLIENT, "GET", PHIVOLCS_EQ_LIST_URL)
+    response = await _fetch_phivolcs(PHIVOLCS_EQ_LIST_URL)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "lxml")
 
@@ -235,7 +276,7 @@ async def get_earthquake_bulletin(bulletin_url: str) -> dict:
         return cache[key]
 
     try:
-        response = await fetch_with_retry(PHIVOLCS_CLIENT, "GET", bulletin_url)
+        response = await _fetch_phivolcs(bulletin_url)
         if response.status_code == 404:
             result = {
                 "url": bulletin_url,
@@ -326,7 +367,7 @@ async def _fetch_volcano_bulletin_list() -> dict[str, dict]:
     result: dict[str, dict] = {}
     # Fetch failures propagate to the caller; never cache an empty list born
     # from an outage for the full success TTL.
-    response = await fetch_with_retry(PHIVOLCS_CLIENT, "GET", WOVODAT_BULLETIN_LIST_URL)
+    response = await _fetch_phivolcs(WOVODAT_BULLETIN_LIST_URL)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "lxml")
@@ -352,6 +393,11 @@ async def _fetch_volcano_bulletin_list() -> dict[str, dict]:
             continue
         volcano = vo_map[code]
         full_url = urljoin(WOVODAT_BASE, href)
+        if not _is_phivolcs_url(full_url):
+            # An upstream page that links off-host never steers the
+            # certificate-blind client anywhere. Skip the entry.
+            log_stderr(f"WOVODAT list linked off-host, skipped: {full_url}")
+            continue
         if volcano not in result:
             result[volcano] = {"bulletin_url": full_url, "bid": match.group(2), "title": text}
 
@@ -359,14 +405,20 @@ async def _fetch_volcano_bulletin_list() -> dict[str, dict]:
     return result
 
 
-async def _fetch_volcano_alert(bulletin_url: str) -> tuple[int | None, str | None]:
-    """Fetch a single volcano bulletin and extract (alert_level, status_description)."""
+async def _fetch_volcano_alert(bulletin_url: str) -> tuple[int | None, str | None, str | None]:
+    """Fetch a single volcano bulletin and extract (alert_level, status_description, error).
+
+    `error` is None on a completed fetch, even when the page carries no
+    matchable alert text. It names the failure only when the fetch itself
+    could not complete, so a caller can tell an outage from a bulletin that
+    loaded but published no ALERT LEVEL line.
+    """
     try:
-        response = await fetch_with_retry(PHIVOLCS_CLIENT, "GET", bulletin_url)
+        response = await _fetch_phivolcs(bulletin_url)
         response.raise_for_status()
     except Exception as exc:
         log_stderr(f"volcano bulletin fetch error: {exc}")
-        return None, None
+        return None, None, f"{type(exc).__name__}: {exc}"
 
     soup = BeautifulSoup(response.text, "lxml")
     text = soup.get_text(" ", strip=True)
@@ -379,7 +431,7 @@ async def _fetch_volcano_alert(bulletin_url: str) -> tuple[int | None, str | Non
     if status_match:
         status = status_match.group(1).strip()
 
-    return alert_level, status
+    return alert_level, status, None
 
 
 @mcp.tool(
@@ -402,6 +454,8 @@ async def get_volcano_status(volcano_name: str | None = None) -> list[dict] | di
 
     Returns a list on success. If the WOVODAT bulletin list is unreachable or
     parses to nothing, returns {results: [], upstream_error: true, caveats}.
+    A list entry whose own bulletin fetch failed carries upstream_error: true
+    and a caveat instead of a null alert_level with no explanation.
     """
     try:
         bulletins = await _fetch_volcano_bulletin_list()
@@ -454,18 +508,25 @@ async def get_volcano_status(volcano_name: str | None = None) -> list[dict] | di
         *(_fetch_volcano_alert(bulletins[name]["bulletin_url"]) for name in target_volcanoes)
     )
     results: list[dict] = []
-    for name, (alert_level, status) in zip(target_volcanoes, alerts):
+    for name, (alert_level, status, error) in zip(target_volcanoes, alerts):
         info = bulletins[name]
-        results.append(
-            {
-                "name": name,
-                "alert_level": alert_level,
-                "status_description": status,
-                "last_updated": None,
-                "bulletin_url": info["bulletin_url"],
-                "bulletin_title": info.get("title"),
-                "source": "PHIVOLCS",
-                "data_retrieved_at": _now().isoformat(),
-            }
-        )
+        entry = {
+            "name": name,
+            "alert_level": alert_level,
+            "status_description": status,
+            "last_updated": None,
+            "bulletin_url": info["bulletin_url"],
+            "bulletin_title": info.get("title"),
+            "source": "PHIVOLCS",
+            "data_retrieved_at": _now().isoformat(),
+        }
+        if error is not None:
+            # A fetch failure on one volcano's bulletin must not read as a
+            # confirmed normal reading. Reported twice on the v0.6.1 diff.
+            entry["upstream_error"] = True
+            entry["caveats"] = [
+                f"This volcano's bulletin fetch failed ({error}). alert_level and "
+                "status_description are unknown, not confirmed normal."
+            ]
+        results.append(entry)
     return results

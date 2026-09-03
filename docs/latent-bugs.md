@@ -1,7 +1,8 @@
 # Latent bugs found but not fixed in v0.6.0
 
 > Items 1, 4 and 8 were fixed during the review rounds and are marked below.
-> Items 12 to 16 came from rounds 5 and 6. Everything else still stands.
+> Items 12 to 16 came from rounds 5 and 6. v0.6.1 fixed items 2, 3, 5, 7 and
+> 21. Everything else still stands.
 
 Found by an adversarial and a cross-model review of the v0.6.0 branch on
 2026-08-06. Every item here predates that branch, so none of them ship as a
@@ -31,7 +32,7 @@ data-integrity rule forbids.
 Fixed: `_first_cell` reads the cell with a type check at every level, and an
 unreadable cell returns an envelope with `upstream_error` that never caches.
 
-## 2. The volcano bulletin path fetches an absolute URL on the TLS-relaxed client
+## 2. FIXED in v0.6.1. The volcano bulletin path fetches an absolute URL on the TLS-relaxed client
 
 `sources/phivolcs.py`, in `_fetch_volcano_bulletin_list` and
 `_fetch_volcano_alert`. `urljoin(WOVODAT_BASE, href)` keeps an absolute href
@@ -46,7 +47,12 @@ Fix shape: run every URL through `_is_phivolcs_url` before any
 
 Severity: medium. It needs a compromised or changed upstream page to fire.
 
-## 3. A per-volcano bulletin failure reads as a real alert with null fields
+Fixed: every PHIVOLCS fetch goes through `_fetch_phivolcs`, which checks the
+URL and every redirect hop against the https host allowlist. The client no
+longer follows redirects on its own. `tests/test_v061_phivolcs_security.py`
+holds the adversarial cases.
+
+## 3. FIXED in v0.6.1. A per-volcano bulletin failure reads as a real alert with null fields
 
 `sources/phivolcs.py`, in `get_volcano_status`. `_fetch_volcano_alert` returns
 `(None, None)` on any failure, and the caller emits a normal alert record with
@@ -54,6 +60,10 @@ a null level. An agent cannot tell "alert level unknown" from "alert level not
 published".
 
 Severity: medium, and it sits on a hazard tool.
+
+Fixed: `_fetch_volcano_alert` returns a third value naming the failure, and
+the entry it produces carries `upstream_error` and a `caveats` entry instead
+of a silent null.
 
 ## 4. FIXED in v0.6.0. A subsistence-table outage becomes a null statistic
 
@@ -67,12 +77,16 @@ Severity: low. The poverty figure beside it is correct.
 Fixed: a discovery or query failure now reaches the caller as a `caveats`
 entry with `upstream_error`, and that partial answer never caches.
 
-## 5. PSGC hierarchy turns an endpoint failure into "record not found"
+## 5. FIXED in v0.6.1. PSGC hierarchy turns an endpoint failure into "record not found"
 
 `sources/psgc.py`, in the hierarchy lookup. A transport failure and a genuine
 unknown code produce the same answer.
 
 Severity: medium.
+
+Fixed: `_fetch_barangay_by_code` and `_fetch_one` raise `PSGCFetchError` on a
+real transport failure and return `None` only for a clean non-200/404 miss.
+`get_location_hierarchy` folds that into `upstream_error`.
 
 ## 6. MODIS transport failures cache as an empty observation window
 
@@ -81,13 +95,16 @@ and enters the cache.
 
 Severity: medium. Same class as the v0.5.0 list-tool fix, one tool short.
 
-## 7. `get_area_profile` drops a sibling's failure envelope
+## 7. FIXED in v0.6.1. `get_area_profile` drops a sibling's failure envelope
 
 `sources/autostitch.py`. The composite catches a raised exception but passes a
 returned failure envelope through as data. The block reads as present when its
 source was down.
 
 Severity: medium.
+
+Fixed: `_unwrap` folds both shapes into `caveats`, and the profile carries
+`blocks` with one status per block plus a top-level `upstream_error`.
 
 ## 8. FIXED in v0.6.0. An unparseable poverty reference year silently becomes 2023
 
@@ -191,12 +208,15 @@ curated tools still queue duplicate metadata GETs.
 
 Severity: low. It costs duplicate fetches, never a wrong answer.
 
-## 21. A non-integral population value truncates
+## 21. FIXED in v0.6.1. A non-integral population value truncates
 
 `sources/psa.py`. `int()` on a float population silently drops the fraction
 rather than reporting the unexpected type.
 
 Severity: low.
+
+Fixed. The value rounds to the nearest whole person, and a `caveats` entry
+names the non-integral cell.
 
 ## Suggested order
 

@@ -16,6 +16,8 @@ jobs:
   live:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v7
 
@@ -31,7 +33,15 @@ jobs:
       # builds the environment on 3.11, so the job's own name lies about what
       # it exercised.
       - name: Install dependencies
-        run: uv sync --locked --extra dev --python 3.12
+        run: uv sync --locked --extra dev
+
+      - name: Check the interpreter is the one the job names
+        run: |
+          uv run --no-sync python - <<'PY'
+          import sys
+          print("sys.version:", sys.version)
+          assert sys.version_info[:2] == (3, 12), sys.version
+          PY
 
       - name: Run live suite against real upstreams
         run: uv run --no-sync pytest tests/ -q -m live

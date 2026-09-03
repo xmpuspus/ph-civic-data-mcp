@@ -40,9 +40,11 @@ mcp = FastMCP(
     - PhilGEPS: procurement notices. search_procurement covers ALL notices;
       search_infra_projects is the infra-only subset (construction, roads,
       flood control) with get_infra_project / summarize_infra_spending on top
-    - PSA OpenSTAT: population (2020 Census), poverty (2023 Full Year),
-      get_inflation_stats (regional CPI, latest published month),
-      get_labor_stats (national LFS rates), get_health_indicators.
+    - PSA OpenSTAT: get_population_stats (2024 Census of Population by
+      default, down to barangay level with psgc_code; 2010, 2015 and 2020
+      by year), poverty (2023 Full Year), get_inflation_stats (regional CPI,
+      latest published month), get_labor_stats (national LFS rates),
+      get_health_indicators.
       For anything outside those curated tables, walk the whole ~2,900-table
       catalog: browse_psa_catalog(path) -> describe_psa_dataset(dataset_path)
       -> query_psa_dataset(dataset_path, selections). Always describe before
@@ -66,8 +68,12 @@ mcp = FastMCP(
     Failure semantics: list tools return a real list on success. On upstream
     failure they return {results: [], upstream_error: true, caveats: [...]}
     instead — treat that as "source unavailable", NEVER as "no earthquakes /
-    no typhoons / no notices". Failures are never cached, so retrying later
-    is meaningful.
+    no typhoons / no notices". Single-value tools carry data_status
+    ("success", "empty", "unavailable", "indeterminate", "invalid_request"):
+    upstream_error true means the source was down, validation_error true
+    means the argument was wrong and a retry cannot help. Failures are never
+    cached, so retrying later is meaningful. get_area_profile reports one
+    status per block in `blocks` and folds every failed block into caveats.
 
     Civic-tech framing (read every turn):
     This server is for civic research and accountability work. When you call
