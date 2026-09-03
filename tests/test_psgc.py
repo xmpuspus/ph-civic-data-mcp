@@ -527,3 +527,22 @@ async def test_fetch_barangay_by_code_raises_on_503(monkeypatch):
 
     with pytest.raises(psgc_module.PSGCFetchError):
         await psgc_module._fetch_barangay_by_code("012801001")
+
+
+@pytest.mark.asyncio
+async def test_fetch_one_5xx_is_an_error_not_a_cached_miss(monkeypatch):
+    """A region-shaped code skips the barangay lookup, so this isolates the
+    non-200 non-404 branch inside `_fetch_one` itself."""
+
+    def _outage_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "service unavailable"})
+
+    transport = httpx.MockTransport(_outage_handler)
+    bad_client = httpx.AsyncClient(transport=transport, base_url="https://psgc.gitlab.io")
+    monkeypatch.setattr(psgc_module, "CLIENT", bad_client)
+    CACHES["psgc_browse"].clear()
+
+    with pytest.raises(psgc_module.PSGCFetchError):
+        await psgc_module._fetch_one("070000000")
+    key = psgc_module.cache_key({"endpoint": "one", "code": "070000000"})
+    assert key not in CACHES["psgc_browse"], "an outage must never cache a false not-found"
