@@ -274,7 +274,16 @@ async def get_usgs_earthquakes_ph(
     # Codex cross-model finding: a 200 with a non-object body (a bare list, a
     # string) reached `.get()` outside the except block and crashed the tool
     # instead of returning the failure envelope.
-    if not isinstance(payload, dict) or not isinstance(payload.get("features", []), list):
+    #
+    # Codex cross-model finding: `payload.get("features", [])` reads a
+    # missing key the same as an empty list, so a 200 with body `{}` passed
+    # this guard, returned a bare `[]`, and cached that false all-clear for
+    # 10 minutes. Require the key to be present, not just absent-or-a-list.
+    if (
+        not isinstance(payload, dict)
+        or "features" not in payload
+        or not isinstance(payload["features"], list)
+    ):
         log_stderr(f"USGS returned an unexpected payload shape: {type(payload).__name__}")
         return failure_envelope(
             "USGS",
@@ -283,7 +292,7 @@ async def get_usgs_earthquakes_ph(
             "not a GeoJSON FeatureCollection.",
             license="Public domain (USGS)",
         )
-    features = payload.get("features") or []
+    features = payload["features"]
     events: list[dict] = []
     for feature in features:
         event = _parse_event(feature)

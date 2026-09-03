@@ -17,6 +17,12 @@ from ph_civic_data_mcp.sources.infra import (
 )
 from ph_civic_data_mcp.sources.pagasa import get_active_typhoons, get_weather_alerts
 from ph_civic_data_mcp.sources.phivolcs import get_latest_earthquakes, get_volcano_status
+from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_INDETERMINATE,
+    DATA_STATUS_SUCCESS,
+    DATA_STATUS_UNAVAILABLE,
+    is_failure,
+)
 
 
 def _now() -> datetime:
@@ -37,6 +43,15 @@ def _parse_dt(raw: object) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def _child_failed(result: object) -> bool:
+    """True when a gathered child call failed, by exception or by envelope.
+
+    `is_failure` only reads a dict envelope. `asyncio.gather(return_exceptions=True)`
+    can also hand back a raw exception, so that case is checked here too.
+    """
+    return isinstance(result, BaseException) or is_failure(result)
 
 
 def _unwrap_list(result: object, caveats: list[str], label: str) -> list:
@@ -198,18 +213,23 @@ async def assess_area_risk(location: str) -> dict:
       assess_area_risk("Manila")
       assess_area_risk("Batangas")
 
-    On failure: this tool never raises and carries no data_status field. A
-    failed PHIVOLCS or PAGASA sub-call shows up only as a caveats entry
-    naming the source, and the other sources still report.
+    On failure: this tool never raises. A failed PHIVOLCS or PAGASA sub-call
+    shows up as a caveats entry naming the source, and the other sources
+    still report. data_status is "success" when every sub-call succeeded,
+    "indeterminate" when some failed, and "unavailable" when all failed;
+    upstream_error is true for the last two.
 
     Args:
         location: Municipality, city, or province name.
 
     Returns:
-        earthquake_risk_level derived from recent 30-day seismic activity (not an
-        official PHIVOLCS assessment), typhoon signal status, active alerts,
-        elevated volcano alerts (national scope), and caveats describing any
-        failed sub-calls.
+        earthquake_risk_level derived from recent 30-day seismic activity
+        (not an official PHIVOLCS assessment), or None if the earthquake or
+        volcano sub-call failed, since "Low" would then be an unsupported
+        claim. Also typhoon signal status, active alerts, elevated volcano
+        alerts (national scope), a blocks dict naming each sub-call as
+        "success" or "unavailable", top-level data_status and
+        upstream_error, and caveats describing any failed sub-calls.
     """
     retrieved_at = _now()
     caveats: list[str] = []
@@ -225,6 +245,25 @@ async def assess_area_risk(location: str) -> dict:
         earthquakes_task, typhoons_task, alerts_task, volcano_task, return_exceptions=True
     )
     earthquakes_result, typhoons_result, alerts_result, volcano_result = results
+
+    earthquakes_failed = _child_failed(earthquakes_result)
+    typhoons_failed = _child_failed(typhoons_result)
+    alerts_failed = _child_failed(alerts_result)
+    volcano_failed = _child_failed(volcano_result)
+    blocks = {
+        "earthquakes": "unavailable" if earthquakes_failed else "success",
+        "typhoons": "unavailable" if typhoons_failed else "success",
+        "alerts": "unavailable" if alerts_failed else "success",
+        "volcanoes": "unavailable" if volcano_failed else "success",
+    }
+    failed_count = sum([earthquakes_failed, typhoons_failed, alerts_failed, volcano_failed])
+    if failed_count == 0:
+        data_status = DATA_STATUS_SUCCESS
+    elif failed_count == len(blocks):
+        data_status = DATA_STATUS_UNAVAILABLE
+    else:
+        data_status = DATA_STATUS_INDETERMINATE
+    upstream_error = data_status in (DATA_STATUS_UNAVAILABLE, DATA_STATUS_INDETERMINATE)
 
     earthquakes = _unwrap_list(earthquakes_result, caveats, "PHIVOLCS earthquake query")
     typhoons = _unwrap_list(typhoons_result, caveats, "PAGASA typhoon query")
@@ -266,7 +305,12 @@ async def assess_area_risk(location: str) -> dict:
         if isinstance(v.get("alert_level"), int) and v["alert_level"] >= 1
     ]
 
-    risk_level = _risk_from_activity(recent_earthquakes_30d, max_magnitude_30d)
+    # "Low" is a claim about real seismic activity. When the earthquake or
+    # volcano data never arrived, there is nothing to base that claim on.
+    if earthquakes_failed or volcano_failed:
+        risk_level = None
+    else:
+        risk_level = _risk_from_activity(recent_earthquakes_30d, max_magnitude_30d)
 
     return {
         "location": location,
@@ -280,6 +324,9 @@ async def assess_area_risk(location: str) -> dict:
         "volcano_alerts_scope": "national — PHIVOLCS volcano bulletins are not geo-filtered",
         "assessment_datetime": retrieved_at.isoformat(),
         "caveats": caveats,
+        "data_status": data_status,
+        "upstream_error": upstream_error,
+        "blocks": blocks,
         "note": (
             "earthquake_risk_level is derived from recent seismic activity, "
             "not an official PHIVOLCS hazard assessment. For emergencies refer "

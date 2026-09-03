@@ -290,3 +290,19 @@ async def test_a_non_object_json_body_returns_the_failure_envelope(monkeypatch):
     assert result["results"] == []
     assert any("unexpected payload shape" in c for c in result["caveats"]), result["caveats"]
     assert not CACHES["usgs_events"], "a malformed body must never be cached"
+
+
+@pytest.mark.asyncio
+async def test_a_body_with_no_features_key_returns_the_failure_envelope(monkeypatch):
+    """Codex cross-model finding: `payload.get("features", [])` read a body
+    with no `features` key as an empty list, so `{}` passed the shape guard,
+    returned a bare `[]`, and cached that false all-clear for 10 minutes."""
+    _install_fake_fetch(monkeypatch, payload={})
+
+    result = await usgs_module.get_usgs_earthquakes_ph()
+
+    assert isinstance(result, dict)
+    assert result["upstream_error"] is True
+    assert result["results"] == []
+    assert any("unexpected payload shape" in c for c in result["caveats"]), result["caveats"]
+    assert not CACHES["usgs_events"], "a body with no features key must never be cached"
