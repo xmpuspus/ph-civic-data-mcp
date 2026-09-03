@@ -8,9 +8,11 @@ from __future__ import annotations
 import asyncio
 import random
 import sys
+import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -27,6 +29,7 @@ except Exception:
     pass
 
 from ph_civic_data_mcp import __version__
+from ph_civic_data_mcp.utils import health
 
 USER_AGENT = (
     f"ph-civic-data-mcp/{__version__} "
@@ -123,19 +126,27 @@ async def fetch_with_retry(
     **kwargs: Any,
 ) -> httpx.Response:
     """Retry on 429/503/504 and on a transient transport failure, with backoff."""
+    host = urlparse(url).netloc
     last_exc: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
+            start = time.monotonic()
             response = await client.request(method, url, **kwargs)
+            latency_ms = (time.monotonic() - start) * 1000
             if response.status_code in RETRY_STATUSES and attempt < MAX_RETRIES - 1:
                 await asyncio.sleep(_with_jitter(_retry_delay(response, attempt)))
                 continue
+            if response.status_code < 400:
+                health.record_success(host, latency_ms)
+            elif response.status_code in RETRY_STATUSES or response.status_code >= 500:
+                health.record_failure(host, f"HTTP {response.status_code}")
             return response
         except RETRYABLE_EXCEPTIONS as exc:
             last_exc = exc
             if attempt < MAX_RETRIES - 1:
                 await asyncio.sleep(_with_jitter(RETRY_DELAYS[attempt]))
                 continue
+            health.record_failure(host, exc)
             raise
     if last_exc:
         raise last_exc
