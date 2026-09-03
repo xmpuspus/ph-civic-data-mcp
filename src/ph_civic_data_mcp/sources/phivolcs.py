@@ -33,6 +33,10 @@ PHIVOLCS_LICENSE = "Public — PHIVOLCS public bulletin pages"
 ALLOWED_BULLETIN_HOST_SUFFIX = ".phivolcs.dost.gov.ph"
 MAX_REDIRECT_HOPS = 3
 
+# Half the Earth's circumference: the largest distance a radius filter can
+# ever mean. A bigger value only wastes the caller's own request.
+MAX_RADIUS_KM = 20001.6
+
 
 class PhivolcsHostError(ValueError):
     """A URL, or a redirect target, is not an https PHIVOLCS host."""
@@ -202,10 +206,11 @@ async def get_latest_earthquakes(
       get_latest_earthquakes(min_magnitude=4.0, limit=10)   strong events only
       get_latest_earthquakes(center_lat=14.5995, center_lon=120.9842, radius_km=50)  near Manila
 
-    On failure: an invalid trio, or a radius_km at or below zero, gives
-    validation_error true and data_status "invalid_request". An unreachable
-    or unparsable PHIVOLCS list gives upstream_error true and data_status
-    "unavailable". Both return results: [] with the real error in caveats.
+    On failure: an invalid trio, an out-of-range radius_km, center_lat, or
+    center_lon gives validation_error true and data_status "invalid_request".
+    An unreachable or unparsable PHIVOLCS list gives upstream_error true and
+    data_status "unavailable". Both return results: [] with the real error
+    in caveats.
 
     Args:
         min_magnitude: Minimum magnitude to include (default 1.0).
@@ -235,11 +240,29 @@ async def get_latest_earthquakes(
             validation_error=True,
             results=[],
         )
-    if radius_km is not None and radius_km <= 0:
+    if radius_km is not None and not (0 < radius_km <= MAX_RADIUS_KM):
         return failure_result(
             "PHIVOLCS",
             PHIVOLCS_EQ_LIST_URL,
-            "radius_km must be a positive number.",
+            f"radius_km must be above 0 and at most {MAX_RADIUS_KM}, got {radius_km}.",
+            license=PHIVOLCS_LICENSE,
+            validation_error=True,
+            results=[],
+        )
+    if center_lat is not None and not (-90.0 <= center_lat <= 90.0):
+        return failure_result(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            f"center_lat must be between -90 and 90, got {center_lat}.",
+            license=PHIVOLCS_LICENSE,
+            validation_error=True,
+            results=[],
+        )
+    if center_lon is not None and not (-180.0 <= center_lon <= 180.0):
+        return failure_result(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            f"center_lon must be between -180 and 180, got {center_lon}.",
             license=PHIVOLCS_LICENSE,
             validation_error=True,
             results=[],

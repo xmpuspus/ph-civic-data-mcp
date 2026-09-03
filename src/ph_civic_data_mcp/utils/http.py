@@ -140,6 +140,11 @@ async def fetch_with_retry(
                 health.record_success(host, latency_ms)
             elif response.status_code in RETRY_STATUSES or response.status_code >= 500:
                 health.record_failure(host, f"HTTP {response.status_code}")
+            elif response.status_code in (401, 403):
+                # A block or a rejected credential is the host failing us.
+                # Other 4xx (404, 400, 422) are the caller's own bad request,
+                # not a sign the host itself is down, so they stay unrecorded.
+                health.record_failure(host, f"HTTP {response.status_code}")
             return response
         except RETRYABLE_EXCEPTIONS as exc:
             last_exc = exc
