@@ -267,6 +267,7 @@ actually reports.
 | USGS FDSN | Philippine-region earthquakes, cross-checked against PHIVOLCS | Real-time global feed | 10 min | Public domain (USGS) |
 | NOAA IBTrACS | Historical tropical cyclone tracks through the Philippine AOR | Annual update | 24 h | Public domain (NOAA) |
 | World Bank Open Data | Philippine macroeconomic indicators | Annual; lag varies by indicator | 24 h | World Bank Open Data CC-BY 4.0 |
+| Official Gazette RSS | Proclamations, memorandum circulars, and other government issuances | New issuances posted the same day; feed rebuilds on every request | 20 min | Public, Official Gazette government record, RA 8293 section 176 default |
 <!-- source-matrix:end -->
 
 `PAGASA_API_TOKEN` is the only environment variable, and it is optional.

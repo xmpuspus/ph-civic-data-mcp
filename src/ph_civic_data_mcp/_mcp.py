@@ -55,6 +55,8 @@ mcp = FastMCP(
       browse_psa_catalog(path) walks it level by level when a keyword is not
       enough. Always describe before you query: every dimension needs explicit value codes, "all" and "*"
       are rejected, and one query is capped at 1000 cells.
+    - get_official_gazette_feed(page) reads the government's own RSS feed
+      of proclamations, memorandum circulars, and other issuances.
 
     Accountability:
     - flag_infra_anomalies — heuristic indicators

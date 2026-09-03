@@ -119,6 +119,13 @@ SOURCE_CATALOG: list[dict] = [
         "cache_ttl_seconds": 86400,
         "license": "World Bank Open Data CC-BY 4.0",
     },
+    {
+        "source": "Official Gazette RSS",
+        "source_url": "https://www.officialgazette.gov.ph/feed/",
+        "freshness": "New issuances posted the same day; feed rebuilds on every request",
+        "cache_ttl_seconds": 1200,
+        "license": "Public, Official Gazette government record, RA 8293 section 176 default",
+    },
 ]
 
 
@@ -332,6 +339,7 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import world_bank  # noqa: F401
     from ph_civic_data_mcp.sources import psa_catalog  # noqa: F401
     from ph_civic_data_mcp.sources import compare  # noqa: F401
+    from ph_civic_data_mcp.sources import gazette  # noqa: F401
 
 
 def main() -> None:
