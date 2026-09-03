@@ -4,6 +4,139 @@ All notable changes to `ph-civic-data-mcp` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-04
+
+`v0.7.0` adds two tools, `compare_areas` and `search_psa_catalog`, and raises
+the tool count from 32 to 34. It closes five items in `docs/latent-bugs.md`
+(6, 9, 10, 12, 18) and eight more defects found in review. Most of them let
+an upstream failure cache as a normal answer. `get_area_profile` now reports a resolved place's own population and
+poverty, with full provenance, plus a national reference for comparison. The
+release pipeline gains trusted publishing, pinned Actions and Docker images,
+and offline fixtures for six sources that had none. No existing tool name
+changed, and every new field is additive.
+
+### Added
+
+- **`search_psa_catalog(keyword, limit)`** searches all 2,900 PSA OpenSTAT
+  dataset titles and paths by keyword. An agent no longer needs to browse
+  the catalog level by level to find a table.
+- **`compare_areas(locations, metrics, format)`** lines up 2 to 5 places
+  into one row per place. When the rows carry different data vintages it
+  keeps the values, sets `comparable: false`, and names both years in a
+  caveat. `format="csv"` adds a CSV export.
+- **`get_area_profile` provenance.** Demographics now carry
+  `population_geography`, `population_geography_level`,
+  `population_psgc_code`, `population_reference_date`, and `poverty_area`
+  (the province a city's poverty figure describes). A new
+  `national_reference` block reports the country's population and poverty,
+  the place's population share, and its poverty gap in points.
+- **Radius search on both earthquake tools.** `get_latest_earthquakes` and
+  `get_usgs_earthquakes_ph` accept `center_lat`, `center_lon`, and
+  `radius_km` together, and a matched event carries `distance_km`.
+- **`get_data_freshness` health reporting.** It now returns `source_health`
+  (per-host success count, failure count, and latency) and `cache_age` for
+  every cache.
+- **`data_status` on every tool.** Each response now names one of
+  `success`, `empty`, `unavailable`, `indeterminate`, or `invalid_request`.
+- **Procurement rule provenance.** `get_procurement_summary` and
+  `summarize_infra_spending` carry `rules_evaluated` and
+  `rules_not_computable`, naming which breakdowns ran and which could not.
+- **Offline fixtures** for `ibtracs`, `usgs`, `modis_ndvi`, `nasa_power`,
+  `open_meteo_aq`, and `pagasa`. None of the six had an offline test before
+  this release.
+- **A version-consistency test** checks that `__version__`,
+  `manifest.json`, and both `server.json` version fields agree, so a
+  missed manual bump fails CI instead of shipping quietly.
+- **`publish.yml`** runs trusted publishing, build attestation, and an SBOM
+  on a GitHub release. It cannot run until a PyPI maintainer registers the
+  trusted publisher.
+- **`.github/dependabot.yml`** tracks GitHub Actions and `uv` dependencies
+  (`pyproject.toml` and `uv.lock`) weekly.
+- **`docs/fastmcp-4-evaluation.md`** records the decision to stay on
+  FastMCP 3.x for this release. Nine of ten breaking changes in 4.0 do not
+  touch this project.
+
+### Changed
+
+- **`get_area_profile` demographics.** A resolved city or province now
+  reports its own population and poverty instead of the containing
+  region's total. Tacloban shows 259,353 instead of Region VIII's
+  4,625,929. Cebu City shows 965,332 instead of the province's 6,640,875.
+  Poverty falls back to the containing province when no city-level table
+  exists.
+- **`get_area_profile`** withholds `infra_notices_per_100k_population`
+  when the PhilGEPS sample has fewer than 500 notices, and reports
+  `infra_sample_size` and `infra_coverage_caveat` beside it.
+  `summarize_infra_spending` exposes the same `sample_size` and
+  `sufficient_for_per_capita` verdict.
+- **A cold `get_area_profile` call** now takes about 15 seconds. It fans
+  out more PSA discovery calls, including the new national population and
+  poverty lookups, through the same 10-per-10-second rate limit.
+- **`resolve_ph_location`** prefers the city form for Cebu, Bacolod, Davao,
+  and Iloilo. A plain municipality now reports as municipality instead of
+  city.
+- **`fetch_with_retry`** retries 8 transient httpx exceptions, up from 3,
+  each with jitter.
+- **IBTrACS** streams the CSV response row by row instead of buffering the
+  whole body first.
+- **The hazard-overlap stoplist** gains 11 region names, pulled live from
+  the 17 official PSGC regions.
+- **This release retires `by_funding_source`.** PhilGEPS never publishes
+  a funding-source field, so every notice reported "unknown".
+- **`by_region`** now reads a region token out of the agency string, for
+  example a `DPWH - Region III` token, instead of always reporting
+  "unspecified".
+- **The sdist** shrinks from 5.6 MB to 88 KB. Hatchling now ships only the
+  package source, README, and LICENSE.
+- **The Docker image** builds in two stages, runs as a non-root user, pins
+  its base image and the `uv` binary by digest, and adds a healthcheck.
+- **The weekly live-drift workflow** files one issue on a failure, or
+  comments on the open one, instead of leaving the failure in the Actions
+  tab only.
+
+### Fixed
+
+- **World Bank and MODIS** cached a degenerate 200 response as a real "no
+  data" answer for the full TTL. Both now raise on a bad payload and cache
+  only a genuine result.
+- **Open-Meteo air quality** requested Manila local time from the upstream
+  API but labelled every reading UTC, an 8-hour error. It now requests UTC
+  directly.
+- **PAGASA 0 mm rainfall and 0 degree readings** fell to a fallback key,
+  because a falsy check treated a real zero the same as a missing value.
+  Both readings now survive.
+- **A list-shaped PAGASA payload crashed the whole tool**, because a
+  `.get()` call ran before the isinstance guard meant to handle that shape.
+- **`_pick_latest_table`** served an older backcast table after a
+  transient failure on the current-era table, and cached it as "latest"
+  for 24 hours. It now raises on a real fetch failure and only skips a
+  candidate on a genuine 404.
+- **The PSGC mirror sends `regionCode` but never `regionName`**, so
+  `PSGCRecord.region_name` always read `None`. A cached region-code to
+  name lookup now fills it.
+- **N concurrent cold PSGC calls fired N duplicate fetches.**
+  `_fetch_level` and `_fetch_one` now single-flight behind a per-key lock,
+  so concurrent callers share one fetch.
+- **The hazard-overlap stoplist comment wrongly claimed the filter
+  excluded "surigao".** Tests already pinned province names like Surigao
+  surviving the filter as real signal. The code was already right. This
+  release corrects only the comment.
+
+### Security
+
+- **PSGC code shape validation closes a path-traversal gap.**
+  `get_location_hierarchy`, `_fetch_one`, `_fetch_barangay_by_code`, and
+  `lookup_psgc_code` only stripped a caller's code before it reached a
+  URL. A malformed code (`..` segments, percent-encoding) now returns
+  `validation_error` with no network call.
+- Every GitHub Actions `uses:` line now pins a full commit SHA, with the
+  tag kept as a comment.
+- The Dockerfile pins its base image and the `uv` binary by digest
+  instead of a mutable tag.
+- The sdist excludes every non-package file (tests, `.claude/`, workflow
+  files, demo GIFs), so only the package source, README, and LICENSE ship
+  to PyPI.
+
 ## [0.6.1] - 2026-09-03
 
 Trust hotfix. `get_population_stats` returned no figure for every input since
