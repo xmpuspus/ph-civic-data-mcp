@@ -170,6 +170,26 @@ async def test_compare_one_unresolved_location_is_indeterminate(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_compare_upstream_exception_leaves_a_row_with_no_resolved_name(monkeypatch):
+    async def _fake(location: str) -> dict:
+        if location == "Cebu City":
+            return _profile(name="Cebu City")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(compare, "get_area_profile", _fake)
+
+    out = await compare.compare_areas(["Cebu City", "Down Site"], metrics=["population"])
+
+    assert out["data_status"] == "indeterminate"
+    assert out["upstream_error"] is True
+    down_row = out["rows"][1]
+    assert down_row["resolved_name"] is None
+    assert down_row["population"] is None
+    assert out["blocks"]["Down Site"] == {"profile": "unavailable"}
+    assert any("RuntimeError" in c and "Down Site" in c for c in out["caveats"])
+
+
+@pytest.mark.asyncio
 async def test_compare_rejects_too_few_locations(monkeypatch):
     _install_never_called(monkeypatch)
     out = await compare.compare_areas(["Cebu City"])

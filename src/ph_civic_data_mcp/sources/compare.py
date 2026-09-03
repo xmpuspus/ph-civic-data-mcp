@@ -50,11 +50,7 @@ SOURCE_URL = (
 LICENSE = "Public - PSA OpenSTAT, PSGC, PhilGEPS, PHIVOLCS, PAGASA"
 
 # The two metrics that need a vintage check before rows count as comparable.
-# Each maps to the compare metric name that reports its year.
-_VINTAGE_METRICS = {
-    "population": "population_year",
-    "poverty_incidence_pct": "poverty_year",
-}
+_VINTAGE_METRICS = ("population", "poverty_incidence_pct")
 
 
 def _now() -> datetime:
