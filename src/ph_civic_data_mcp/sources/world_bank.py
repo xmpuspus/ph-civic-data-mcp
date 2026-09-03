@@ -130,7 +130,10 @@ async def _fetch_observations(code: str, per_page: int) -> tuple[str | None, lis
         total = int(metadata.get("total"))
     except (TypeError, ValueError):
         total = None
-    if not observations and total not in (0, None):
+    # total == 0 is the one degenerate case that is a real answer: the
+    # indicator truly has no data. A missing or unreadable total is not a
+    # confirmed zero, so it raises the same as a nonzero total with no rows.
+    if not observations and total != 0:
         raise WorldBankUpstreamError(
             f"World Bank returned {len(records)} rows with nothing usable for indicator "
             f"{code!r} (metadata total={metadata.get('total')!r}); not a real zero."
