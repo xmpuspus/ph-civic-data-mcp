@@ -11,6 +11,7 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 from ph_civic_data_mcp.models.climate import SolarClimate, SolarClimateDay
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import failure_result
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 NASA_POWER_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
@@ -39,6 +40,10 @@ def _sanitize(val: float | None) -> float | None:
     if val <= -999:
         return None
     return float(val)
+
+
+def _as_dict(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
 
 
 @mcp.tool(
@@ -110,24 +115,27 @@ async def get_solar_and_climate(
         response = await fetch_with_retry(CLIENT, "GET", NASA_POWER_URL, params=params)
         response.raise_for_status()
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError(f"NASA POWER returned a non-object body: {type(payload).__name__}")
     except Exception as exc:
         log_stderr(f"NASA POWER error: {exc}")
-        return {
-            "latitude": latitude,
-            "longitude": longitude,
-            "start_date": sd.isoformat(),
-            "end_date": ed.isoformat(),
-            "days": [],
-            "source": "NASA POWER",
-            "data_retrieved_at": _now().isoformat(),
-            "caveats": [f"NASA POWER fetch failed: {type(exc).__name__}"],
-        }
+        return failure_result(
+            "NASA POWER",
+            NASA_POWER_URL,
+            f"NASA POWER fetch failed: {type(exc).__name__}: {exc}",
+            latitude=latitude,
+            longitude=longitude,
+            start_date=sd.isoformat(),
+            end_date=ed.isoformat(),
+            days=[],
+        )
 
-    data = payload.get("properties", {}).get("parameter", {}) or {}
-    solar = data.get("ALLSKY_SFC_SW_DWN", {}) or {}
-    t2m = data.get("T2M", {}) or {}
-    precip = data.get("PRECTOTCORR", {}) or {}
-    wind = data.get("WS2M", {}) or {}
+    properties = _as_dict(payload.get("properties"))
+    data = _as_dict(properties.get("parameter"))
+    solar = _as_dict(data.get("ALLSKY_SFC_SW_DWN"))
+    t2m = _as_dict(data.get("T2M"))
+    precip = _as_dict(data.get("PRECTOTCORR"))
+    wind = _as_dict(data.get("WS2M"))
 
     dates = sorted(set(solar) | set(t2m) | set(precip) | set(wind))
     days: list[SolarClimateDay] = []

@@ -11,6 +11,7 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 from ph_civic_data_mcp.models.climate import VegetationIndex, VegetationSample
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import DATA_STATUS_UNAVAILABLE, failure_result
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 ORNL_BASE = "https://modis.ornl.gov/rst/api/v1"
@@ -33,9 +34,21 @@ def _modis_to_date(s: str) -> str:
     return s
 
 
-async def _fetch_subset(
-    latitude: float, longitude: float, start: str, end: str, band: str
-) -> dict | None:
+class MODISUpstreamError(RuntimeError):
+    """An ORNL MODIS subset fetch failed, or sent a body with no dimensions.
+
+    Raised so a transient outage can never enter the 24h TTL cache as if it
+    were a real "no composite over this pixel" answer.
+    """
+
+
+async def _fetch_subset(latitude: float, longitude: float, start: str, end: str, band: str) -> dict:
+    """One band's MODIS subset. Raises MODISUpstreamError on a bad fetch.
+
+    A subset with no composites in it (`{"subset": []}`) is a real, cacheable
+    answer: the pixel may be over water, or the window has no completed
+    16-day composite. Only a transport failure or a non-object body raises.
+    """
     url = f"{ORNL_BASE}/{PRODUCT}/subset"
     params = {
         "latitude": latitude,
@@ -51,10 +64,13 @@ async def _fetch_subset(
             CLIENT, "GET", url, params=params, headers={"Accept": "application/json"}
         )
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
     except Exception as exc:
         log_stderr(f"MODIS ORNL error ({band}): {exc}")
-        return None
+        raise MODISUpstreamError(f"{type(exc).__name__}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise MODISUpstreamError(f"ORNL returned a non-object body for band {band!r}")
+    return payload
 
 
 @mcp.tool(
@@ -115,13 +131,30 @@ async def get_vegetation_index(
     start_m = _date_to_modis(sd)
     end_m = _date_to_modis(ed)
 
-    ndvi_payload = await _fetch_subset(latitude, longitude, start_m, end_m, NDVI_BAND.lstrip("_"))
-    evi_payload = await _fetch_subset(latitude, longitude, start_m, end_m, EVI_BAND.lstrip("_"))
+    band_errors: list[str] = []
+    payloads: list[dict] = []
+    for band in (NDVI_BAND.lstrip("_"), EVI_BAND.lstrip("_")):
+        try:
+            payloads.append(await _fetch_subset(latitude, longitude, start_m, end_m, band))
+        except MODISUpstreamError as exc:
+            band_errors.append(str(exc))
+
+    if not payloads:
+        # Both bands failed. Never cache: a transient outage must not pin "no
+        # vegetation here" for the 24h TTL.
+        return failure_result(
+            "NASA MODIS via ORNL DAAC",
+            f"{ORNL_BASE}/{PRODUCT}/subset",
+            f"MODIS ORNL subset failed for both bands: {'; '.join(band_errors)}",
+            latitude=latitude,
+            longitude=longitude,
+            product=PRODUCT,
+            band="NDVI+EVI (250m, 16-day composite)",
+            samples=[],
+        )
 
     samples: dict[str, VegetationSample] = {}
-    for payload in (ndvi_payload, evi_payload):
-        if not payload:
-            continue
+    for payload in payloads:
         subset = payload.get("subset", []) or []
         for entry in subset:
             composite_date = entry.get("calendar_date") or entry.get("modis_date")
@@ -157,11 +190,22 @@ async def get_vegetation_index(
         data_retrieved_at=_now(),
     ).model_dump(mode="json")
 
+    caveats: list[str] = list(band_errors)
     if not ordered:
-        result["caveats"] = [
+        caveats.append(
             "No MODIS composites returned. Pixel may be over water, or the date "
             "range may not include a completed 16-day composite."
-        ]
+        )
+    if caveats:
+        result["caveats"] = caveats
+
+    if band_errors:
+        # One band failed while the other came back. The samples that did
+        # arrive are real, but this is a partial answer, so it must not
+        # enter the cache under the missing band's data.
+        result["data_status"] = DATA_STATUS_UNAVAILABLE
+        result["upstream_error"] = True
+        return result
 
     cache[ckey] = result
     return result
