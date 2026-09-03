@@ -154,3 +154,19 @@ async def test_a_non_dict_properties_block_is_reported_as_indeterminate(monkeypa
     assert result["upstream_error"] is True
     assert result["days"] == []
     assert len(CACHES["nasa_power"]) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lat,lon", [(999.0, 121.0), (14.6, 999.0), (-91.0, 121.0), (14.6, 181.0)])
+async def test_out_of_range_coordinates_are_rejected_before_any_fetch(monkeypatch, lat, lon):
+    """Codex cross-model finding: (999, 999) reached NASA POWER and its 422 read as an outage."""
+
+    def _unexpected(client, method, url, **kwargs):
+        raise AssertionError("fetch_with_retry must not be called for out-of-range coordinates")
+
+    monkeypatch.setattr(power_module, "fetch_with_retry", _unexpected)
+    result = await power_module.get_solar_and_climate(lat, lon, "2026-04-01", "2026-04-02")
+    assert result["validation_error"] is True
+    assert result["upstream_error"] is False
+    assert result["data_status"] == "invalid_request"
+    assert len(CACHES["nasa_power"]) == 0
