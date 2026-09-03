@@ -152,7 +152,9 @@ async def search_procurement(
 
     On failure: returns {results: [], upstream_error: true, data_status:
     "unavailable", caveats: [...]} instead of a bare list, so an outage is
-    never read as "no matching notices". No validation_error path exists.
+    never read as "no matching notices". A date_from or date_to that does
+    not parse returns {results: [], validation_error: true, data_status:
+    "invalid_request"} before any fetch, naming the bad value.
 
     Args:
         keyword: Search term matched against title + agency + classification.
@@ -165,6 +167,27 @@ async def search_procurement(
     Returns a list of matching notices on success.
     """
     limit = max(1, min(int(limit), 100))
+
+    from_date = _parse_phil_date(date_from) if date_from else None
+    if date_from and from_date is None:
+        return failure_result(
+            "PhilGEPS",
+            PHILGEPS_INDEX_URL,
+            f"date_from {date_from!r} is not a valid date; use YYYY-MM-DD.",
+            license=PHILGEPS_LICENSE,
+            validation_error=True,
+            results=[],
+        )
+    to_date = _parse_phil_date(date_to) if date_to else None
+    if date_to and to_date is None:
+        return failure_result(
+            "PhilGEPS",
+            PHILGEPS_INDEX_URL,
+            f"date_to {date_to!r} is not a valid date; use YYYY-MM-DD.",
+            license=PHILGEPS_LICENSE,
+            validation_error=True,
+            results=[],
+        )
 
     try:
         records = await _fetch_notices()
@@ -181,9 +204,6 @@ async def search_procurement(
     kw_lc = keyword.lower().strip() if keyword else ""
     agency_lc = agency.lower().strip() if agency else None
     region_lc = region.lower().strip() if region else None
-
-    from_date = _parse_phil_date(date_from) if date_from else None
-    to_date = _parse_phil_date(date_to) if date_to else None
 
     results: list[dict] = []
     undated_dropped = 0
@@ -252,7 +272,9 @@ async def get_procurement_summary(
 
     On failure: data_status "unavailable", upstream_error true, totals zero
     and by_mode/by_region/top_agencies empty, with the real PhilGEPS error
-    in caveats. No validation_error path exists.
+    in caveats. A year that is not a plain integer returns validation_error:
+    true and data_status "invalid_request" before any fetch, naming the
+    bad value.
 
     Args:
         agency: Partial agency match filter.
@@ -263,6 +285,43 @@ async def get_procurement_summary(
     Returns:
         Totals, breakdown by procurement mode, top agencies, reference period.
     """
+    if year is not None:
+        try:
+            year = int(year)
+        except (TypeError, ValueError):
+            return failure_result(
+                "PhilGEPS",
+                PHILGEPS_INDEX_URL,
+                f"year {year!r} is not a valid year; use a 4-digit integer, e.g. 2025.",
+                license=PHILGEPS_LICENSE,
+                validation_error=True,
+                total_count=0,
+                total_value_php=None,
+                by_mode={},
+                by_region={},
+                top_agencies=[],
+                reference_period={"from": None, "to": None},
+                note=(
+                    "Summary computed over latest ~100 PhilGEPS bid notices (6h cache). "
+                    "Approved budget totals are not published in the open listing."
+                ),
+                rules_evaluated=[],
+                rules_not_computable=[
+                    {
+                        "rule": "by_mode",
+                        "reason": "year did not parse; no notices were aggregated.",
+                    },
+                    {
+                        "rule": "by_region",
+                        "reason": "year did not parse; no notices were aggregated.",
+                    },
+                    {
+                        "rule": "total_value_php",
+                        "reason": "PhilGEPS open notices do not publish approved budget amounts.",
+                    },
+                ],
+            )
+
     retrieved_at = _now()
     try:
         records = await _fetch_notices()

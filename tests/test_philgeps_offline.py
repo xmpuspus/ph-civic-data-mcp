@@ -189,3 +189,41 @@ async def test_get_procurement_summary_year_filter_excludes_undated_record(monke
     summary = await philgeps_module.get_procurement_summary(year=2026)
     assert summary["total_count"] == 1
     assert any("1" in c for c in summary["caveats"])
+
+
+@pytest.mark.asyncio
+async def test_search_procurement_bad_date_from_is_a_validation_error(monkeypatch):
+    """A date_from that fails to parse must not read as "date_from was
+    omitted", which used to return every notice. No fetch runs on a
+    rejected request."""
+
+    async def _boom():
+        raise AssertionError("search_procurement must not fetch on a bad date_from")
+
+    monkeypatch.setattr(philgeps_module, "_fetch_notices", _boom)
+
+    result = await philgeps_module.search_procurement(keyword="", date_from="not-a-date")
+
+    assert result["validation_error"] is True
+    assert result["upstream_error"] is False
+    assert result["results"] == []
+    assert "not-a-date" in " ".join(result["caveats"])
+
+
+@pytest.mark.asyncio
+async def test_get_procurement_summary_bad_year_is_a_validation_error(monkeypatch):
+    """A year that is not a plain integer must not silently exclude every
+    record while reporting data_status "success". No fetch runs on a
+    rejected request."""
+
+    async def _boom():
+        raise AssertionError("get_procurement_summary must not fetch on a bad year")
+
+    monkeypatch.setattr(philgeps_module, "_fetch_notices", _boom)
+
+    summary = await philgeps_module.get_procurement_summary(year="not-a-year")
+
+    assert summary["validation_error"] is True
+    assert summary["upstream_error"] is False
+    assert summary["total_count"] == 0
+    assert "not-a-year" in " ".join(summary["caveats"])
