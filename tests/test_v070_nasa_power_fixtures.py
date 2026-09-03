@@ -170,3 +170,37 @@ async def test_out_of_range_coordinates_are_rejected_before_any_fetch(monkeypatc
     assert result["upstream_error"] is False
     assert result["data_status"] == "invalid_request"
     assert len(CACHES["nasa_power"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_null_properties_field_is_reported_as_indeterminate(monkeypatch):
+    """Codex cross-model finding: {"properties": null} passed the old
+    non-dict guard, since null is not "present but wrong type", and became
+    days: [] cached as a false empty answer."""
+
+    async def _drifted(client, method, url, **kwargs):
+        return _json_response(method, url, {"properties": None})
+
+    monkeypatch.setattr(power_module, "fetch_with_retry", _drifted)
+
+    result = await power_module.get_solar_and_climate(14.5995, 120.9842, "2026-04-01", "2026-04-02")
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert result["days"] == []
+    assert len(CACHES["nasa_power"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_bad_start_date_string_is_rejected_before_any_fetch(monkeypatch):
+    """Codex cross-model finding: a start_date that failed to parse fell
+    back to the default window instead of failing the request."""
+
+    def _unexpected(client, method, url, **kwargs):
+        raise AssertionError("fetch_with_retry must not be called for an unparsable start_date")
+
+    monkeypatch.setattr(power_module, "fetch_with_retry", _unexpected)
+
+    result = await power_module.get_solar_and_climate(14.5995, 120.9842, "not-a-date", "2026-04-02")
+    assert result["validation_error"] is True
+    assert result["data_status"] == "invalid_request"
+    assert len(CACHES["nasa_power"]) == 0

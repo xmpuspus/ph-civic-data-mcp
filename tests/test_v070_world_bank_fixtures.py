@@ -152,6 +152,34 @@ async def test_a_non_numeric_row_is_skipped_and_named_in_a_caveat(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_nan_value_is_skipped_and_named_in_a_caveat(monkeypatch):
+    """Codex cross-model finding: float("NaN") does not raise, so a NaN
+    observation passed the numeric coercion and cached as a null value."""
+
+    async def _nan_row(client, method, url, **kwargs):
+        return _wb_response(
+            method,
+            url,
+            [
+                {"page": 1, "pages": 1, "total": 2},
+                [
+                    {"date": "2025", "value": "NaN", "indicator": {"value": "GDP"}},
+                    {"date": "2024", "value": 123.4, "indicator": {"value": "GDP"}},
+                ],
+            ],
+        )
+
+    monkeypatch.setattr(wb, "fetch_with_retry", _nan_row)
+
+    result = await wb.get_world_bank_indicator("NY.GDP.MKTP.CD", per_page=5)
+    assert not result.get("upstream_error")
+    assert len(result["observations"]) == 1
+    assert result["observations"][0]["value"] == pytest.approx(123.4)
+    assert any("1" in c and "skip" in c.lower() for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["world_bank"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_every_row_non_numeric_is_never_cached(monkeypatch):
     """Every row fails to convert. Treat the response as degenerate, not a real zero."""
 
