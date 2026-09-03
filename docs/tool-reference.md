@@ -711,6 +711,28 @@ first. Accepts a World Bank code (`NY.GDP.MKTP.CD`) or an alias (`gdp`,
 On failure: an unresolvable code or alias returns `validation_error: true`
 with no upstream call.
 
+### search_hdx_datasets
+
+Finds Philippine datasets on the Humanitarian Data Exchange (HDX) by
+keyword. Each dataset carries its own license, so read `license_id` before
+reuse. New in 0.8.0.
+
+```python
+search_hdx_datasets(query: str, rows: int = 10) -> dict
+```
+
+Returns: `query`, `total_count`, `datasets` (each with `name`, `title`,
+`organization`, `license_id`, `license_title`, `license_url`,
+`last_modified`, `num_resources`, `hdx_url`, and up to 20 `resources` with
+`name`, `format`, `url`, `size`, `last_modified`), `rows` (1 to 50, default
+10). Results sort by `metadata_modified` descending. A query with no match
+returns `data_status: "empty"` with an empty list.
+
+On failure: an empty query, a query over 200 characters, or `rows` outside
+1 to 50 returns `validation_error: true`. A body whose `success` field is
+not true, or whose `results` is not a list, returns
+`data_status: "indeterminate"`. An outage returns `upstream_error: true`.
+
 ## Server
 
 ### get_data_freshness

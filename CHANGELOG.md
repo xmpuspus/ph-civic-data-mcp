@@ -11,6 +11,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `get_flood_forecast`: daily river discharge forecast from the Open-Meteo
   Flood API (GloFAS model) for a resolved place, up to 30 days ahead and 30
   days back, CC BY 4.0.
+- `search_hdx_datasets`: keyword search over the Philippine datasets on the
+  Humanitarian Data Exchange (HDX) CKAN API, with each dataset's own
+  `license_id`, resources, and last-modified date passed through.
 
 ## [0.7.0] - 2026-09-04
 
