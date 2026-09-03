@@ -352,7 +352,10 @@ async def test_subsistence_no_matching_incidence_measure_is_withheld_not_a_guess
         return "https://example.test/subsistence.px", subsistence_meta
 
     async def _post(url, query):
-        return {"columns": [{"code": "x", "type": "c"}], "data": [{"key": ["0"], "values": ["18.1"]}]}
+        return {
+            "columns": [{"code": "x", "type": "c"}],
+            "data": [{"key": ["0"], "values": ["18.1"]}],
+        }
 
     monkeypatch.setattr(psa_module, "_discover_poverty_table", _fake_discover)
     monkeypatch.setattr(psa_module, "_discover_subsistence_table", _fake_subsistence)
@@ -431,7 +434,7 @@ def _install_health_catalog(monkeypatch, entries, fetch_calls):
 
 @pytest.mark.asyncio
 async def test_health_whitespace_indicator_behaves_like_the_default_set(monkeypatch):
-    """" " is truthy, so it once skipped the curated default set. The
+    """ " " is truthy, so it once skipped the curated default set. The
     substring check then matched it against every table, since "" is a
     substring of anything. A blank indicator must behave like None."""
     entries = [
@@ -458,9 +461,7 @@ async def test_health_whitespace_indicator_behaves_like_the_default_set(monkeypa
 async def test_health_broad_indicator_caps_metadata_fetches_at_ten(monkeypatch):
     """With no bound, a broad keyword fanned out one metadata fetch per
     matched table, against PSA's 10-per-10-second rate limit."""
-    entries = [
-        {"id": f"table{i}.px", "type": "t", "text": f"Health Table {i}"} for i in range(25)
-    ]
+    entries = [{"id": f"table{i}.px", "type": "t", "text": f"Health Table {i}"} for i in range(25)]
     fetch_calls: list[str] = []
     _install_health_catalog(monkeypatch, entries, fetch_calls)
     CACHES["psa_health"].clear()

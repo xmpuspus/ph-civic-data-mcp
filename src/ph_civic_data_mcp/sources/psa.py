@@ -1999,8 +1999,7 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
         # No bound here made a broad keyword fan out one metadata fetch per
         # matched table, against PSA's 10-per-10-second rate limit.
         cap_caveat = (
-            f"{len(chosen)} PSA Health tables matched; fetching only the first "
-            f"{HEALTH_MATCH_CAP}."
+            f"{len(chosen)} PSA Health tables matched; fetching only the first {HEALTH_MATCH_CAP}."
         )
         chosen = chosen[:HEALTH_MATCH_CAP]
 
