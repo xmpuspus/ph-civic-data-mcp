@@ -138,3 +138,48 @@ async def test_a_body_with_no_subset_list_raises_instead_of_reading_as_empty(mon
     result = await modis_module.get_vegetation_index(15.58, 121.0, "2026-08-01", "2026-08-15")
     assert result["upstream_error"] is True
     assert len(CACHES["modis_ndvi"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_out_of_range_coordinates_are_rejected_before_any_fetch(monkeypatch):
+    """Codex cross-model finding: (999, 999) reached ORNL, and the empty
+    subset that came back read as a plausible 'pixel may be over water'
+    answer."""
+
+    def _unexpected(client, method, url, **kwargs):
+        raise AssertionError("fetch_with_retry must not be called for out-of-range coordinates")
+
+    monkeypatch.setattr(modis_module, "fetch_with_retry", _unexpected)
+
+    result = await modis_module.get_vegetation_index(999.0, 999.0, "2026-08-01", "2026-08-15")
+    assert result["validation_error"] is True
+    assert result["data_status"] == "invalid_request"
+    assert len(CACHES["modis_ndvi"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_both_bands_all_non_numeric_values_is_upstream_error_never_cached(monkeypatch):
+    """Codex cross-model finding: rows with only non-numeric strings in
+    'data' were discarded silently and read as a real empty answer."""
+
+    bad_ndvi = {
+        "subset": [
+            {"calendar_date": "2026-08-13", "band": "250m_16_days_NDVI", "data": ["bad-number"]}
+        ]
+    }
+    bad_evi = {
+        "subset": [
+            {"calendar_date": "2026-08-13", "band": "250m_16_days_EVI", "data": ["bad-number"]}
+        ]
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        band = kwargs.get("params", {}).get("band", "")
+        payload = bad_ndvi if "NDVI" in band else bad_evi
+        return _json_response(method, url, payload)
+
+    monkeypatch.setattr(modis_module, "fetch_with_retry", _fake)
+
+    result = await modis_module.get_vegetation_index(15.58, 121.0, "2026-08-01", "2026-08-15")
+    assert result["upstream_error"] is True
+    assert len(CACHES["modis_ndvi"]) == 0

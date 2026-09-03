@@ -76,6 +76,38 @@ async def _fetch_subset(latitude: float, longitude: float, start: str, end: str,
     return payload
 
 
+def _parse_band_entries(band: str, payload: dict) -> list[tuple[str, str, float]]:
+    """(composite_date, band_name, raw_value) tuples for one band's subset.
+
+    Raises MODISUpstreamError when the subset has rows but not one of them
+    parses to a number. Every value coming back as a non-numeric string is
+    malformed upstream data, not a real "no vegetation here" answer. A fill
+    value (raw_val <= -3000, a cloud or water mask) still parses fine here,
+    so an all-fill window stays the genuine empty success it already was.
+    """
+    subset = payload.get("subset", []) or []
+    rows_with_data = 0
+    entries: list[tuple[str, str, float]] = []
+    for entry in subset:
+        composite_date = entry.get("calendar_date") or entry.get("modis_date")
+        if not composite_date:
+            continue
+        raw = entry.get("data") or []
+        if not raw:
+            continue
+        rows_with_data += 1
+        try:
+            raw_val = float(raw[0])
+        except (TypeError, ValueError):
+            continue
+        entries.append((composite_date, entry.get("band", ""), raw_val))
+    if rows_with_data and not entries:
+        raise MODISUpstreamError(
+            f"ORNL sent {rows_with_data} row(s) for band {band!r} with no numeric value in any of them."
+        )
+    return entries
+
+
 @mcp.tool(
     title="MODIS vegetation index at a point",
     tags={"modis", "nasa", "philippines", "vegetation"},
@@ -106,8 +138,11 @@ async def get_vegetation_index(
     On failure: both MODIS bands failing returns data_status "unavailable",
     upstream_error true, samples [], and both band errors in caveats. One
     band failing still returns the other band's samples, but data_status
-    stays "unavailable" with upstream_error true. A pixel with no composite
-    in range, such as one over water, is a real success with samples [].
+    stays "unavailable" with upstream_error true. A band whose rows carry no
+    numeric value counts as that band failing. A pixel with no composite in
+    range, such as one over water, is a real success with samples []. A
+    latitude or longitude out of range returns data_status "invalid_request",
+    with validation_error true and samples [].
 
     Args:
         latitude: Decimal degrees, WGS84.
@@ -115,6 +150,20 @@ async def get_vegetation_index(
         start_date: ISO date (YYYY-MM-DD). Defaults to ~90 days ago.
         end_date: ISO date (YYYY-MM-DD). Defaults to today.
     """
+    if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+        return failure_result(
+            "NASA MODIS via ORNL DAAC",
+            f"{ORNL_BASE}/{PRODUCT}/subset",
+            f"latitude {latitude} or longitude {longitude} is out of range. "
+            "Latitude must be -90 to 90. Longitude must be -180 to 180.",
+            validation_error=True,
+            latitude=latitude,
+            longitude=longitude,
+            product=PRODUCT,
+            band="NDVI+EVI (250m, 16-day composite)",
+            samples=[],
+        )
+
     today = _now().date()
     try:
         sd = date_cls.fromisoformat(start_date) if start_date else today - timedelta(days=90)
@@ -144,10 +193,10 @@ async def get_vegetation_index(
     end_m = _date_to_modis(ed)
 
     band_errors: list[str] = []
-    payloads: list[dict] = []
+    payloads: list[tuple[str, dict]] = []
     for band in (NDVI_BAND.lstrip("_"), EVI_BAND.lstrip("_")):
         try:
-            payloads.append(await _fetch_subset(latitude, longitude, start_m, end_m, band))
+            payloads.append((band, await _fetch_subset(latitude, longitude, start_m, end_m, band)))
         except MODISUpstreamError as exc:
             band_errors.append(str(exc))
 
@@ -166,23 +215,16 @@ async def get_vegetation_index(
         )
 
     samples: dict[str, VegetationSample] = {}
-    for payload in payloads:
-        subset = payload.get("subset", []) or []
-        for entry in subset:
-            composite_date = entry.get("calendar_date") or entry.get("modis_date")
-            if not composite_date:
-                continue
-            raw = entry.get("data") or []
-            if not raw:
-                continue
-            try:
-                raw_val = float(raw[0])
-            except (TypeError, ValueError):
-                continue
+    for band, payload in payloads:
+        try:
+            entries = _parse_band_entries(band, payload)
+        except MODISUpstreamError as exc:
+            band_errors.append(str(exc))
+            continue
+        for composite_date, band_name, raw_val in entries:
             if raw_val <= -3000:
                 continue
             value = raw_val * NDVI_SCALE
-            band_name = entry.get("band", "")
             sample = samples.setdefault(
                 composite_date, VegetationSample(composite_date=composite_date)
             )

@@ -79,12 +79,13 @@ async def get_solar_and_climate(
 
     On failure: an upstream fetch failure or a non-object response body
     returns data_status "unavailable", with upstream_error true, days [],
-    and the real error text in caveats. A non-dict properties or parameter
-    field returns data_status "indeterminate", with upstream_error true and
-    days []. A bad start_date or end_date string falls back to the default
-    window instead of failing. An end_date before start_date, a span over
-    366 days, or a latitude or longitude out of range, returns data_status
-    "invalid_request", with validation_error true and days [].
+    and the real error text in caveats. A properties or parameter field
+    that is missing, null, or not an object returns data_status
+    "indeterminate", with upstream_error true and days []. A start_date or
+    end_date that does not parse as YYYY-MM-DD, an end_date before
+    start_date, a span over 366 days, or a latitude or longitude out of
+    range, returns data_status "invalid_request", with validation_error true
+    and days [].
 
     Args:
         latitude: Decimal degrees, WGS84.
@@ -108,13 +109,39 @@ async def get_solar_and_climate(
         )
 
     today = _now().date()
-    try:
-        sd = date_cls.fromisoformat(start_date) if start_date else today - timedelta(days=14)
-    except ValueError:
+    if start_date is not None:
+        try:
+            sd = date_cls.fromisoformat(start_date)
+        except ValueError:
+            return failure_result(
+                "NASA POWER",
+                NASA_POWER_URL,
+                f"start_date {start_date!r} is not a valid YYYY-MM-DD date.",
+                validation_error=True,
+                latitude=latitude,
+                longitude=longitude,
+                start_date=start_date,
+                end_date=end_date,
+                days=[],
+            )
+    else:
         sd = today - timedelta(days=14)
-    try:
-        ed = date_cls.fromisoformat(end_date) if end_date else today
-    except ValueError:
+    if end_date is not None:
+        try:
+            ed = date_cls.fromisoformat(end_date)
+        except ValueError:
+            return failure_result(
+                "NASA POWER",
+                NASA_POWER_URL,
+                f"end_date {end_date!r} is not a valid YYYY-MM-DD date.",
+                validation_error=True,
+                latitude=latitude,
+                longitude=longitude,
+                start_date=start_date,
+                end_date=end_date,
+                days=[],
+            )
+    else:
         ed = today
 
     if ed < sd:
@@ -189,11 +216,12 @@ async def get_solar_and_climate(
         )
 
     raw_properties = payload.get("properties")
-    if raw_properties is not None and not isinstance(raw_properties, dict):
+    if raw_properties is None or not isinstance(raw_properties, dict):
         return failure_result(
             "NASA POWER",
             NASA_POWER_URL,
-            f"NASA POWER sent a non-object 'properties' field: {type(raw_properties).__name__}.",
+            f"NASA POWER sent a missing or non-object 'properties' field: "
+            f"{type(raw_properties).__name__}.",
             data_status=DATA_STATUS_INDETERMINATE,
             latitude=latitude,
             longitude=longitude,
@@ -204,11 +232,12 @@ async def get_solar_and_climate(
     properties = _as_dict(raw_properties)
 
     raw_parameter = properties.get("parameter")
-    if raw_parameter is not None and not isinstance(raw_parameter, dict):
+    if raw_parameter is None or not isinstance(raw_parameter, dict):
         return failure_result(
             "NASA POWER",
             NASA_POWER_URL,
-            f"NASA POWER sent a non-object 'parameter' field: {type(raw_parameter).__name__}.",
+            f"NASA POWER sent a missing or non-object 'parameter' field: "
+            f"{type(raw_parameter).__name__}.",
             data_status=DATA_STATUS_INDETERMINATE,
             latitude=latitude,
             longitude=longitude,

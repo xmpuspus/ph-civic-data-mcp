@@ -48,6 +48,21 @@ ERDDAP_COLUMNS = [
 PAR_MIN_LAT, PAR_MAX_LAT = 5.0, 25.0
 PAR_MIN_LNG, PAR_MAX_LNG = 115.0, 135.0
 
+# Every column _accumulate_storm reads by name. A drifted header missing one
+# of these parses every row to nothing, and the old code read that silently
+# as a legitimate zero-storm season.
+REQUIRED_COLUMNS = {"sid", "name", "season", "basin", "iso_time", "latitude", "longitude"}
+WIND_COLUMNS = {"wmo_wind", "usa_wind", "tokyo_wind"}
+PRESSURE_COLUMNS = {"wmo_pres", "usa_pres", "tokyo_pres"}
+
+
+class IBTrACSSchemaError(RuntimeError):
+    """The ERDDAP CSV header is missing a column the parser depends on.
+
+    Raised right after the header row is read, so a drifted header returns
+    an upstream_error instead of a cached, silently empty result.
+    """
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -184,6 +199,19 @@ async def _stream_storms(url: str) -> tuple[int, dict[str, dict]]:
                     row = next(csv.reader([raw_line]))
                     if header is None:
                         header = row
+                        missing = REQUIRED_COLUMNS - set(header)
+                        if missing:
+                            raise IBTrACSSchemaError(
+                                f"ERDDAP header is missing required column(s): {sorted(missing)}."
+                            )
+                        if not (WIND_COLUMNS & set(header)):
+                            raise IBTrACSSchemaError(
+                                "ERDDAP header has no wind column (wmo_wind, usa_wind, or tokyo_wind)."
+                            )
+                        if not (PRESSURE_COLUMNS & set(header)):
+                            raise IBTrACSSchemaError(
+                                "ERDDAP header has no pressure column (wmo_pres, usa_pres, or tokyo_pres)."
+                            )
                         continue
                     if not seen_units_row:
                         seen_units_row = True
@@ -227,9 +255,10 @@ async def get_historical_typhoons_ph(year: int | None = None, limit: int = 30) -
       get_historical_typhoons_ph(year=2024)             # season 2024, up to 30 storms
       get_historical_typhoons_ph(year=2024, limit=10)   # season 2024, up to 10 storms
 
-    On failure: a stream error or a response with no data rows returns a
-    dict. data_status is "unavailable", upstream_error is true, and results
-    is empty, with the real error text in caveats.
+    On failure: a stream error, a response with no data rows, or a CSV
+    header missing a required column returns a dict. data_status is
+    "unavailable", upstream_error is true, and results is empty, with the
+    real error text in caveats.
 
     Args:
         year: Season year. None returns recent (last 3 years).

@@ -96,12 +96,11 @@ async def test_stream_upstream_failure_returns_envelope(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stream_schema_drift_no_sid_column_returns_empty_success(monkeypatch):
-    """v0.7.0 regression guard: the old code treated "3+ CSV lines but every
-    row lacks a usable sid" as a legitimate empty result, not a failure. The
-    streaming rewrite must keep that: the row-count check only catches a
-    response that is too short to hold real data, never a response whose
-    rows all failed to parse into a storm."""
+async def test_stream_schema_drift_missing_sid_column_is_upstream_error(monkeypatch):
+    """Codex cross-model finding: a header carrying "storm_id" instead of
+    "sid" parsed every row to nothing, and the old code read that as a
+    legitimate zero-storm season, so a real drift cached as a false empty
+    answer. The header check now catches the missing column right away."""
     drifted_header = CSV_HEADER.replace("sid,", "storm_id,")
     body = "\n".join([drifted_header, CSV_UNITS, SUCCESS_ROWS[0]]) + "\n"
 
@@ -110,6 +109,8 @@ async def test_stream_schema_drift_no_sid_column_returns_empty_success(monkeypat
 
     monkeypatch.setattr(ibtracs_module, "CLIENT", _mock_client(handler))
 
-    results = await ibtracs_module.get_historical_typhoons_ph(year=2024, limit=10)
+    result = await ibtracs_module.get_historical_typhoons_ph(year=2024, limit=10)
 
-    assert results == []
+    assert result["upstream_error"] is True
+    assert result["results"] == []
+    assert len(CACHES["ibtracs_tracks"]) == 0

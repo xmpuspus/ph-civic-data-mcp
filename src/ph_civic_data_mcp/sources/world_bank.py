@@ -7,6 +7,7 @@ https://datahelpdesk.worldbank.org/knowledgebase/articles/898581-api-basic-call-
 
 from __future__ import annotations
 
+import math
 import re
 
 from datetime import datetime, timezone
@@ -87,7 +88,8 @@ async def _fetch_observations(code: str, per_page: int) -> tuple[str | None, lis
     means the indicator truly has no published data, which is worth caching.
     `total` above 0 with no usable rows means the rows did not come back this
     time, which must not be cached as a zero. A row whose `value` cannot
-    convert to a number is skipped and counted, never published as a figure.
+    convert to a finite number (a non-numeric string, NaN, or inf) is
+    skipped and counted, never published as a figure.
     """
     url = f"{WB_BASE}/{code}"
     params = {"format": "json", "per_page": per_page}
@@ -123,6 +125,9 @@ async def _fetch_observations(code: str, per_page: int) -> tuple[str | None, lis
         try:
             numeric_value = float(value)
         except (TypeError, ValueError):
+            skipped += 1
+            continue
+        if not math.isfinite(numeric_value):
             skipped += 1
             continue
         observations.append(
@@ -176,9 +181,10 @@ async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
     returns data_status "invalid_request", with validation_error true and
     observations []. An upstream fetch failure returns data_status
     "unavailable", with upstream_error true, observations [], and the real
-    error text in caveats. A row with a non-numeric value is skipped and
-    counted in caveats. A response where every row is non-numeric returns
-    data_status "unavailable" instead of a false empty answer.
+    error text in caveats. A row with a non-numeric or non-finite value
+    (NaN, inf) is skipped and counted in caveats. A response where every row
+    is non-numeric or non-finite returns data_status "unavailable" instead
+    of a false empty answer.
 
     Args:
         indicator: WB code or alias. See INDICATOR_ALIASES in source for the
@@ -245,7 +251,7 @@ async def get_world_bank_indicator(indicator: str, per_page: int = 20) -> dict:
     ).model_dump(mode="json")
     if skipped:
         result["caveats"] = [
-            f"Skipped {skipped} row(s) with a non-numeric value for indicator {code!r}."
+            f"Skipped {skipped} row(s) with a non-numeric or non-finite value for indicator {code!r}."
         ]
     cache[ckey] = result
     return result
