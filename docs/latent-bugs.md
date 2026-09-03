@@ -231,6 +231,50 @@ minutes. v0.7.0 removed that. The remaining work is to find the page or
 endpoint that carries the current warnings state, and parse that instead of
 the homepage. Until then the live test accepts the indeterminate envelope.
 
+## 23. `get_location_hierarchy` sends a 10-digit code to the 9-digit detail endpoints
+
+Codex pass 7, 2026-09-04. `lookup_psgc_code` already handles the 10-digit
+edition through the level lists, but the hierarchy tool sends the code to the
+per-record detail endpoints, which only know 9-digit codes. A valid 10-digit
+code returns "not found". Route the hierarchy lookup through the same 10-digit
+path.
+
+## 24. `_open_meteo_forecast` turns an unparseable day into an empty forecast
+
+Codex pass 7. A `daily.time` entry that is not an ISO date is skipped, so a
+list of such entries yields `days: []` and the caller caches it. Treat a
+present day list with zero parsed days as malformed, like the empty list.
+
+## 25. MODIS indexes a string `data` field as a sequence
+
+Codex pass 7. `{"data": "123"}` in a subset row is read character by
+character and scaled, so the tool reports a believable NDVI of 0.0001. Check
+the field is a list before reading it.
+
+## 26. NASA POWER accepts a string where a parameter series belongs
+
+Codex pass 7. A parameter value such as `"broken"` in place of a date map
+yields `days: []` as a success. Check each series is a dict before reading.
+
+## 27. `search_infra_projects(year=0)` disables the year filter
+
+Codex pass 7. A year of zero is falsy, so the filter does not run and every
+record matches. Reject a year outside a sane range as `invalid_request`.
+
+## 28. IBTrACS accepts `inf` as a wind or pressure reading
+
+Codex pass 7. `_f("inf")` converts to a float, so a storm can carry
+`max_wind_kt: inf`. Apply the same `math.isfinite` check World Bank uses.
+
+## 29. release-smoke can time out before a late GitHub Release starts publish.yml
+
+Codex pass 7. The smoke job starts on the tag push and polls PyPI for 20
+minutes. When the trusted publisher is registered and the GitHub Release is
+created more than 20 minutes after the tag, the smoke run fails and the
+later release does not rerun it. The v0.7.0 path uploads with twine before
+the tag, so this does not bite yet. Move the smoke trigger to the release
+event, or have publish.yml call the smoke workflow when it finishes.
+
 ## Suggested order
 
 1, then 10, then 2, then 6 and 7 together, then 3 and 5, then 4, 8, 9 and 11.
