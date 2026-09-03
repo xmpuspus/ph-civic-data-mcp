@@ -1037,12 +1037,15 @@ async def get_poverty_stats(region: str | None = None) -> dict:
       get_poverty_stats(region="Bicol")   one region, PSA label
       get_poverty_stats(region="NCR")     National Capital Region
 
-    On failure: this tool does not set data_status. An OpenSTAT outage during
-    discovery or the query sets upstream_error true, with the real error in
-    caveats. A region PSA does not list, or a year with no published figure,
-    sets no error flag at all. Check caveats, not only the flags. A
-    subsistence-table mismatch also sets upstream_error true on a valid
-    poverty figure.
+    On failure: a discovery failure, a missing Incidence dimension, an
+    unparseable year label, or a query failure sets data_status
+    "unavailable" and upstream_error true. A region PSA does not list sets
+    data_status "invalid_request" and validation_error true. A table with no
+    matching incidence measure sets data_status "indeterminate" and
+    upstream_error true. A published ".." cell for the region and year sets
+    no error flag and no data_status. Check caveats instead. A
+    subsistence-table failure sets upstream_error true on an otherwise valid
+    poverty figure, but sets no data_status.
 
     Args:
         region: PH region (None returns national).
@@ -1055,16 +1058,14 @@ async def get_poverty_stats(region: str | None = None) -> dict:
     def _err(msg: str) -> dict:
         # Never cached: a transient PXWeb failure must not pin a null poverty
         # figure for the 24h success TTL.
-        return {
-            "region": region or "Philippines",
-            "poverty_incidence_pct": None,
-            "upstream_error": True,
-            "caveats": [msg],
-            "source": "PSA",
-            "source_url": f"{PSA_API_BASE}/DB/",
-            "license": PSA_LICENSE,
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PSA",
+            f"{PSA_API_BASE}/DB/",
+            msg,
+            license=PSA_LICENSE,
+            region=region or "Philippines",
+            poverty_incidence_pct=None,
+        )
 
     try:
         table_url, meta = await _discover_poverty_table()
@@ -1500,9 +1501,11 @@ async def get_inflation_stats(area: str | None = None) -> dict:
       get_inflation_stats()             national headline inflation, latest month
       get_inflation_stats(area="NCR")   one region
 
-    On failure: this tool does not set data_status or validation_error. Every
-    failure, including an area name PSA does not list, sets upstream_error
-    true, with the real error or a not-found message in caveats.
+    On failure: every failure, including an area name PSA does not list,
+    sets data_status "unavailable" and upstream_error true, with the real
+    error or a not-found message in caveats. validation_error stays false in
+    every case, because a bad area name is treated as an outage here, not a
+    caller mistake.
 
     Args:
         area: Region or "Philippines". None returns the national figure.
@@ -1516,17 +1519,15 @@ async def get_inflation_stats(area: str | None = None) -> dict:
     def _err(msg: str) -> dict:
         # Error results are never cached — a transient PXWeb failure must not
         # pin a null inflation figure for the 24h success TTL.
-        return {
-            "area": area or "Philippines",
-            "headline_inflation_pct": None,
-            "reference_period": None,
-            "upstream_error": True,
-            "caveats": [msg],
-            "source": "PSA",
-            "source_url": f"{PSA_API_BASE}/DB/2M/PI/CPI/",
-            "license": PSA_LICENSE,
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PSA",
+            f"{PSA_API_BASE}/DB/2M/PI/CPI/",
+            msg,
+            license=PSA_LICENSE,
+            area=area or "Philippines",
+            headline_inflation_pct=None,
+            reference_period=None,
+        )
 
     try:
         discovered = await _pick_latest_table(
@@ -1668,9 +1669,9 @@ async def get_labor_stats(region: str | None = None) -> dict:
       get_labor_stats()               national rates, latest reference period
       get_labor_stats(region="Cebu")  same national rates, plus a caveat
 
-    On failure: this tool does not set data_status or validation_error. An
-    OpenSTAT discovery or query failure sets upstream_error true, with the
-    real error in caveats.
+    On failure: an OpenSTAT discovery or query failure sets data_status
+    "unavailable" and upstream_error true, with the real error in caveats.
+    validation_error stays false in every case.
 
     Args:
         region: Accepted for API symmetry. The LFS key-indicator table is
@@ -1689,20 +1690,18 @@ async def get_labor_stats(region: str | None = None) -> dict:
 
     def _err(msg: str) -> dict:
         # Error results are never cached (see get_inflation_stats._err).
-        return {
-            "area": "Philippines",
-            "employment_rate_pct": None,
-            "unemployment_rate_pct": None,
-            "underemployment_rate_pct": None,
-            "labor_force_participation_rate_pct": None,
-            "reference_period": None,
-            "upstream_error": True,
-            "caveats": [*caveats, msg],
-            "source": "PSA",
-            "source_url": f"{PSA_API_BASE}/DB/1B/LFS/",
-            "license": PSA_LICENSE,
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PSA",
+            f"{PSA_API_BASE}/DB/1B/LFS/",
+            [*caveats, msg],
+            license=PSA_LICENSE,
+            area="Philippines",
+            employment_rate_pct=None,
+            unemployment_rate_pct=None,
+            underemployment_rate_pct=None,
+            labor_force_participation_rate_pct=None,
+            reference_period=None,
+        )
 
     try:
         discovered = await _pick_latest_table("1B/LFS", ["rates", "key employment indicators"], [])
@@ -1918,11 +1917,12 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
       get_health_indicators()                     maternal mortality ratio and fertility rate
       get_health_indicators(indicator="fertility") one matching table
 
-    On failure: this tool does not set data_status or validation_error. A
-    catalog browse failure sets upstream_error true with an empty indicators
-    list. A keyword that matches no table returns the success shape with an
-    empty indicators list and a caveat, not an error flag. A partial fetch
-    failure across matched tables also sets upstream_error true.
+    On failure: a catalog browse failure sets data_status "unavailable" and
+    upstream_error true, with an empty indicators list. A keyword that
+    matches no table sets data_status "success" with an empty indicators
+    list and a caveat, not an error flag. A partial fetch failure across
+    matched tables sets data_status "indeterminate" and upstream_error true.
+    validation_error stays false in every case.
 
     Args:
         indicator: Optional free-text indicator name, for example "maternal
@@ -1935,15 +1935,13 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
 
     def _health_err(msg: str) -> dict:
         # Not cached: discovery failure is usually a transient PXWeb error.
-        return {
-            "indicators": [],
-            "upstream_error": True,
-            "caveats": [msg],
-            "source": "PSA",
-            "source_url": f"{PSA_API_BASE}/DB/1D/",
-            "license": PSA_LICENSE,
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PSA",
+            f"{PSA_API_BASE}/DB/1D/",
+            msg,
+            license=PSA_LICENSE,
+            indicators=[],
+        )
 
     try:
         entries = await _browse("1D")

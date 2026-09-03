@@ -469,10 +469,11 @@ async def browse_psa_catalog(path: str | None = None) -> dict:
       browse_psa_catalog("1F")      one level into the Poverty subject
       browse_psa_catalog("1F/FY")   the Full Year Poverty Statistics tables
 
-    On failure: this tool does not set data_status. A bad path sets
-    validation_error true before any request goes out. An unreachable
-    catalog sets upstream_error true, with the real error in caveats. Both
-    return an empty entries list, which never means an empty folder.
+    On failure: this tool sets no data_status on any failure path. A bad
+    path sets validation_error true before any request goes out. An
+    unreachable catalog sets upstream_error true, with the real error in
+    caveats. Both return an empty entries list, which never means an empty
+    folder.
 
     Args:
         path: Relative catalog path such as "1F" or "1F/FY". None or ""
@@ -556,10 +557,10 @@ async def describe_psa_dataset(dataset_path: str) -> dict:
 
       describe_psa_dataset("1F/FY/0241F3DF013.px")   dimensions and value codes for one table
 
-    On failure: this tool does not set data_status. A path that is not a
-    `.px` dataset sets validation_error true before any request goes out. An
-    unreadable dataset sets upstream_error true, with the real error in
-    caveats. Both return an empty dimensions list.
+    On failure: this tool sets no data_status on any failure path. A path
+    that is not a `.px` dataset sets validation_error true before any
+    request goes out. An unreadable dataset sets upstream_error true, with
+    the real error in caveats. Both return an empty dimensions list.
 
     Args:
         dataset_path: Relative path to a `.px` dataset, for example
@@ -751,11 +752,13 @@ async def query_psa_dataset(
            "Among Families/Population": ["0"]},
       )
 
-    On failure: this tool does not set data_status. A bad path or a rejected
-    selection, such as a missing dimension, an unknown code, or "all"/"*",
-    sets validation_error true before any request goes out. An OpenSTAT
-    outage sets upstream_error true, with the real error in caveats. Both
-    return an empty rows list.
+    On failure: a bad path, a bad max_rows, or a rejected selection (a
+    missing dimension, an unknown code, or "all"/"*") sets validation_error
+    true and no data_status, before any request goes out. An OpenSTAT
+    outage sets upstream_error true and no data_status. A zero-row reply for
+    a nonzero selection, or a row whose key does not map to the declared
+    columns, sets data_status "indeterminate" and upstream_error true on a
+    real HTTP 200. All four cases return an empty rows list.
 
     Args:
         dataset_path: Relative `.px` path, for example "1F/FY/0241F3DF013.px".

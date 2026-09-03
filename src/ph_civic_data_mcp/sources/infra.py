@@ -448,11 +448,11 @@ async def get_infra_project(project_id: str) -> dict:
       get_infra_project("PHILGEPS-INF-003")
       get_infra_project("DOES-NOT-EXIST")
 
-    On failure: no data_status field exists on this tool. An empty
-    project_id or a project missing from the current window both return
-    matched: false with a caveat and no upstream_error. A PhilGEPS fetch
-    failure returns matched: false, upstream_error: true, and the real
-    error text in caveats.
+    On failure: an empty project_id or a project missing from the current
+    window both return matched: false with a caveat, no upstream_error, and
+    no data_status. A PhilGEPS fetch failure returns matched: false,
+    data_status "unavailable", upstream_error true, and the real error text
+    in caveats.
 
     Args:
         project_id: Reference number from search_infra_projects.
@@ -476,16 +476,14 @@ async def get_infra_project(project_id: str) -> dict:
         records = await _load_infra_records()
     except Exception as exc:
         log_stderr(f"get_infra_project error: {exc}")
-        return {
-            "project_id": project_id,
-            "matched": False,
-            "upstream_error": True,
-            "caveats": [f"PhilGEPS fetch failed ({type(exc).__name__}: {exc})"],
-            "source": "PhilGEPS",
-            "source_url": PHILGEPS_PORTAL,
-            "license": INFRA_LICENSE,
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PhilGEPS",
+            PHILGEPS_PORTAL,
+            f"PhilGEPS fetch failed ({type(exc).__name__}: {exc})",
+            license=INFRA_LICENSE,
+            project_id=project_id,
+            matched=False,
+        )
 
     target = project_id.strip()
     for record in records:
