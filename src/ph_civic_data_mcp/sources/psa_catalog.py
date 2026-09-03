@@ -40,6 +40,11 @@ from ph_civic_data_mcp.sources.psa import (
     _to_float,
 )
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_SUCCESS,
+    DATA_STATUS_VALUES,
+    failure_result,
+)
 
 SOURCE_NAME = "PSA OpenSTAT"
 CATALOG_ROOT_URL = f"{PSA_API_BASE}/DB/"
@@ -203,6 +208,33 @@ QUERY_SCHEMA: dict[str, Any] = {
         "disclaimer": {"type": "string"},
     },
     "required": [*_REQUIRED, "dataset_path", "rows", "row_count"],
+}
+
+_MATCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {
+            "type": "string",
+            "description": "Pass to describe_psa_dataset or query_psa_dataset.",
+        },
+        "title": {"type": "string"},
+    },
+    "required": ["path", "title"],
+}
+
+SEARCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": "Dataset titles and paths matching a keyword, or a failure envelope.",
+    "properties": {
+        **_ENVELOPE_FIELDS,
+        "data_status": {"type": "string", "enum": sorted(DATA_STATUS_VALUES)},
+        "keyword": {"type": "string"},
+        "matches": {"type": "array", "items": _MATCH_SCHEMA},
+        "match_count": {"type": "integer"},
+        "total_available": {"type": "integer"},
+        "limit": {"type": "integer"},
+    },
+    "required": [*_REQUIRED, "keyword", "matches", "match_count"],
 }
 
 
@@ -868,3 +900,166 @@ async def query_psa_dataset(
         )
     out["caveats"] = caveats
     return out
+
+
+# ---------------------------------------------------------------------------
+# search_psa_catalog
+# ---------------------------------------------------------------------------
+
+MAX_SEARCH_LIMIT = 100
+MIN_SEARCH_LIMIT = 1
+
+# One walk of the whole tree at a time. Without it, two concurrent cold
+# searches both miss the index cache and each pace their own few hundred
+# browse calls behind the rate limiter, for the same result.
+_INDEX_LOCK = asyncio.Lock()
+_INDEX_CACHE_KEY = "index"
+
+
+async def _walk_catalog(path: str) -> list[dict]:
+    """Recursively collect every {path, title} dataset entry under `path`.
+
+    Reuses _browse, the same per-level listing browse_psa_catalog calls, and
+    the same dataset-or-folder test it applies to each entry. Sibling folders
+    walk concurrently, the fan-out pattern get_area_profile already uses, so
+    the rate limiter still paces every request but the round trips overlap.
+
+    Raises PSAUpstreamError if any subtree fails to load. A partial index
+    would let a real table quietly look like a search miss.
+    """
+    entries = await _browse(path)
+    matches: list[dict] = []
+    subfolders: list[str] = []
+    for entry in entries:
+        entry_id = str(entry.get("id") or "")
+        if not entry_id:
+            continue
+        title = str(entry.get("text") or entry_id)
+        child_path = f"{path}/{entry_id}" if path else entry_id
+        is_dataset = entry.get("type") == "t" or entry_id.lower().endswith(".px")
+        if is_dataset:
+            matches.append({"path": child_path, "title": title})
+        else:
+            subfolders.append(child_path)
+    if subfolders:
+        for sub_matches in await asyncio.gather(*(_walk_catalog(p) for p in subfolders)):
+            matches.extend(sub_matches)
+    return matches
+
+
+async def _catalog_index() -> list[dict]:
+    """The flattened {path, title} list for every dataset in the PSA catalog.
+
+    Walking the whole ~2,900-table tree paces one request at a time behind the
+    rate limiter, so a cold call can take minutes. The flattened list caches
+    24h, the same TTL as psa_discovery, so a later search answers from memory.
+    """
+    cache = CACHES["psa_catalog_index"]
+    if _INDEX_CACHE_KEY in cache:
+        return cache[_INDEX_CACHE_KEY]
+    async with _INDEX_LOCK:
+        if _INDEX_CACHE_KEY in cache:
+            return cache[_INDEX_CACHE_KEY]
+        index = await _walk_catalog("")
+        cache[_INDEX_CACHE_KEY] = index
+        return index
+
+
+@mcp.tool(
+    title="Search the PSA OpenSTAT catalog",
+    tags={"psa", "openstat", "statistics", "search", "catalog", "philippines"},
+    annotations={
+        "title": "Search the PSA OpenSTAT catalog",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+        "destructiveHint": False,
+    },
+    output_schema=SEARCH_SCHEMA,
+    timeout=300.0,
+)
+async def search_psa_catalog(keyword: str, limit: int = 20) -> dict:
+    """Find a PSA OpenSTAT dataset by keyword, without browsing level by level.
+
+    Matches a case-insensitive substring against every dataset title and path
+    in the catalog. The first call after a cold start walks the whole
+    ~2,900-table tree and can take a few minutes; the flattened index then
+    caches for 24 hours, so a later search answers from memory.
+
+    Args:
+        keyword: Case-insensitive substring to match against a dataset title
+                 or path, e.g. "fertility", "poverty incidence", "CPI".
+        limit: Maximum number of matches to return (1-100, default 20).
+
+    Returns: keyword, matches (each with path and title), match_count,
+    total_available, limit, data_status, source, source_url, license,
+    data_retrieved_at, caveats.
+
+    A caller mistake (an empty keyword) returns validation_error: true. An
+    OpenSTAT outage during the catalog walk returns upstream_error: true.
+    Neither is cached.
+    """
+    url = CATALOG_ROOT_URL
+
+    if not isinstance(keyword, str) or not keyword.strip():
+        return failure_result(
+            SOURCE_NAME,
+            url,
+            "keyword must be a non-empty string.",
+            license=PSA_LICENSE,
+            validation_error=True,
+            keyword=keyword,
+            matches=[],
+            match_count=0,
+        )
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return failure_result(
+            SOURCE_NAME,
+            url,
+            f"limit must be a whole number, got {type(limit).__name__}",
+            license=PSA_LICENSE,
+            validation_error=True,
+            keyword=keyword,
+            matches=[],
+            match_count=0,
+        )
+    bounded_limit = max(MIN_SEARCH_LIMIT, min(limit, MAX_SEARCH_LIMIT))
+
+    try:
+        index = await _catalog_index()
+    except PSAUpstreamError as exc:
+        return failure_result(
+            SOURCE_NAME,
+            url,
+            f"PSA OpenSTAT catalog walk failed: {exc}",
+            license=PSA_LICENSE,
+            keyword=keyword,
+            matches=[],
+            match_count=0,
+        )
+
+    want = keyword.strip().lower()
+    hits = [e for e in index if want in e["title"].lower() or want in e["path"].lower()]
+    matches = hits[:bounded_limit]
+
+    caveats: list[str] = []
+    if len(hits) > bounded_limit:
+        caveats.append(
+            f"Returned {bounded_limit} of {len(hits)} matches. Raise limit or narrow the keyword."
+        )
+
+    return {
+        "keyword": keyword,
+        "matches": matches,
+        "match_count": len(matches),
+        "total_available": len(hits),
+        "limit": bounded_limit,
+        "data_status": DATA_STATUS_SUCCESS,
+        "upstream_error": False,
+        "validation_error": False,
+        "caveats": caveats,
+        "source": SOURCE_NAME,
+        "source_url": url,
+        "license": PSA_LICENSE,
+        "data_retrieved_at": _now().isoformat(),
+    }

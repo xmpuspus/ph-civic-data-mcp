@@ -1323,6 +1323,13 @@ async def _pick_latest_table(
     (backcasted 1958-1994 vs current 2019-2026). Among all predicate matches we
     pick the table whose Year dimension reaches the most recent year, so callers
     always get the current series, never a backcast trap.
+
+    Raises PSAUpstreamError on a transient fetch failure. A matched table that
+    cannot be read is not the same as a table that does not match: swallowing
+    that failure and moving to the next candidate let a live outage on the
+    current-era table silently hand back a backcast table's stale figure,
+    cached as "latest" for 24 hours. fetch_with_retry already retries a
+    transient error before this ever raises.
     """
     must_not = must_not or []
     discovery_key = f"latest::{subpath}::{must_have}::{must_not}"
@@ -1339,7 +1346,13 @@ async def _pick_latest_table(
         if any(n in text for n in must_not):
             continue
         table_url = f"{PSA_API_BASE}/DB/{subpath}/{entry['id']}"
-        meta = await _get_json(table_url)
+        try:
+            meta = await _get_json_or_raise(table_url)
+        except PSANotFoundError:
+            # The listing named an id OpenSTAT no longer serves. Skip this one
+            # candidate, not the whole discovery: a stale catalog entry, never
+            # an outage.
+            continue
         if not isinstance(meta, dict):
             continue
         ymax = _year_max(meta)
