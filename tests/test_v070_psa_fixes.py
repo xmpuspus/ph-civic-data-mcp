@@ -259,3 +259,47 @@ async def test_poverty_unknown_region_keeps_the_headline_key_and_is_invalid_requ
     assert result["data_status"] == "invalid_request"
     assert result["poverty_incidence_pct"] is None
     assert any("Wakanda" in c for c in result["caveats"])
+
+
+HEALTH_META = {
+    "title": "Maternal Mortality Ratio",
+    "variables": [
+        {"code": "Geolocation", "text": "Geolocation", "values": ["0"], "valueTexts": ["PH"]},
+        {"code": "Year", "text": "Year", "values": ["0", "1"], "valueTexts": ["2022", "2023"]},
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_health_malformed_body_on_newest_year_is_an_error_not_an_older_year(monkeypatch):
+    """`{}` for the newest year must not fall back to the older year's value."""
+    calls: list[str] = []
+
+    async def _post(url, query):
+        year = next(q["selection"]["values"][0] for q in query["query"] if q["code"] == "Year")
+        calls.append(year)
+        if year == "1":
+            return {}
+        return {
+            "columns": [{"code": "MMR", "type": "c"}],
+            "data": [{"key": ["0", "0"], "values": ["78"]}],
+        }
+
+    monkeypatch.setattr(psa_module, "_post_json_or_raise", _post)
+    value, year_text, error = await psa_module._latest_health_value("https://x/mmr.px", HEALTH_META)
+    assert value is None and year_text is None
+    assert error and "malformed" in error
+    assert calls == ["1"], "must stop at the malformed newest year, never query the older one"
+
+
+@pytest.mark.asyncio
+async def test_health_empty_in_every_year_is_an_error_not_a_cached_null(monkeypatch):
+    """latent-bugs 19: a 1D table always has rows, so all-empty is drift."""
+
+    async def _post(url, query):
+        return {"columns": [], "data": []}
+
+    monkeypatch.setattr(psa_module, "_post_json_or_raise", _post)
+    value, year_text, error = await psa_module._latest_health_value("https://x/mmr.px", HEALTH_META)
+    assert value is None
+    assert error and "no data rows" in error

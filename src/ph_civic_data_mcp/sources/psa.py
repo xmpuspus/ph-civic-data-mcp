@@ -29,6 +29,7 @@ from ph_civic_data_mcp.sources.psgc import lookup_psgc_code
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import (
     DATA_STATUS_EMPTY,
+    DATA_STATUS_INDETERMINATE,
     DATA_STATUS_SUCCESS,
     failure_result,
 )
@@ -1864,12 +1865,20 @@ async def _latest_health_value(
             # A failed POST is not "PSA publishes nothing for this year". Say so,
             # so the caller does not cache a null as a real indicator value.
             return None, None, f"{table_url}: {exc}"
-        if not payload.get("data"):
+        # A 200 whose body is not an object with a `data` list is malformed
+        # upstream data, not an empty year. Falling back to an older year here
+        # served a stale value as latest, the same bug the CPI loop had.
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            return None, None, f"{table_url}: malformed PXWeb body for year {year_code}"
+        if not payload["data"]:
             continue
         for _, val in _rows(payload):
             if val is not None:
                 return val, _value_text(meta, year_var.get("code", "Year"), year_code), None
-    return None, None, None
+    # A 1D health table always carries rows. Zero rows in every year is drift,
+    # never a real "PSA publishes nothing", so it must not cache as a null
+    # indicator (docs/latent-bugs.md item 19).
+    return None, None, f"{table_url}: no data rows in any of {len(year_codes)} published years"
 
 
 @mcp.tool(
@@ -1988,6 +1997,9 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
         "indicators": indicators,
         "available_indicators": available,
         "caveats": caveats,
+        "data_status": DATA_STATUS_SUCCESS,
+        "upstream_error": False,
+        "validation_error": False,
         "source": "PSA",
         "source_url": f"{PSA_API_BASE}/DB/1D/",
         "license": PSA_LICENSE,
@@ -1995,6 +2007,7 @@ async def get_health_indicators(indicator: str | None = None) -> dict:
     }
     if unavailable:
         # A partial answer is not a success; do not pin it for the 24h TTL.
+        result["data_status"] = DATA_STATUS_INDETERMINATE
         result["upstream_error"] = True
         return result
     cache[key] = result
