@@ -471,3 +471,191 @@ async def test_health_broad_indicator_caps_metadata_fetches_at_ten(monkeypatch):
     assert len(fetch_calls) <= 10
     assert len(result["indicators"]) <= 10
     assert any("10" in c for c in result["caveats"])
+
+
+# ---------------------------------------------------------------------------
+# FIX 1: a plain success dict must carry data_status, not just an absent key.
+# ---------------------------------------------------------------------------
+
+LABOR_META = {
+    "variables": [
+        {"code": "Sex", "text": "Sex", "values": ["0"], "valueTexts": ["Both Sexes"]},
+        {
+            "code": "Rates",
+            "text": "Rates",
+            "values": ["0", "1", "2", "3"],
+            "valueTexts": [
+                "Labor Force Participation Rate",
+                "Employment Rate",
+                "Unemployment Rate",
+                "Underemployment Rate",
+            ],
+        },
+        {"code": "Year", "text": "Year", "values": ["0"], "valueTexts": ["2026"]},
+        {"code": "Month", "text": "Month", "values": ["0"], "valueTexts": ["January"]},
+    ],
+}
+
+LABOR_QUERY_DATA = {
+    "columns": [
+        {"code": "Year", "type": "d"},
+        {"code": "Month", "type": "d"},
+        {"code": "Rates", "type": "d"},
+        {"code": "Sex", "type": "d"},
+        {"code": "Rate", "type": "c"},
+    ],
+    "data": [
+        {"key": ["0", "0", "0", "0"], "values": ["65.0"]},
+        {"key": ["0", "0", "1", "0"], "values": ["94.0"]},
+        {"key": ["0", "0", "2", "0"], "values": ["6.0"]},
+        {"key": ["0", "0", "3", "0"], "values": ["12.0"]},
+    ],
+}
+
+POVERTY_SUCCESS_META = {
+    "variables": [
+        {
+            "code": "Geolocation",
+            "text": "Geolocation",
+            "values": ["0"],
+            "valueTexts": ["Philippines"],
+        },
+        {
+            "code": "Incidence",
+            "text": "Incidence",
+            "values": ["0"],
+            "valueTexts": ["Poverty Incidence among Families"],
+        },
+        {"code": "Year", "text": "Year", "values": ["0"], "valueTexts": ["2023"]},
+    ],
+}
+
+SUBSISTENCE_SUCCESS_META = {
+    "variables": [
+        {
+            "code": "Geolocation",
+            "text": "Geolocation",
+            "values": ["0"],
+            "valueTexts": ["Philippines"],
+        },
+        {
+            "code": "Incidence",
+            "text": "Incidence",
+            "values": ["0"],
+            "valueTexts": ["Subsistence Incidence among Families"],
+        },
+        {"code": "Year", "text": "Year", "values": ["0"], "valueTexts": ["2023"]},
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_inflation_success_response_carries_data_status(monkeypatch):
+    """A plain success once had no data_status; a caller that indexed it
+    on a good response, not just a failure, got a KeyError."""
+    _clear_state()
+
+    CPI_2026_JAN_DATA = {
+        "columns": [
+            {"code": "Geolocation", "type": "d"},
+            {"code": "Commodity Description", "type": "d"},
+            {"code": "Year", "type": "d"},
+            {"code": "Period", "type": "d"},
+            {"code": "CPI", "type": "c"},
+        ],
+        "data": [{"key": ["0", "0", "1", "0"], "values": ["4.1"]}],
+    }
+
+    def _ok_2026(method, url):
+        return _resp(method, url, CPI_2026_JAN_DATA)
+
+    _install_cpi_query(monkeypatch, _ok_2026)
+
+    result = await psa_module.get_inflation_stats()
+
+    assert result["data_status"] == "success"
+    assert result["upstream_error"] is False
+    assert result["validation_error"] is False
+    assert result["headline_inflation_pct"] == pytest.approx(4.1)
+
+
+@pytest.mark.asyncio
+async def test_labor_success_response_carries_data_status(monkeypatch):
+    CACHES["psa_labor"].clear()
+
+    async def _fake_pick(*args, **kwargs):
+        return "https://example.test/lfs.px", LABOR_META
+
+    async def _fake_post(url, query):
+        return LABOR_QUERY_DATA
+
+    monkeypatch.setattr(psa_module, "_pick_latest_table", _fake_pick)
+    monkeypatch.setattr(psa_module, "_post_json_or_raise", _fake_post)
+
+    result = await psa_module.get_labor_stats()
+
+    assert result["data_status"] == "success"
+    assert result["upstream_error"] is False
+    assert result["validation_error"] is False
+    assert result["labor_force_participation_rate_pct"] == pytest.approx(65.0)
+
+
+@pytest.mark.asyncio
+async def test_poverty_success_response_carries_data_status(monkeypatch):
+    CACHES["psa_poverty"].clear()
+
+    async def _fake_discover():
+        return "https://example.test/poverty.px", POVERTY_SUCCESS_META
+
+    async def _fake_subsistence():
+        return "https://example.test/subsistence.px", SUBSISTENCE_SUCCESS_META
+
+    async def _post(url, query):
+        return {
+            "columns": [{"code": "x", "type": "c"}],
+            "data": [{"key": ["0"], "values": ["10.9"]}],
+        }
+
+    monkeypatch.setattr(psa_module, "_discover_poverty_table", _fake_discover)
+    monkeypatch.setattr(psa_module, "_discover_subsistence_table", _fake_subsistence)
+    monkeypatch.setattr(psa_module, "_post_json_or_raise", _post)
+
+    result = await psa_module.get_poverty_stats()
+
+    assert result["data_status"] == "success"
+    assert result["upstream_error"] is False
+    assert result["validation_error"] is False
+    assert result["poverty_incidence_pct"] == pytest.approx(10.9)
+
+
+# ---------------------------------------------------------------------------
+# FIX 2: a poverty cell whose `values` is a string, not a list, is drift,
+# never a published ".." gap.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_poverty_malformed_values_field_is_indeterminate_not_a_silent_gap(monkeypatch):
+    CACHES["psa_poverty"].clear()
+    CACHES["psa_browse"].clear()
+    psa_module._DISCOVERY_CACHE.clear()
+
+    async def _fake_discover():
+        return "https://example.test/poverty.px", POVERTY_SUCCESS_META
+
+    async def _fake_subsistence():
+        raise psa_module.PSAUpstreamError("subsistence table 404")
+
+    async def _post(url, query):
+        return {"columns": [{"code": "x", "type": "c"}], "data": [{"key": ["0"], "values": "10.9"}]}
+
+    monkeypatch.setattr(psa_module, "_discover_poverty_table", _fake_discover)
+    monkeypatch.setattr(psa_module, "_discover_subsistence_table", _fake_subsistence)
+    monkeypatch.setattr(psa_module, "_post_json_or_raise", _post)
+
+    result = await psa_module.get_poverty_stats()
+
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert result["poverty_incidence_pct"] is None
+    assert len(CACHES["psa_poverty"]) == 0

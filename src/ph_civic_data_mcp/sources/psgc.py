@@ -318,6 +318,12 @@ async def _fetch_one(code: str) -> dict[str, Any] | None:
                     if isinstance(payload, dict) and payload.get("code"):
                         cache[key] = payload
                         return payload
+                    # A 200 with no `code` field is a malformed body, not a
+                    # genuine miss. Falling through here used to cache a
+                    # false "not found" for 24 hours.
+                    had_errors = True
+                    last_exc = RuntimeError(f"HTTP 200 with no 'code' field ({endpoint}/{code})")
+                    continue
                 elif response.status_code != 404:
                     # A 429, 401, 403 or 5xx is an outage, not a verdict that
                     # the code is missing at this level. Falling through here
@@ -353,7 +359,15 @@ async def _fetch_barangay_by_code(code: str) -> dict[str, Any] | None:
     except Exception as exc:
         raise PSGCFetchError(f"PSGC mirror unreachable for barangay '{code}': {exc}") from exc
     if response.status_code == 200:
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            # A 200 with an unreadable body means the mirror could not
+            # answer, the same as an outage. Must raise, never fall through
+            # to None, which would read as "not a barangay".
+            raise PSGCFetchError(
+                f"PSGC mirror returned an unreadable body for barangay '{code}': {exc}"
+            ) from exc
         if isinstance(payload, dict) and payload.get("code"):
             return payload
     elif response.status_code != 404:

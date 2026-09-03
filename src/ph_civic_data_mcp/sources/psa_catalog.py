@@ -878,6 +878,7 @@ async def query_psa_dataset(
     unparseable = 0
     malformed_key_rows = 0
     value_malformed = 0
+    genuine_null = 0
     for record in payload.get("data", []):
         if not isinstance(record, dict):
             malformed_key_rows += 1
@@ -894,7 +895,9 @@ async def query_psa_dataset(
         if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
             # PXWeb always sends a list here. Anything else is drift, and
             # indexing a string would hand back its first character as data.
+            # It must not read as a confirmed null the way a real ".." does.
             misaligned += 1
+            value_malformed += 1
             raw = None
         elif not values:
             # An empty array is a row with no cell at all, which is drift, not
@@ -906,12 +909,17 @@ async def query_psa_dataset(
         else:
             raw = values[0]
         parsed = _to_float(raw)
-        if parsed is None and raw is not None and str(raw).strip() not in PSA_MISSING_MARKERS:
-            # Not a number and not one of PSA's own missing-value markers, so
-            # this is a parse failure. It must not pass as a confirmed null in
-            # an ordinary success response either.
-            unparseable += 1
-            value_malformed += 1
+        if parsed is None and raw is not None:
+            if str(raw).strip() in PSA_MISSING_MARKERS:
+                # PSA's own published gap, the one case a null cell is a
+                # confirmed reading rather than drift.
+                genuine_null += 1
+            else:
+                # Not a number and not one of PSA's own missing-value markers,
+                # so this is a parse failure. It must not pass as a confirmed
+                # null in an ordinary success response either.
+                unparseable += 1
+                value_malformed += 1
         rows.append(
             {
                 "keys": keys,
@@ -960,7 +968,7 @@ async def query_psa_dataset(
         caveats.append(
             f"Returned {rows_cap} of {total_rows} rows. Raise max_rows or narrow the selection."
         )
-    if any(row["value"] is None for row in out["rows"]):
+    if genuine_null:
         caveats.append("Some cells are null: PSA publishes '..' for a missing value.")
     if unparseable:
         caveats.append(
