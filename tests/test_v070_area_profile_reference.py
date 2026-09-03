@@ -293,3 +293,63 @@ async def test_infra_per_100k_computed_above_the_sample_threshold(_same_vintage_
     )
     assert corr["infra_sample_size"] == 600
     assert "infra_coverage_caveat" not in corr
+
+
+@pytest.mark.asyncio
+async def test_population_empty_status_propagates_to_the_block(monkeypatch):
+    """Codex cross-model finding: a child returning data_status "empty" set
+    neither upstream_error nor validation_error, so `_unwrap` read it as a
+    plain success and dropped the "no row" caveat."""
+    _install_common_mocks(monkeypatch)
+
+    async def _population(*, psgc_code=None, region=None, year=None):
+        return envelope.failure_result(
+            "PSA", "https://openstat", "no row", data_status="empty", population=None
+        )
+
+    async def _poverty(*, region=None):
+        return _national_poverty()
+
+    monkeypatch.setattr(autostitch_module, "get_population_stats", _population)
+    monkeypatch.setattr(autostitch_module, "get_poverty_stats", _poverty)
+
+    profile = await autostitch_module.get_area_profile("Tacloban")
+
+    assert profile["blocks"]["population"] == "empty"
+    assert any("no row" in c for c in profile["caveats"])
+
+
+@pytest.mark.asyncio
+async def test_infra_is_skipped_when_the_place_does_not_resolve(monkeypatch):
+    """Codex cross-model finding: an unmatched place still ran the infra
+    search with province=None, region=None, and reported the national
+    notice count as this place's own infra_notice_count."""
+    _install_common_mocks(monkeypatch)
+
+    async def _no_match(location):
+        return {
+            "matched": False,
+            "name": None,
+            "psgc_code": None,
+            "level": None,
+            "alternatives": [],
+        }
+
+    async def _population(*, psgc_code=None, region=None, year=None):
+        return _national_population()
+
+    async def _poverty(*, region=None):
+        return _national_poverty()
+
+    async def _infra_never_called(*args, **kwargs):
+        raise AssertionError("search_infra_projects must not run for an unresolved place")
+
+    monkeypatch.setattr(autostitch_module, "resolve_ph_location", _no_match)
+    monkeypatch.setattr(autostitch_module, "get_population_stats", _population)
+    monkeypatch.setattr(autostitch_module, "get_poverty_stats", _poverty)
+    monkeypatch.setattr(autostitch_module, "search_infra_projects", _infra_never_called)
+
+    profile = await autostitch_module.get_area_profile("Qwxzv Nonesuch")
+
+    assert profile["blocks"]["infra"] == autostitch_module.BLOCK_SKIPPED
+    assert profile["procurement"]["infra_notice_count"] is None

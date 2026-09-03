@@ -380,6 +380,52 @@ async def test_compare_one_resolved_one_clean_no_match_is_indeterminate_not_an_o
 
 
 @pytest.mark.asyncio
+async def test_compare_rejects_too_many_metrics(monkeypatch):
+    _install_never_called(monkeypatch)
+    out = await compare.compare_areas(["Cebu City", "Davao City"], metrics=["population"] * 9)
+    assert out["validation_error"] is True
+    assert out["data_status"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_compare_rejects_duplicate_metrics(monkeypatch):
+    _install_never_called(monkeypatch)
+    out = await compare.compare_areas(
+        ["Cebu City", "Davao City"], metrics=["population", "population"]
+    )
+    assert out["validation_error"] is True
+    assert out["data_status"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_compare_rejects_an_unhashable_metric_entry_without_raising(monkeypatch):
+    """A metrics list must reject bad input, never raise. A list entry
+    inside metrics cannot be hashed, so a duplicate check that runs before
+    the allowlist check would crash instead of returning validation_error."""
+    _install_never_called(monkeypatch)
+    out = await compare.compare_areas(["Cebu City", "Davao City"], metrics=[["population"]])
+    assert out["validation_error"] is True
+    assert out["data_status"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_compare_one_resolved_one_no_match_is_not_comparable(monkeypatch):
+    """Codex cross-model finding: one resolved row next to a clean no-match
+    row reported comparable true, although the second row held only nulls."""
+    by_location = {
+        "Cebu City": _profile(name="Cebu City"),
+        "Bogus": _clean_no_match("Bogus"),
+    }
+    _install(monkeypatch, by_location)
+
+    out = await compare.compare_areas(["Cebu City", "Bogus"], metrics=["population"])
+
+    assert out["comparable"] is False
+    joined = " ".join(out["caveats"])
+    assert "Bogus" in joined
+
+
+@pytest.mark.asyncio
 async def test_compare_unknown_vintage_next_to_a_dated_row_is_not_comparable(monkeypatch):
     """A resolved row with no population_year must not hide behind a set
     comprehension that drops None, next to a row that does carry a year."""

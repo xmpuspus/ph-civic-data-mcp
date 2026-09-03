@@ -72,16 +72,27 @@ def _unwrap(result: object, caveats: list[str], label: str) -> tuple[dict | list
     region name, never an outage) into the same status as a real outage, so
     a profile flagged its top-level `upstream_error` for a call that never
     left the process.
+
+    A child that reports `data_status="empty"` (a genuine no-data answer, not
+    an outage) does not set `upstream_error` or `validation_error`, so
+    `is_failure` alone missed it and the block read as "success" with no
+    caveat. Every non-success `data_status`, whatever its own name, now
+    propagates as-is and always lifts the child's caveats.
     """
     if isinstance(result, BaseException):
         caveats.append(f"{label} failed: {type(result).__name__}: {result}")
         return None, DATA_STATUS_UNAVAILABLE
-    if is_failure(result):
+    status = result.get("data_status") if isinstance(result, dict) else None  # type: ignore[union-attr]
+    if status and status != DATA_STATUS_SUCCESS:
         detail = result.get("caveats") or ["upstream error with no detail"]  # type: ignore[union-attr]
         for c in detail:
             caveats.append(f"{label}: {c}")
-        status = result.get("data_status") or DATA_STATUS_UNAVAILABLE  # type: ignore[union-attr]
         return None, status
+    if status is None and is_failure(result):
+        detail = result.get("caveats") or ["upstream error with no detail"]  # type: ignore[union-attr]
+        for c in detail:
+            caveats.append(f"{label}: {c}")
+        return None, DATA_STATUS_UNAVAILABLE
     return result, DATA_STATUS_SUCCESS  # type: ignore[return-value]
 
 
@@ -223,10 +234,17 @@ async def get_area_profile(location: str) -> dict:
     if region_name:
         tasks["inflation"] = asyncio.create_task(get_inflation_stats(area=region_name))
 
-    infra_filter = province_name or (locality_name if matched else None)
-    tasks["infra"] = asyncio.create_task(
-        search_infra_projects(province=infra_filter, region=region_name, limit=100)
-    )
+    # An unresolved place has no province, region, or verified locality name,
+    # so search_infra_projects(province=None, region=None) would return the
+    # national notice listing and the profile would report it as this
+    # place's own count. Skip the search instead of guessing.
+    if matched:
+        infra_filter = province_name or locality_name
+        tasks["infra"] = asyncio.create_task(
+            search_infra_projects(province=infra_filter, region=region_name, limit=100)
+        )
+    else:
+        caveats.append("Infra notice search needs a resolved place; procurement block skipped.")
 
     gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
     results = dict(zip(tasks.keys(), gathered))
