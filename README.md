@@ -3,9 +3,10 @@
 <!-- mcp-name: io.github.xmpuspus/ph-civic-data-mcp -->
 
 > Philippine civic data as agent-callable tools. The full PSA OpenSTAT
-> statistical catalog, plus PSGC location codes, infra-spending accountability,
+> statistical catalog, PSGC location codes, infra-spending accountability,
 > earthquakes, weather, typhoons, procurement, poverty, solar radiation, air
-> quality, satellite vegetation, and macro indicators. 32 tools, no API keys.
+> quality, satellite vegetation, and macro indicators. Population figures
+> reach barangay level. 34 tools, no API keys.
 
 [![PyPI](https://img.shields.io/pypi/v/ph-civic-data-mcp.svg)](https://pypi.org/project/ph-civic-data-mcp/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://www.python.org/downloads/)
@@ -13,28 +14,29 @@
 [![Glama AAA](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp/badges/score.svg)](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.xmpuspus%2Fph--civic--data--mcp-blue)](https://registry.modelcontextprotocol.io/v0.1/servers?search=ph-civic-data-mcp)
 
-**One-click install:**
+Philippine civic-data portals publish open data in different shapes: scraped
+HTML tables, PXWeb JSON, and undocumented APIs. Nothing ties them together for
+an agent to use. This server does, over stdio, with zero hosting cost and no
+API key needed. It answers questions such as how many people live in a
+barangay, whether a place sits near an active fault or volcano, what a city
+spent on flood control, and how one place compares against another.
+
+All data comes from public records. Heuristic indicators are statistical
+only. A specific allegation needs independent investigation and a second
+source.
+
+## Install
+
+Every client below runs the same package, `uvx ph-civic-data-mcp`, over
+stdio.
+
 [![Add to Cursor](https://img.shields.io/badge/Add%20to-Cursor-000000?logo=cursor)](cursor://anysphere.cursor-deeplink/mcp/install?name=ph-civic-data&config=eyJjb21tYW5kIjogInV2eCIsICJhcmdzIjogWyJwaC1jaXZpYy1kYXRhLW1jcCJdfQ==)
 [![Add to VS Code](https://img.shields.io/badge/Add%20to-VS%20Code-007ACC?logo=visualstudiocode)](https://insiders.vscode.dev/redirect/mcp/install?name=ph-civic-data&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22ph-civic-data-mcp%22%5D%7D)
 [![Install via Smithery](https://img.shields.io/badge/Install%20via-Smithery-blueviolet)](https://smithery.ai/server/ph-civic-data-mcp)
 [![Add via Claude Code](https://img.shields.io/badge/Add%20via-Claude%20Code-D97757?logo=anthropic)](https://code.claude.com/docs/en/mcp)
 
-Philippine civic-data portals publish plenty of open data, each in its own
-shape: scraped HTML tables, PXWeb JSON, undocumented APIs. Nothing ties them
-together for an agent. This server does, over stdio, with zero hosting cost and
-no API key needed. Version 0.6.0 opens the entire PSA OpenSTAT catalog, about
-2,900 statistical tables, behind three tools with hard safety limits.
-
-All data comes from public records. Heuristic indicators are statistical only.
-A specific allegation needs independent investigation and a second source.
-
-## Install
-
-```bash
-uvx ph-civic-data-mcp
-```
-
-Add it to any stdio MCP client:
+**Claude Desktop.** Add this to `claude_desktop_config.json`, which sits at
+`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS:
 
 ```json
 {
@@ -47,10 +49,52 @@ Add it to any stdio MCP client:
 }
 ```
 
-- **Claude Desktop:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Claude Code:** `claude mcp add ph-civic-data -- uvx ph-civic-data-mcp`
-- **Cursor, Zed, VS Code:** the badges above, or the same JSON
-- **Docker:** `docker build -t ph-civic-data-mcp .` then run with `-i` (non-root)
+**Claude Code.**
+
+```bash
+claude mcp add ph-civic-data -- uvx ph-civic-data-mcp
+```
+
+**Codex.** Confirmed live on 2026-09-03.
+
+```bash
+codex mcp add ph-civic-data -- uvx ph-civic-data-mcp
+```
+
+**Cursor.** Add this to `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "ph-civic-data": {
+      "command": "uvx",
+      "args": ["ph-civic-data-mcp"]
+    }
+  }
+}
+```
+
+**VS Code.** Add this to `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "ph-civic-data": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["ph-civic-data-mcp"]
+    }
+  }
+}
+```
+
+**Docker.** Build once, then run with `-i` for stdio:
+
+```bash
+docker build -t ph-civic-data-mcp .
+```
+
+The image runs as a non-root user and ships a healthcheck.
 
 ![setup](docs/demo_setup.gif)
 
@@ -58,85 +102,117 @@ That recording is `vhs docs/demo_setup.tape`. It spawns Claude Code with
 `--mcp-config` pointed at this server, and Claude fans out to
 `get_weather_forecast` and `get_population_stats`, then correlates them. The
 temperatures and the population are what the live sources returned while it
-recorded. Since 0.6.1 the population turn answers from the 2024 Census of
-Population (NCR: 14,001,751 as of 1 July 2024).
+recorded. The population turn answers from the 2024 Census of Population
+(NCR: 14,001,751 as of 1 July 2024).
 
-## Start here
+## What can I ask?
 
-| Question | Call |
-|---|---|
-| "Profile Tacloban for me" | `get_area_profile("Tacloban")` |
-| "Is it safe there right now?" | `assess_area_risk("Leyte")` |
-| "Find me PSA data on school enrollment" | `browse_psa_catalog()` then `describe_psa_dataset` then `query_psa_dataset` |
-| "What is the PSGC code for QC?" | `resolve_ph_location("QC")` |
-| "How many people live in Tacloban?" | `resolve_ph_location("Tacloban")` then `get_population_stats(psgc_code=...)` |
-| "Flood control contracts in Pampanga" | `search_infra_projects(province="Pampanga", keyword="flood control")` |
-| "What version am I running?" | `get_data_freshness()` |
+`ph-civic-data-mcp` exposes 34 tools across 13 public sources. Start with
+`get_area_profile` for any place-based question. It resolves the name to a
+PSGC code once, then composes demographics, economy, procurement, hazards,
+and the 3-day outlook in a single turn, with infra notices already normalized
+per 100,000 residents.
 
-`get_area_profile` is the one to reach for first on a place-based question. It
-resolves the name to a PSGC code once, then composes demographics, economy,
-procurement, hazards, and the 3-day outlook in a single turn, with infra
-notices already normalized per 100k residents.
+### Get a place at a glance
 
-## 32 tools across 12 public sources
+- "Give me a profile of Tacloban." `get_area_profile`
+- "What is the PSGC code for QC?" `resolve_ph_location`
+- "How many people live in Zamboanga City?" `get_population_stats`
+- "Is it safe in Albay right now?" `assess_area_risk`
 
-**PSA OpenSTAT, the whole catalog (new in 0.6.0).** `browse_psa_catalog`,
-`describe_psa_dataset`, `query_psa_dataset`. See the worked example below.
+### Compare two or more places
 
-**PSA curated statistics.** Population (2024 Census of Population by default,
-down to barangay level by PSGC code, with 2010, 2015 and 2020 by year),
-poverty (2023 Full Year), CPI inflation, Labor Force Survey rates, health
-indicators.
+- "Compare Cebu City and Davao City on population and poverty." `compare_areas`
+- "How does Zamboanga's employment rate compare to Cagayan de Oro's?" `compare_areas`
+- "Export a five-city comparison as a CSV file." `compare_areas`
 
-**Locations.** PSGC resolution from free text, admin-unit browsing, full
-hierarchies. Nicknames and ambiguous names both work.
+### Check hazards near a place
 
-**Hazards.** PHIVOLCS earthquakes and bulletins, volcano alert levels, USGS
-cross-reference, historical typhoon tracks from NOAA IBTrACS.
+- "Any earthquakes near Legazpi in the last day?" `get_latest_earthquakes`
+- "Read the full PHIVOLCS bulletin for that quake." `get_earthquake_bulletin`
+- "What is Mayon's current alert level?" `get_volcano_status`
+- "Is a typhoon active in the Philippine area right now?" `get_active_typhoons`
+- "Cross-check that quake against the USGS global feed." `get_usgs_earthquakes_ph`
 
-**Weather.** PAGASA forecast with an automatic Open-Meteo fallback, active
-typhoons, weather alerts.
+### Search procurement and spending
 
-**Procurement and accountability.** PhilGEPS notices, the infra subset,
-spending summaries, and heuristic anomaly indicators for further review.
+- "Search PhilGEPS for flood control projects in Pampanga." `search_infra_projects`
+- "Summarize infra spending in Bicol for 2025." `summarize_infra_spending`
+- "Flag PhilGEPS notices in Cebu that warrant a closer look." `flag_infra_anomalies`
+- "Pull the full notice for one flagged project." `get_infra_project`
 
-**Science and open data.** NASA POWER solar and climate, Open-Meteo air
-quality, NASA MODIS vegetation indices, World Bank macro indicators.
+### Query the PSA statistical catalog
 
-**Composites.** `get_area_profile` and `assess_area_risk`.
+- "Find PSA tables that mention fertility." `search_psa_catalog`
+- "Walk me through the poverty subject on OpenSTAT." `browse_psa_catalog`
+- "What dimensions does this poverty table have?" `describe_psa_dataset`
+- "Pull poverty incidence by island group for 2023." `query_psa_dataset`
+- "What is the current inflation rate?" `get_inflation_stats`
 
-Full signatures, arguments, and limits: **[docs/tool-reference.md](docs/tool-reference.md)**.
+`query_psa_dataset` needs an explicit value code for every dimension, refuses
+`"all"` and `"*"`, and caps a query at 1000 cells. PSA answers a full-cube
+request with an HTTP 403, so `describe_psa_dataset` first is the only way in.
 
-## Browse, describe, query: a worked example
+### Check weather and environment
 
-OpenSTAT holds about 2,900 tables. Rather than guess a table id, walk to it.
+- "What is the 5-day forecast for Iloilo?" `get_weather_forecast`
+- "Any weather alerts active in Bicol?" `get_weather_alerts`
+- "How much solar radiation does Palawan get?" `get_solar_and_climate`
+- "What is today's air quality in Manila?" `get_air_quality`
+- "How has Mindanao's vegetation changed this year?" `get_vegetation_index`
 
-```text
-browse_psa_catalog()                 -> 27 subjects, one of them {"id": "1F", "title": "Poverty"}
-browse_psa_catalog("1F")             -> {"id": "FY", "title": "Full Year Poverty Statistics"}
-browse_psa_catalog("1F/FY")          -> 27 datasets
-describe_psa_dataset("1F/FY/0241F3DF013.px")
-  -> Major Island Group (6 values), Among Families/Population (2), Year (3)
-  -> total_cells: 36
-query_psa_dataset("1F/FY/0241F3DF013.px", {
-    "Major Island Group": ["0", "2", "5"],
-    "Among Families/Population": ["0"],
-    "Year": ["2"],
-})
-  -> PHILIPPINES 10.9, NCR 1.1, Mindanao 17.6, reference_period "2023"
+Full signatures, arguments, and limits for all 34 tools:
+**[docs/tool-reference.md](docs/tool-reference.md)**.
+
+## Get a full profile for one place
+
+`get_area_profile("Tacloban")` returns the resolved identity, then reports
+Tacloban's own population next to the national figure, not the region's.
+
+```json
+{
+ "resolved": {
+  "name": "City of Tacloban",
+  "psgc_code": "083747000",
+  "level": "city"
+ },
+ "demographics": {
+  "population": 259353,
+  "population_year": 2024,
+  "population_census": "2024 Census of Population",
+  "population_reference": "PSA 2024 Census of Population, reference date 2024-07-01.",
+  "population_geography_level": "highly_urbanized_city",
+  "population_psgc_code": "0831600000",
+  "poverty_incidence_pct": 20.6,
+  "poverty_reference_year": 2023
+ },
+ "national_reference": {
+  "population": 112729484,
+  "population_year": 2024,
+  "poverty_incidence_pct": 10.9,
+  "poverty_year": 2023,
+  "population_share_pct": 0.23,
+  "poverty_gap_pct_points": 9.7
+ },
+ "blocks": {
+  "resolve": "success",
+  "population": "success",
+  "poverty": "success",
+  "hazard": "success",
+  "weather": "success",
+  "national_population": "success",
+  "national_poverty": "success",
+  "infra": "success"
+ },
+ "upstream_error": false,
+ "caveats": []
+}
 ```
 
-Run live on 2026-08-06. The `psa_data_explorer` prompt drives this sequence for
-an agent.
-
-Four limits make a generic query tool safe to hand an agent:
-
-1. The tool rebuilds every path under the OpenSTAT base. A scheme, a host, a
-   query string, a fragment, `..`, or an odd character never reaches the wire.
-2. Every dimension needs explicit value codes. PXWeb expands an unnamed
-   dimension to all of its values, and PSA answers that with an HTTP 403.
-3. The tool refuses `"all"` and `"*"` for the same reason.
-4. The tool computes the cell product before the request, and caps it at 1000.
+Captured live on 2026-09-03. Tacloban's own population, 259,353, replaces the
+Region VIII figure of about 4.6 million that an earlier version reported.
+Every demographic field names its own census, reference date, and geography
+level, so an agent never has to guess which population a number belongs to.
 
 ## An outage returns an envelope, never an empty list
 
@@ -147,114 +223,126 @@ envelope instead:
 { "results": [], "upstream_error": true, "caveats": ["ConnectError: ..."] }
 ```
 
-Read that as "the source was unreachable", never as "no earthquakes" or "no
-notices". Failures never enter a cache, so a retry is meaningful, and a
+Read that as "the source was unreachable," never as "no earthquakes" or "no
+notices." Failures never enter a cache, so a retry is meaningful, and a
 `caveats` entry carries the real error rather than an exception class name.
 
-The three OpenSTAT catalog tools and `get_population_stats` add
-`validation_error: true` for a rejected argument. Fix the argument the message
-names. A retry cannot help. Single-value tools carry `data_status`, one of
-`success`, `empty`, `unavailable`, `indeterminate` or `invalid_request`.
-`get_area_profile` reports one status per block in `blocks` and folds every
-failed block into `caveats`, so a null never sits beside an empty `caveats`
-list.
+Every single-value tool sets `data_status` to one of five values:
+
+| `data_status` | Meaning |
+|---|---|
+| `success` | The source returned a value, with its provenance. |
+| `empty` | The source answered but has no row for this request. |
+| `unavailable` | The source failed to respond, or sent an unreadable body. |
+| `indeterminate` | The source answered, but the server cannot trust the result. |
+| `invalid_request` | The caller sent a bad argument. Fix the argument named in `caveats`. |
+
+`upstream_error` and `validation_error` derive from `data_status`, so a
+caller can branch on either field. `get_area_profile` reports one status per
+block in `blocks` and folds every failed block into `caveats`, so a null
+figure never sits beside an empty `caveats` list.
 
 Every response carries `source` and `data_retrieved_at`.
 
-## Data sources and freshness
+## Sources and freshness
 
-| Source | Data | Refresh | Auth |
-|---|---|---|---|
-| PSA OpenSTAT | ~2,900 statistical tables; population, poverty, CPI, LFS, health | Per-table vintage | None |
-| PSGC | Philippine Standard Geographic Code via psgc.gitlab.io | On PSA publication | None |
-| PHIVOLCS | Earthquakes, bulletins, volcano alerts | 5 min / 30 min | None |
-| PAGASA | 10-day weather, typhoons, alerts | Hourly | Optional `PAGASA_API_TOKEN` |
-| Open-Meteo | Weather fallback, and air quality | Hourly | None |
-| PhilGEPS | Procurement notices (latest ~100) | 6 h cache | None |
-| NASA POWER | Daily solar irradiance, temperature, precipitation, wind | Daily | None |
-| NASA MODIS (ORNL) | NDVI and EVI, 250 m, 16-day composites | Weekly | None |
-| USGS FDSN | Philippine-region events from the global network | Minutes | None |
-| NOAA IBTrACS | Historical cyclone tracks through the PAR | Per storm | None |
-| World Bank | Philippine macro indicators | Annual | None |
+The table below comes straight from `SOURCE_CATALOG` in `server.py`, through
+`scripts/render_source_matrix.py`, so it cannot drift from what the server
+actually reports.
 
-`PAGASA_API_TOKEN` is the only environment variable, and it is optional. PAGASA
-gates it behind a formal request. Without it, forecasts use Open-Meteo. Every
-one of the 32 tools works with no token at all.
+<!-- source-matrix:start -->
+| Source | What it gives | Freshness | Cache TTL | License |
+|---|---|---|---|---|
+| PSGC | Place codes and names, region down to barangay | Updated when PSA publishes new PSGC version (annual or quarterly) | 24 h | Public domain (PSA Philippine Standard Geographic Code) |
+| PHIVOLCS earthquakes | Earthquake events and full bulletins | 5-minute table refresh; bulletins published per event | 5 min | Public, PHIVOLCS public bulletin pages |
+| PHIVOLCS volcanoes | Alert level and bulletin per monitored volcano | Daily bulletins per active volcano | 30 min | Public, PHIVOLCS public bulletin pages |
+| PAGASA forecast | 10-day weather forecast, with an Open-Meteo fallback | Issued twice daily; Open-Meteo updates hourly | 1 h | Open-Meteo CC-BY 4.0 / PAGASA terms |
+| PAGASA typhoons | Active typhoon bulletins and weather alerts | Bulletin every 3-6 hours when storms are active | 10 min | Public, PAGASA bulletin pages |
+| PhilGEPS notices / infra | Procurement notices, the infra subset, spending summaries | Latest ~100 bid notices, refreshed every 6h | 6 h | Public, PhilGEPS open notice listing |
+| PSA OpenSTAT | Population, poverty, CPI, labor, health, and the full statistical catalog | Per-table vintage. Population: 2024 Census of Population (reference date 2024-07-01), with 2010, 2015 and 2020 by year. Poverty: 2023. CPI/inflation: latest published month (lagged). Labor Force Survey: latest published quarter. Health (1D): per-indicator. | 24 h | PSA Open Data terms |
+| Area profile (auto-stitch) | One place profile composed live from every source below | Composed live from PSGC + PSA + PhilGEPS + PHIVOLCS + PAGASA; each block carries its own reference period | 1 h | Public, PSA OpenSTAT, PSGC, PhilGEPS, PHIVOLCS, PAGASA |
+| NASA POWER | Daily solar irradiance and climate at any point | Daily, ~3-day latency | 24 h | Public domain (NASA) |
+| Open-Meteo air quality | PM2.5, PM10, NO2, SO2, O3, CO, and AQI | Hourly | 15 min | Open-Meteo CC-BY 4.0 |
+| NASA MODIS NDVI | NDVI and EVI vegetation indices at any point | 16-day composite, ~14-day latency | 24 h | Public domain (NASA / ORNL) |
+| USGS FDSN | Philippine-region earthquakes, cross-checked against PHIVOLCS | Real-time global feed | 10 min | Public domain (USGS) |
+| NOAA IBTrACS | Historical tropical cyclone tracks through the Philippine AOR | Annual update | 24 h | Public domain (NOAA) |
+| World Bank Open Data | Philippine macroeconomic indicators | Annual; lag varies by indicator | 24 h | World Bank Open Data CC-BY 4.0 |
+<!-- source-matrix:end -->
+
+`PAGASA_API_TOKEN` is the only environment variable, and it is optional.
+PAGASA gates it behind a formal request. Without it, forecasts use
+Open-Meteo. Every one of the 34 tools works with no token at all.
 
 Three vintages worth stating plainly:
 
-- **Population defaults to the 2024 Census of Population** (reference date
-  1 July 2024). PSA moved the census folders on OpenSTAT in 2026, so the
-  server discovers them by title on every cold start and names the census,
-  reference date and geography level in every result. Pass `year` for 2010,
-  2015 or 2020, and `psgc_code` for a city, municipality or barangay.
+- **Population reads the 2024 Census of Population by default**, down to
+  barangay level by `psgc_code`. PSA moved the census folders on OpenSTAT in
+  2026, so the server discovers them by title on every cold start, and names
+  the census, reference date, and geography level in every result. Pass
+  `year` for 2010, 2015, or 2020, and `psgc_code` for a city, municipality,
+  or barangay.
 - **Poverty is 2023 Full Year.** PSA publishes it every three years.
 - **Procurement is not real time.** The public portal exposes no filterable
-  API, so this server reads the latest ~100 notices and filters locally.
+  API, so this server reads the latest ~100 notices and filters locally. A
+  per-100,000 rate needs at least 500 notices in the sample, so
+  `get_area_profile` withholds that figure below the threshold and names the
+  reason in `caveats`.
 
 The OpenSTAT `updated` field is server wall clock, not data vintage. Read the
 vintage from the table's own time dimension, which every response reports.
 
-## Flagged notices are starting points, never evidence
+## A flagged notice is a starting point, never evidence
 
-`flag_infra_anomalies`, `summarize_infra_spending`, and the procurement search
-produce starting points for investigation, never evidence of wrongdoing. Every
-flagged item ships with a disclaimer, and the server instructs agents to use
-defensible language.
+`flag_infra_anomalies`, `summarize_infra_spending`, and the procurement
+search produce starting points for investigation, never evidence of
+wrongdoing. Every flagged item ships with a disclaimer, and the server
+instructs agents to use defensible language.
 
 `high_cost_no_published_progress` is named for what it actually checks: the
 public listing publishes no progress data for any notice, so it is a
 cost-threshold transparency flag, not a per-project progress check.
 
-**For an emergency, use [ndrrmc.gov.ph](https://ndrrmc.gov.ph) and the official
-PHIVOLCS and PAGASA channels.** This is not a life-safety system but a research
-tool.
+**For an emergency, use [ndrrmc.gov.ph](https://ndrrmc.gov.ph) and the
+official PHIVOLCS and PAGASA channels.** This is not a life-safety system but
+a research tool.
 
 ## Development
 
 ```bash
 git clone https://github.com/xmpuspus/ph-civic-data-mcp
 cd ph-civic-data-mcp
-uv sync --locked --extra dev
+uv sync --extra dev
 
 # Offline tests, exactly what CI runs
-uv run pytest tests/ -q -m "not live"
+uv run pytest -m "not live"
 
-# Live tests against real upstreams; the weekly workflow runs these
-uv run pytest tests/ -q -m live
+# Live tests against real upstreams; the weekly workflow runs these every Monday
+uv run pytest -m live
 
-# The MCP Inspector, and a static report of the surface
-fastmcp dev inspector src/ph_civic_data_mcp/server.py
-fastmcp inspect src/ph_civic_data_mcp/server.py
+# Lint and format check
+uv run ruff check .
+uv run ruff format --check .
 
 # Build and validate
 uv build
 uvx twine check dist/*
 ```
 
-CI runs the offline suite on Python 3.11, 3.12, 3.13, and 3.14, plus Ruff lint,
-Ruff format, a build, and a fresh-process check that a bare import exposes all
-32 tools.
+CI runs the offline suite on Python 3.11, 3.12, 3.13, and 3.14, plus Ruff
+lint, Ruff format, a build, and a fresh-process check that a bare import
+exposes all 34 tools. CI action refs are pinned to a commit SHA, not a
+floating tag.
 
-Architecture notes: Python 3.11+, `fastmcp>=3.0.0,<4.0.0`, stdio only,
-in-memory TTL caches and no disk writes, and two HTTP clients. The second one
-exists because PHIVOLCS serves a broken certificate chain. This server never
-disables TLS checks globally or for any other host, and that client never
-follows a redirect on its own. Every hop is checked against the PHIVOLCS host
-allowlist first.
-
-## Related projects
-
-Other Philippine civic-data MCP servers cover a single dataset each: PSGC
-administrative geography, holidays, DHSUD license-to-sell, DepEd schools. None
-of them expose hazard feeds, weather, procurement, or statistical data, and
-none compose across sources.
+The `docker build` step above produces a non-root image with a healthcheck.
+The server pins `fastmcp>=3.0.0,<4.0.0`, currently 3.4.7.
 
 ## More
 
-- **[docs/tool-reference.md](docs/tool-reference.md)** for all 32 tools
+- **[docs/tool-reference.md](docs/tool-reference.md)** for all 34 tools
 - **[CHANGELOG.md](CHANGELOG.md)** for release history
 - **[docs/SUBMISSIONS.md](docs/SUBMISSIONS.md)** for directory listings
+- **[docs/fastmcp-4-evaluation.md](docs/fastmcp-4-evaluation.md)** for the
+  FastMCP 4 upgrade decision
 - Issues and pull requests: [github.com/xmpuspus/ph-civic-data-mcp](https://github.com/xmpuspus/ph-civic-data-mcp)
 
 MIT licensed. Built by Xavier Puspus. Not affiliated with PSA, PHIVOLCS,
