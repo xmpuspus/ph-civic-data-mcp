@@ -32,6 +32,7 @@ CACHES: dict[str, TTLCache[str, Any]] = {
     "area_profile": TTLCache(maxsize=100, ttl=3600),
     "nasa_power": TTLCache(maxsize=100, ttl=86400),
     "open_meteo_aq": TTLCache(maxsize=50, ttl=900),
+    "open_meteo_flood": TTLCache(maxsize=50, ttl=3600),
     "modis_ndvi": TTLCache(maxsize=50, ttl=86400),
     "usgs_events": TTLCache(maxsize=20, ttl=600),
     "ibtracs_tracks": TTLCache(maxsize=20, ttl=86400),

@@ -65,6 +65,8 @@ mcp = FastMCP(
     Open-data + NASA / NOAA / World Bank sources:
     - NASA POWER: daily solar irradiance + climate (temp, precip, wind) at any lat/lng
     - Open-Meteo Air Quality: PM2.5/PM10/NO2/SO2/O3/CO + AQI (no auth)
+    - Open-Meteo Flood: get_flood_forecast, daily river discharge (GloFAS
+      model) for flood-risk screening, up to 30 days ahead (no auth)
     - NASA MODIS via ORNL: NDVI + EVI vegetation indices at any lat/lng
     - USGS FDSN: Philippine-region earthquakes from global network (cross-ref to PHIVOLCS)
     - NOAA IBTrACS: historical tropical cyclone tracks through Philippine AOR
