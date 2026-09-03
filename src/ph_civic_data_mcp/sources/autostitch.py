@@ -110,9 +110,12 @@ async def get_area_profile(location: str) -> dict:
         location: Municipality, city, province, or region name.
                   e.g. "Leyte", "Cebu City", "Davao Region", "NCR".
 
-    Returns: resolved location, demographics, economy, procurement, hazard,
-    weather, derived correlations, per-block reference periods, caveats listing
-    any upstream that failed, and the public-data disclaimer.
+    Returns: resolved location, demographics (population and poverty, plus
+    each figure's own geography, PSGC code, census, and reference-date
+    provenance), economy, procurement, hazard, weather, national_reference
+    (the country's population and poverty for comparison), derived
+    correlations, per-block reference periods, caveats listing any upstream
+    that failed, and the public-data disclaimer.
     """
     retrieved_at = _now()
     caveats: list[str] = []
@@ -165,6 +168,11 @@ async def get_area_profile(location: str) -> dict:
         "hazard": asyncio.create_task(assess_area_risk(location)),
         "weather": asyncio.create_task(get_weather_forecast(location, days=3)),
         "labor": asyncio.create_task(get_labor_stats()),
+        # National figures let a caller read a place's number against the
+        # country's without a second tool call. Fetched here, in the same
+        # gather, so national_reference costs no extra latency.
+        "national_population": asyncio.create_task(get_population_stats()),
+        "national_poverty": asyncio.create_task(get_poverty_stats()),
     }
 
     # A resolved city or province must report its own numbers, not the
@@ -223,11 +231,17 @@ async def get_area_profile(location: str) -> dict:
     labor = _take("labor", "PSA labor") or {}
     hazard = _take("hazard", "Hazard assessment") or {}
     weather = _take("weather", "Weather forecast") or {}
+    national_population = _take("national_population", "PSA national population") or {}
+    national_poverty = _take("national_poverty", "PSA national poverty") or {}
     infra = _take("infra", "PhilGEPS infra search")
     if not isinstance(infra, list):
         infra = None
     if not isinstance(population, dict):
         population = {}
+    if not isinstance(national_population, dict):
+        national_population = {}
+    if not isinstance(national_poverty, dict):
+        national_poverty = {}
 
     pop_value = population.get("population")
     infra_count: int | None = len(infra) if infra is not None else None
@@ -244,6 +258,55 @@ async def get_area_profile(location: str) -> dict:
             "across regions. PhilGEPS notice counts reflect the latest ~100 "
             "notices window, not a complete regional census of projects."
         ),
+    }
+
+    # national_reference reads the place's own numbers against the country's.
+    # A share or a gap is only meaningful when both sides come from the same
+    # census or survey round, so a vintage mismatch withholds the figure and
+    # names both years instead of comparing numbers that do not line up.
+    national_pop_value = national_population.get("population")
+    national_pop_year = national_population.get("year")
+    national_poverty_pct = national_poverty.get("poverty_incidence_pct")
+    national_poverty_year = national_poverty.get("reference_year")
+
+    population_share_pct: float | None = None
+    place_pop_year = population.get("year")
+    if (
+        isinstance(pop_value, (int, float))
+        and isinstance(national_pop_value, (int, float))
+        and national_pop_value
+    ):
+        if place_pop_year == national_pop_year:
+            population_share_pct = round(pop_value / national_pop_value * 100, 2)
+        else:
+            caveats.append(
+                "national_reference: population vintages differ (place "
+                f"{place_pop_year}, national {national_pop_year}); "
+                "population_share_pct withheld."
+            )
+
+    place_poverty_pct = poverty.get("poverty_incidence_pct")
+    place_poverty_year = poverty.get("reference_year")
+    poverty_gap_pct_points: float | None = None
+    if isinstance(place_poverty_pct, (int, float)) and isinstance(
+        national_poverty_pct, (int, float)
+    ):
+        if place_poverty_year == national_poverty_year:
+            poverty_gap_pct_points = round(place_poverty_pct - national_poverty_pct, 1)
+        else:
+            caveats.append(
+                "national_reference: poverty vintages differ (place "
+                f"{place_poverty_year}, national {national_poverty_year}); "
+                "poverty_gap_pct_points withheld."
+            )
+
+    national_reference = {
+        "population": national_pop_value,
+        "population_year": national_pop_year,
+        "poverty_incidence_pct": national_poverty_pct,
+        "poverty_year": national_poverty_year,
+        "population_share_pct": population_share_pct,
+        "poverty_gap_pct_points": poverty_gap_pct_points,
     }
 
     return {
@@ -263,8 +326,13 @@ async def get_area_profile(location: str) -> dict:
             "population_year": population.get("year"),
             "population_census": population.get("census"),
             "population_reference": population.get("reference_note"),
+            "population_geography": population.get("geography"),
+            "population_geography_level": population.get("geography_level"),
+            "population_psgc_code": population.get("psgc_code"),
+            "population_reference_date": population.get("reference_date"),
             "poverty_incidence_pct": poverty.get("poverty_incidence_pct"),
             "poverty_reference_year": poverty.get("reference_year"),
+            "poverty_area": poverty.get("region"),
         },
         "economy": {
             "headline_inflation_pct": inflation.get("headline_inflation_pct"),
@@ -295,6 +363,7 @@ async def get_area_profile(location: str) -> dict:
             "days": weather.get("days", []),
         },
         "correlations": correlations,
+        "national_reference": national_reference,
         "blocks": blocks,
         "upstream_error": any(v in _OUTAGE_STATUSES for v in blocks.values()),
         "caveats": caveats,
