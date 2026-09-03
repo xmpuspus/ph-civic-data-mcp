@@ -586,3 +586,19 @@ async def test_get_location_hierarchy_200_empty_body_is_an_error_not_a_cached_mi
     assert result["upstream_error"] is True
     key = psgc_module.cache_key({"endpoint": "one", "code": "130000000"})
     assert key not in CACHES["psgc_browse"], "a malformed 200 must never cache a false not-found"
+
+
+@pytest.mark.asyncio
+async def test_fetch_barangay_by_code_200_empty_body_is_an_error_not_a_miss(monkeypatch):
+    """A 200 whose body has no record is malformed, the same rule `_fetch_one`
+    applies. It must raise, never read as "not a barangay"."""
+
+    def _empty_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    transport = httpx.MockTransport(_empty_handler)
+    client = httpx.AsyncClient(transport=transport, base_url="https://psgc.gitlab.io")
+    monkeypatch.setattr(psgc_module, "CLIENT", client)
+
+    with pytest.raises(psgc_module.PSGCFetchError):
+        await psgc_module._fetch_barangay_by_code("133901001")

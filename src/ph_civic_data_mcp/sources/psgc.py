@@ -370,6 +370,9 @@ async def _fetch_barangay_by_code(code: str) -> dict[str, Any] | None:
             ) from exc
         if isinstance(payload, dict) and payload.get("code"):
             return payload
+        # A 200 whose body is not a record with a `code` is malformed, not a
+        # miss. Same rule `_fetch_one` applies one function over.
+        raise PSGCFetchError(f"PSGC mirror returned a body with no record for barangay '{code}'")
     elif response.status_code != 404:
         # A 429, 401, 403 or 5xx means the mirror could not answer, not that
         # this code is not a barangay. Must raise, never fall through to None.
