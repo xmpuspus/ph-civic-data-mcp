@@ -8,12 +8,12 @@ https://earthquake.usgs.gov/fdsnws/event/1/
 from __future__ import annotations
 
 from datetime import date as date_cls, datetime, timedelta, timezone
-from math import atan2, cos, radians, sin, sqrt
 
 from ph_civic_data_mcp.models.climate import USGSEarthquake
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import failure_envelope, failure_result
+from ph_civic_data_mcp.utils.geo import haversine_km
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 USGS_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
@@ -36,21 +36,6 @@ RADIUS_CANDIDATE_POOL = 500
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Great-circle distance in km between two lat/lon points.
-
-    Local to this module because utils/geo.py belongs to another change in
-    this release. usgs.py and phivolcs.py each keep a copy, the same way
-    both already keep their own `_now()`.
-    """
-    earth_radius_km = 6371.0
-    p1, p2 = radians(lat1), radians(lat2)
-    dphi = radians(lat2 - lat1)
-    dlambda = radians(lon2 - lon1)
-    a = sin(dphi / 2) ** 2 + cos(p1) * cos(p2) * sin(dlambda / 2) ** 2
-    return 2 * earth_radius_km * atan2(sqrt(a), sqrt(1 - a))
 
 
 def _parse_event(feature: dict) -> USGSEarthquake | None:
@@ -222,7 +207,7 @@ async def get_usgs_earthquakes_ph(
             continue
         data = event.model_dump(mode="json")
         if use_radius:
-            distance_km = _haversine_km(center_lat, center_lon, event.latitude, event.longitude)
+            distance_km = haversine_km(center_lat, center_lon, event.latitude, event.longitude)
             if distance_km > radius_km:
                 continue
             data["distance_km"] = round(distance_km, 2)

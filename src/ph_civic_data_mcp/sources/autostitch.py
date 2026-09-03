@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.sources.cross_source import assess_area_risk
-from ph_civic_data_mcp.sources.infra import search_infra_projects
+from ph_civic_data_mcp.sources.infra import infra_sample_coverage, search_infra_projects
 from ph_civic_data_mcp.sources.pagasa import get_weather_forecast
 from ph_civic_data_mcp.sources.psa import (
     get_inflation_stats,
@@ -114,8 +114,15 @@ async def get_area_profile(location: str) -> dict:
     each figure's own geography, PSGC code, census, and reference-date
     provenance), economy, procurement, hazard, weather, national_reference
     (the country's population and poverty for comparison), derived
-    correlations, per-block reference periods, caveats listing any upstream
-    that failed, and the public-data disclaimer.
+    correlations (infra_notices_per_100k_population is null and carries an
+    infra_coverage_caveat when the PhilGEPS sample is below the 500-notice
+    threshold for a population-representative rate), per-block reference
+    periods, caveats listing any upstream that failed, and the public-data
+    disclaimer.
+
+    The first call in a process pays the PSA rate limit for every block at
+    once, so it can take about 15 seconds. A later call for any place reuses
+    the cached national reference and PSA discovery, so it is fast.
     """
     retrieved_at = _now()
     caveats: list[str] = []
@@ -245,13 +252,16 @@ async def get_area_profile(location: str) -> dict:
 
     pop_value = population.get("population")
     infra_count: int | None = len(infra) if infra is not None else None
+    infra_coverage = infra_sample_coverage(infra_count) if infra_count is not None else None
+    infra_sufficient = bool(infra_coverage and infra_coverage["sufficient_for_per_capita"])
     infra_per_100k: float | None = None
-    if infra_count is not None and isinstance(pop_value, int) and pop_value > 0:
+    if infra_sufficient and isinstance(pop_value, int) and pop_value > 0:
         infra_per_100k = round(infra_count / pop_value * 100_000, 2)
 
     correlations = {
         "infra_notice_count": infra_count,
         "infra_notices_per_100k_population": infra_per_100k,
+        "infra_sample_size": infra_count,
         "note": (
             "infra_notices_per_100k_population normalizes the PhilGEPS notice "
             "count by the PSA regional population so the figure is comparable "
@@ -259,6 +269,9 @@ async def get_area_profile(location: str) -> dict:
             "notices window, not a complete regional census of projects."
         ),
     }
+    if infra_coverage is not None and not infra_sufficient:
+        correlations["infra_coverage_caveat"] = infra_coverage["coverage_caveat"]
+        caveats.append(infra_coverage["coverage_caveat"])
 
     # national_reference reads the place's own numbers against the country's.
     # A share or a gap is only meaningful when both sides come from the same
