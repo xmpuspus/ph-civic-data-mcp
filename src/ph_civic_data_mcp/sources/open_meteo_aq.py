@@ -82,13 +82,13 @@ async def get_air_quality(location: str) -> dict:
       get_air_quality("Cebu City")  # current readings for Cebu City
       get_air_quality("Davao")      # current readings for Davao City
 
-    On failure: a location not in the coordinate table returns only
-    caveats, location, source, and data_retrieved_at, with a caveat naming
-    the location. An Open-Meteo fetch failure returns data_status
+    On failure: a location not in the coordinate table returns data_status
+    "invalid_request", with validation_error true and a caveat naming the
+    location. An Open-Meteo fetch failure returns data_status
     "unavailable", with upstream_error true and the real error text in
-    caveats. A response with no time and no pollutant field returns
-    data_status "indeterminate", with upstream_error true and a caveat
-    naming the missing fields.
+    caveats. A response with no time, an unparseable time, or no pollutant
+    field returns data_status "indeterminate", with upstream_error true and
+    a caveat naming the problem.
 
     Args:
         location: City or municipality name, such as "Manila", "Cebu City", or "Davao".
@@ -100,12 +100,13 @@ async def get_air_quality(location: str) -> dict:
 
     coords = city_to_coords(location)
     if coords is None:
-        return {
-            "location": location,
-            "caveats": [f"No coordinates known for '{location}'. Try a major PH city."],
-            "source": "Open-Meteo Air Quality",
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "Open-Meteo Air Quality",
+            OPEN_METEO_AQ_URL,
+            f"No coordinates known for '{location}'. Try a major PH city.",
+            validation_error=True,
+            location=location,
+        )
 
     lat, lng = coords
     params = {
@@ -174,11 +175,22 @@ async def get_air_quality(location: str) -> dict:
 
     measured_at_raw = current.get("time")
     try:
-        measured_at = datetime.fromisoformat(measured_at_raw) if measured_at_raw else _now()
+        measured_at = datetime.fromisoformat(measured_at_raw)
         if measured_at.tzinfo is None:
             measured_at = measured_at.replace(tzinfo=timezone.utc)
-    except ValueError:
-        measured_at = _now()
+    except (TypeError, ValueError):
+        # A present but unparseable time is not a real reading either. Falling
+        # back to the server clock published a made-up measured_at and cached
+        # it, same failure shape as the missing-time case above.
+        return failure_result(
+            "Open-Meteo Air Quality",
+            OPEN_METEO_AQ_URL,
+            f"Open-Meteo AQ sent an unparseable current.time value: {measured_at_raw!r}.",
+            data_status="indeterminate",
+            location=location,
+            latitude=lat,
+            longitude=lng,
+        )
 
     us_aqi = _to_int(current.get("us_aqi"))
     eu_aqi = _to_int(current.get("european_aqi"))

@@ -128,6 +128,52 @@ async def test_an_upstream_failure_is_never_cached(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_an_unknown_location_is_invalid_request_not_a_bare_dict(monkeypatch):
+    """v0.7.0 fix: a hand-built dict with no data_status raised KeyError on
+    read. It must now carry validation_error and never call the upstream.
+    """
+    calls = {"n": 0}
+
+    async def _fake(client, method, url, **kwargs):
+        calls["n"] += 1
+        return _json_response(method, url, CURRENT_PAYLOAD)
+
+    monkeypatch.setattr(aq_module, "fetch_with_retry", _fake)
+
+    result = await aq_module.get_air_quality("Atlantis")
+    assert result["data_status"] == "invalid_request"
+    assert result["validation_error"] is True
+    assert result["upstream_error"] is False
+    assert result["location"] == "Atlantis"
+    assert calls["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_an_unparseable_time_is_indeterminate_and_never_cached(monkeypatch):
+    """v0.7.0 fix: a present but bad current.time fell through to the server
+    clock and was published and cached as a real reading.
+    """
+    payload = {
+        "current": {
+            **CURRENT_PAYLOAD["current"],
+            "time": "not-a-date",
+            "us_aqi": 42,
+        }
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        return _json_response(method, url, payload)
+
+    monkeypatch.setattr(aq_module, "fetch_with_retry", _fake)
+
+    result = await aq_module.get_air_quality("Manila")
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert any("not-a-date" in c for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["open_meteo_aq"]) == 0
+
+
+@pytest.mark.asyncio
 async def test_a_schema_drift_body_is_reported_not_a_crash(monkeypatch):
     """A bare list instead of the documented object body must not raise."""
 

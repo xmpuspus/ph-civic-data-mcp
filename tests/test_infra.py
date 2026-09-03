@@ -154,6 +154,29 @@ async def test_search_infra_region_filter():
 
 
 @pytest.mark.asyncio
+async def test_search_infra_year_filter_excludes_undated_record(monkeypatch):
+    """Latent bug 15: a record with no publish date passed any year filter."""
+    undated = _record(
+        title="Construction of Flood Control Structure, drainage phase",
+        date_published=None,
+        reference_number="PHILGEPS-INF-UNDATED",
+    )
+
+    async def _stub():
+        return [*SAMPLE_RECORDS, undated]
+
+    monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _stub)
+    CACHES["infra_projects"].clear()
+
+    by_year = await infra_module.search_infra_projects(year=2025, limit=100)
+    assert "PHILGEPS-INF-UNDATED" not in {r["project_id"] for r in by_year}
+
+    CACHES["infra_projects"].clear()
+    no_year_filter = await infra_module.search_infra_projects(limit=100)
+    assert "PHILGEPS-INF-UNDATED" in {r["project_id"] for r in no_year_filter}
+
+
+@pytest.mark.asyncio
 async def test_get_infra_project_by_id():
     result = await infra_module.get_infra_project("PHILGEPS-INF-003")
     assert result["matched"] is True
