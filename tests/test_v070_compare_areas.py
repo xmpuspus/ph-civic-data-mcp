@@ -145,6 +145,7 @@ async def test_compare_level_mismatch_adds_a_caveat(monkeypatch):
 
     out = await compare.compare_areas(["Cebu City", "Region VII"], metrics=["population"])
 
+    assert out["comparable"] is False
     joined = " ".join(out["caveats"])
     assert "admin level" in joined
     assert "city" in joined and "region" in joined

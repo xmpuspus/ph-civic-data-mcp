@@ -301,7 +301,13 @@ async def get_area_profile(location: str) -> dict:
         and isinstance(national_pop_value, (int, float))
         and national_pop_value
     ):
-        if place_pop_year == national_pop_year:
+        if place_pop_year is None or national_pop_year is None:
+            caveats.append(
+                "national_reference: population vintage unknown (place "
+                f"{place_pop_year}, national {national_pop_year}); "
+                "population_share_pct withheld."
+            )
+        elif place_pop_year == national_pop_year:
             population_share_pct = round(pop_value / national_pop_value * 100, 2)
         else:
             caveats.append(
@@ -316,7 +322,13 @@ async def get_area_profile(location: str) -> dict:
     if isinstance(place_poverty_pct, (int, float)) and isinstance(
         national_poverty_pct, (int, float)
     ):
-        if place_poverty_year == national_poverty_year:
+        if place_poverty_year is None or national_poverty_year is None:
+            caveats.append(
+                "national_reference: poverty vintage unknown (place "
+                f"{place_poverty_year}, national {national_poverty_year}); "
+                "poverty_gap_pct_points withheld."
+            )
+        elif place_poverty_year == national_poverty_year:
             poverty_gap_pct_points = round(place_poverty_pct - national_poverty_pct, 1)
         else:
             caveats.append(

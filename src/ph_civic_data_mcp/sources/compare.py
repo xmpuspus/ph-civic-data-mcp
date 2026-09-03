@@ -263,6 +263,7 @@ async def compare_areas(
 
     levels = {row["level"] for row in rows if row["level"] is not None}
     if len(levels) > 1:
+        comparable = False
         caveats.append(
             f"locations differ in admin level: {sorted(levels)}. "
             "Comparing across scales, such as a city next to a region, "
