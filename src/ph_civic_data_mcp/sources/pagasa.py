@@ -41,6 +41,15 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class OpenMeteoMalformedResponseError(RuntimeError):
+    """Open-Meteo sent HTTP 200 with no daily forecast entries.
+
+    days is always 1-10, so an empty or missing daily.time array is never a
+    real zero-day forecast. Raised so get_weather_forecast reports this as
+    indeterminate and never caches it as a real answer.
+    """
+
+
 def _wind_direction(degrees: float | None) -> str | None:
     if degrees is None:
         return None
@@ -87,9 +96,11 @@ async def _open_meteo_forecast(location: str, lat: float, lng: float, days: int)
     response.raise_for_status()
     payload = response.json()
     daily = payload.get("daily", {})
+    dates = daily.get("time") or []
+    if not dates:
+        raise OpenMeteoMalformedResponseError("Open-Meteo response carried no daily.time entries")
 
     daily_forecasts: list[DailyForecast] = []
-    dates = daily.get("time", [])
     for i, d in enumerate(dates):
         try:
             iso_date = date_cls.fromisoformat(d)
@@ -277,7 +288,9 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
     On failure, a location with no known coordinates returns days: [] and
     a caveat, with no data_status or upstream_error key. An Open-Meteo
     fetch failure returns data_status "unavailable", upstream_error: true,
-    days: [], and the real error in caveats.
+    days: [], and the real error in caveats. An Open-Meteo response with no
+    daily forecast entries returns data_status "indeterminate" instead, and
+    is never cached.
 
     Args:
         location: Municipality, city, or province name.
@@ -320,6 +333,17 @@ async def get_weather_forecast(location: str, days: int = 3) -> dict:
     lat, lng = coords
     try:
         result = await _open_meteo_forecast(location, lat, lng, days)
+    except OpenMeteoMalformedResponseError as exc:
+        log_stderr(f"get_weather_forecast malformed response: {exc}")
+        return failure_result(
+            "Open-Meteo",
+            OPEN_METEO_BASE,
+            f"Open-Meteo returned malformed data ({exc})",
+            location=location,
+            days=[],
+            data_source="open_meteo",
+            data_status=DATA_STATUS_INDETERMINATE,
+        )
     except Exception as exc:
         log_stderr(f"get_weather_forecast error: {exc}")
         return failure_result(

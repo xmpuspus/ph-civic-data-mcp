@@ -254,8 +254,17 @@ def _categorize(record: object) -> str:
 
 def _record_id(record: object) -> str:
     ref = getattr(record, "reference_number", None) or ""
+    if ref:
+        return ref
+    # A reference-free record needs title, agency, and publish date together,
+    # not title alone. Two agencies can post the same generic title (for
+    # example "Road Rehabilitation"), and a title-only hash gave them the
+    # same fallback id, so get_infra_project returned the wrong record.
     title = getattr(record, "title", "")
-    return ref or f"PHILGEPS-{abs(hash(title)) % 10**10}"
+    agency = getattr(record, "agency", "")
+    published = getattr(record, "date_published", "")
+    fallback_key = f"{title}|{agency}|{published}"
+    return f"PHILGEPS-{abs(hash(fallback_key)) % 10**10}"
 
 
 def _to_infra_project(record: object) -> InfraProject:

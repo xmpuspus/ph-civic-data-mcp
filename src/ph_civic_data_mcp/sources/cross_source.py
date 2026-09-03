@@ -250,25 +250,39 @@ async def assess_area_risk(location: str) -> dict:
     typhoons_failed = _child_failed(typhoons_result)
     alerts_failed = _child_failed(alerts_result)
     volcano_failed = _child_failed(volcano_result)
+
+    earthquakes = _unwrap_list(earthquakes_result, caveats, "PHIVOLCS earthquake query")
+    typhoons = _unwrap_list(typhoons_result, caveats, "PAGASA typhoon query")
+    active_alerts = _unwrap_list(alerts_result, caveats, "PAGASA alerts query")
+    volcanoes = _unwrap_list(volcano_result, caveats, "PHIVOLCS volcano query")
+
+    # get_volcano_status returns a list on success, but one volcano entry can
+    # still carry upstream_error true when only its own bulletin fetch
+    # failed. _child_failed cannot see that, since the top-level call
+    # returned a list, not a failure envelope. Treat that entry as a
+    # degraded child and lift its caveat to the top level.
+    volcano_degraded = False
+    for v in volcanoes:
+        if isinstance(v, dict) and v.get("upstream_error"):
+            volcano_degraded = True
+            caveats.extend(str(c) for c in (v.get("caveats") or []))
+
     blocks = {
         "earthquakes": "unavailable" if earthquakes_failed else "success",
         "typhoons": "unavailable" if typhoons_failed else "success",
         "alerts": "unavailable" if alerts_failed else "success",
-        "volcanoes": "unavailable" if volcano_failed else "success",
+        "volcanoes": "unavailable"
+        if volcano_failed
+        else ("indeterminate" if volcano_degraded else "success"),
     }
     failed_count = sum([earthquakes_failed, typhoons_failed, alerts_failed, volcano_failed])
-    if failed_count == 0:
+    if failed_count == 0 and not volcano_degraded:
         data_status = DATA_STATUS_SUCCESS
     elif failed_count == len(blocks):
         data_status = DATA_STATUS_UNAVAILABLE
     else:
         data_status = DATA_STATUS_INDETERMINATE
     upstream_error = data_status in (DATA_STATUS_UNAVAILABLE, DATA_STATUS_INDETERMINATE)
-
-    earthquakes = _unwrap_list(earthquakes_result, caveats, "PHIVOLCS earthquake query")
-    typhoons = _unwrap_list(typhoons_result, caveats, "PAGASA typhoon query")
-    active_alerts = _unwrap_list(alerts_result, caveats, "PAGASA alerts query")
-    volcanoes = _unwrap_list(volcano_result, caveats, "PHIVOLCS volcano query")
 
     recent_earthquakes_30d = 0
     max_magnitude_30d = 0.0

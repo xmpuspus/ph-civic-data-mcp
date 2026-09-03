@@ -226,6 +226,27 @@ async def test_the_explicit_no_active_marker_still_returns_and_caches_empty(monk
 
 
 @pytest.mark.asyncio
+async def test_open_meteo_empty_daily_time_is_indeterminate_not_cached(monkeypatch):
+    """A 200 with daily.time: [] must not become a clean days: [] success.
+
+    days is always 1-10, so an empty daily.time array is malformed upstream
+    data, not a real zero-day forecast.
+    """
+
+    async def _fake(client, method, url, **kwargs):
+        if "tenday" in url:
+            raise httpx.ConnectError("tenday down")
+        return _json_response(method, url, {"daily": {"time": []}})
+
+    monkeypatch.setattr(pagasa_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_module.get_weather_forecast("Manila", days=1)
+    assert result["upstream_error"] is True
+    assert result["data_status"] == "indeterminate"
+    assert len(CACHES["pagasa_forecast"]) == 0
+
+
+@pytest.mark.asyncio
 async def test_both_sources_down_is_reported_and_not_cached(monkeypatch):
     os.environ.pop("PAGASA_API_TOKEN", None)
 
