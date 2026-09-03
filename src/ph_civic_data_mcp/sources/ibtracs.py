@@ -157,7 +157,7 @@ async def _stream_storms(url: str) -> tuple[int, dict[str, dict]]:
     start_time_utc descending and keeps the most recent `limit`, and this
     feed arrives in the archive's own (oldest-first) row order, so stopping
     early would silently swap "the `limit` most recent PAR storms" for "the
-    first `limit` PAR storms encountered" — the wrong set, not just a
+    first `limit` PAR storms encountered", the wrong set, not just a
     truncated one. This function still reads every row; it only avoids
     holding the whole body and every parsed row in memory at once.
 

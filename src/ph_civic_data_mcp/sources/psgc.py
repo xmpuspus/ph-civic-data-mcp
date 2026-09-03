@@ -232,7 +232,7 @@ async def _fetch_level(level: str) -> list[dict[str, Any]]:
     async with _level_lock(level):
         if key in cache:
             return cache[key]
-        # Failures raise — a transient PSGC outage must not be cached as an
+        # Failures raise: a transient PSGC outage must not be cached as an
         # empty level list for 24h (which made every resolve report "no match").
         response = await fetch_with_retry(CLIENT, "GET", f"{PSGC_BASE}/{endpoint}/")
         response.raise_for_status()

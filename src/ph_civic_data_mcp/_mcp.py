@@ -26,7 +26,7 @@ mcp = FastMCP(
       typhoons, volcano alerts), and the 3-day weather outlook, with per-100k
       normalization already derived. Prefer this over orchestrating the
       individual tools yourself.
-    - compare_areas(locations, metrics) — 2 to 5 places side by side, one
+    - compare_areas(locations, metrics): 2 to 5 places side by side, one
       row each (population, poverty, inflation, employment, procurement,
       quake risk). Sets `comparable: false` plus a caveat when the rows carry
       different data vintages or admin levels. format="csv" adds an export.
