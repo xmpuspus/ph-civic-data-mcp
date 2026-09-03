@@ -93,6 +93,36 @@ async def test_a_schema_drift_body_is_reported_not_a_crash(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_span_over_the_cap_is_rejected_before_any_fetch(monkeypatch):
+    """A 400-day span must never reach the network."""
+
+    def _unexpected(client, method, url, **kwargs):
+        raise AssertionError("fetch_with_retry must not be called for a span over the cap")
+
+    monkeypatch.setattr(power_module, "fetch_with_retry", _unexpected)
+
+    result = await power_module.get_solar_and_climate(14.5995, 120.9842, "2025-01-01", "2026-02-05")
+    assert result["validation_error"] is True
+    assert result["upstream_error"] is False
+    assert result["days"] == []
+    assert len(CACHES["nasa_power"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_span_within_the_cap_still_fetches(monkeypatch):
+    """A 30-day span is well under the cap and must fetch normally."""
+
+    async def _fake(client, method, url, **kwargs):
+        return _json_response(method, url, SUCCESS_PAYLOAD)
+
+    monkeypatch.setattr(power_module, "fetch_with_retry", _fake)
+
+    result = await power_module.get_solar_and_climate(14.5995, 120.9842, "2026-03-01", "2026-03-31")
+    assert not result.get("validation_error")
+    assert len(result["days"]) == 2
+
+
+@pytest.mark.asyncio
 async def test_a_non_dict_parameter_block_is_reported_not_a_crash(monkeypatch):
     """A malformed 'parameter' field (a list, not an object) must not raise."""
 

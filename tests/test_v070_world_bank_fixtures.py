@@ -55,6 +55,21 @@ async def test_a_degenerate_payload_is_never_cached(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_missing_total_is_never_cached_as_a_real_zero(monkeypatch):
+    """metadata carries no total at all. That is not a confirmed zero."""
+
+    async def _no_metadata(client, method, url, **kwargs):
+        return _wb_response(method, url, [{}, []])
+
+    monkeypatch.setattr(wb, "fetch_with_retry", _no_metadata)
+
+    result = await wb.get_world_bank_indicator("SP.POP.TOTL", per_page=5)
+    assert result["upstream_error"] is True
+    assert result["data_status"] in ("unavailable", "indeterminate")
+    assert len(CACHES["world_bank"]) == 0
+
+
+@pytest.mark.asyncio
 async def test_a_real_zero_answer_still_caches(monkeypatch):
     """metadata says total is 0. The indicator truly has no data; cache it."""
 

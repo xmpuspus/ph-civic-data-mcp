@@ -94,17 +94,24 @@ async def test_a_success_response_caches(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_an_empty_current_block_is_a_valid_response_and_still_caches(monkeypatch):
+async def test_an_empty_current_block_is_indeterminate_and_never_cached(monkeypatch):
+    """A body with no time and no pollutant field is not a real reading.
+
+    v0.7.0 fix: the old code assigned the server clock to measured_at and
+    cached this as a valid zero reading. It must now return indeterminate
+    and skip the cache.
+    """
+
     async def _fake(client, method, url, **kwargs):
         return _json_response(method, url, {"current": {}})
 
     monkeypatch.setattr(aq_module, "fetch_with_retry", _fake)
 
     result = await aq_module.get_air_quality("Manila")
-    assert not result.get("upstream_error")
-    assert result["pm2_5"] is None
-    assert result["us_aqi"] is None
-    assert len(CACHES["open_meteo_aq"]) == 1
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert any("time" in c for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["open_meteo_aq"]) == 0
 
 
 @pytest.mark.asyncio

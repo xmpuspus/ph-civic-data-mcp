@@ -18,6 +18,11 @@ NASA_POWER_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 
 PARAMETERS = "ALLSKY_SFC_SW_DWN,T2M,PRECTOTCORR,WS2M"
 
+# A span with no cap let "1981-01-01" to today return 16,683 daily rows in
+# one response. NASA POWER's own daily coverage starts in 1981, so a year is
+# generous for any solar-site or historical-climate check this tool serves.
+MAX_SPAN_DAYS = 366
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -75,13 +80,16 @@ async def get_solar_and_climate(
     On failure: an upstream fetch failure or a malformed response body
     returns data_status "unavailable", with upstream_error true, days [],
     and the real error text in caveats. A bad start_date or end_date string
-    falls back to the default window instead of failing.
+    falls back to the default window instead of failing. An end_date before
+    start_date, or a span over 366 days, returns data_status
+    "invalid_request", with validation_error true and days [].
 
     Args:
         latitude: Decimal degrees, WGS84.
         longitude: Decimal degrees, WGS84.
         start_date: ISO date string (YYYY-MM-DD). Defaults to 14 days ago.
-        end_date: ISO date string (YYYY-MM-DD). Defaults to today.
+        end_date: ISO date string (YYYY-MM-DD). Defaults to today. The span
+                  from start_date to end_date cannot exceed 366 days.
     """
     today = _now().date()
     try:
@@ -93,8 +101,34 @@ async def get_solar_and_climate(
     except ValueError:
         ed = today
 
-    if sd > ed:
-        sd, ed = ed, sd
+    if ed < sd:
+        return failure_result(
+            "NASA POWER",
+            NASA_POWER_URL,
+            f"end_date {ed.isoformat()} is before start_date {sd.isoformat()}. "
+            "Swap the two dates and try again.",
+            validation_error=True,
+            latitude=latitude,
+            longitude=longitude,
+            start_date=sd.isoformat(),
+            end_date=ed.isoformat(),
+            days=[],
+        )
+
+    span_days = (ed - sd).days
+    if span_days > MAX_SPAN_DAYS:
+        return failure_result(
+            "NASA POWER",
+            NASA_POWER_URL,
+            f"Requested span is {span_days} days. The cap is {MAX_SPAN_DAYS} days. "
+            "Narrow start_date and end_date.",
+            validation_error=True,
+            latitude=latitude,
+            longitude=longitude,
+            start_date=sd.isoformat(),
+            end_date=ed.isoformat(),
+            days=[],
+        )
 
     ckey = cache_key(
         {

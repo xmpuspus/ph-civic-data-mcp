@@ -86,7 +86,9 @@ async def get_air_quality(location: str) -> dict:
     caveats, location, source, and data_retrieved_at, with a caveat naming
     the location. An Open-Meteo fetch failure returns data_status
     "unavailable", with upstream_error true and the real error text in
-    caveats.
+    caveats. A response with no time and no pollutant field returns
+    data_status "indeterminate", with upstream_error true and a caveat
+    naming the missing fields.
 
     Args:
         location: City or municipality name, such as "Manila", "Cebu City", or "Davao".
@@ -146,6 +148,30 @@ async def get_air_quality(location: str) -> dict:
         )
 
     current = _as_dict(payload.get("current"))
+    pollutant_fields = (
+        "pm2_5",
+        "pm10",
+        "carbon_monoxide",
+        "nitrogen_dioxide",
+        "sulphur_dioxide",
+        "ozone",
+    )
+    missing_pollutants = [f for f in pollutant_fields if current.get(f) is None]
+    if "time" not in current or len(missing_pollutants) == len(pollutant_fields):
+        # A missing time or an all-None current block is not a real reading.
+        # Assigning the server clock to measured_at fabricated a timestamp
+        # for a measurement that never came back.
+        missing = (["time"] if "time" not in current else []) + missing_pollutants
+        return failure_result(
+            "Open-Meteo Air Quality",
+            OPEN_METEO_AQ_URL,
+            f"Open-Meteo AQ sent no usable reading. Missing fields: {', '.join(missing)}.",
+            data_status="indeterminate",
+            location=location,
+            latitude=lat,
+            longitude=lng,
+        )
+
     measured_at_raw = current.get("time")
     try:
         measured_at = datetime.fromisoformat(measured_at_raw) if measured_at_raw else _now()
