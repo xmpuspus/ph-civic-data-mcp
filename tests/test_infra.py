@@ -357,3 +357,46 @@ async def test_summarize_infra_spending_coverage_fields_small_sample():
     assert summary["sample_size"] == summary["total_count"]
     assert summary["sufficient_for_per_capita"] is False
     assert summary["coverage_caveat"] is not None
+
+
+# --- v0.7.0 fix: title-only fallback id collided across agencies ---
+
+
+@pytest.mark.asyncio
+async def test_get_infra_project_fallback_id_distinguishes_same_title_by_agency(monkeypatch):
+    """Two reference-free records sharing a title must get different ids.
+
+    The old fallback id hashed the title alone, so "Road Rehabilitation"
+    from Agency A and Agency B shared one id, and get_infra_project for
+    B's id returned A's record.
+    """
+    record_a = ProcurementRecord(
+        reference_number=None,
+        title="Road Rehabilitation",
+        agency="Agency A",
+        date_published=date(2025, 1, 10),
+    )
+    record_b = ProcurementRecord(
+        reference_number=None,
+        title="Road Rehabilitation",
+        agency="Agency B",
+        date_published=date(2025, 2, 20),
+    )
+
+    async def _stub():
+        return [record_a, record_b]
+
+    monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _stub)
+    CACHES["infra_projects"].clear()
+
+    id_a = infra_module._record_id(record_a)
+    id_b = infra_module._record_id(record_b)
+    assert id_a != id_b
+
+    result_a = await infra_module.get_infra_project(id_a)
+    assert result_a["matched"] is True
+    assert result_a["agency"] == "Agency A"
+
+    result_b = await infra_module.get_infra_project(id_b)
+    assert result_b["matched"] is True
+    assert result_b["agency"] == "Agency B"
