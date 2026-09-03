@@ -547,7 +547,8 @@ async def summarize_infra_spending(
 
     Args:
         region: PH region filter (partial match).
-        year: Filter publish date to this calendar year.
+        year: Filter publish date to this calendar year. Drops an
+            undated record and notes the dropped count in caveats.
         funding_source: Reserved for future DPWH integration; PhilGEPS notices
                         do not expose funding source, so this filter is a
                         no-op today.
@@ -612,6 +613,7 @@ async def summarize_infra_spending(
     cost_known = 0
     filtered = 0
 
+    undated_dropped = 0
     for record in records:
         agency = getattr(record, "agency", None) or ""
         record_region = (getattr(record, "region", None) or "").lower()
@@ -619,7 +621,10 @@ async def summarize_infra_spending(
 
         if region_lc and region_lc not in record_region and region_lc not in agency.lower():
             continue
-        if year and date_pub and date_pub.year != year:
+        if year and date_pub is None:
+            undated_dropped += 1
+            continue
+        if year and date_pub.year != year:
             continue
 
         filtered += 1
@@ -659,10 +664,17 @@ async def summarize_infra_spending(
         source_url=PHILGEPS_PORTAL,
         license=INFRA_LICENSE,
     )
+    caveats: list[str] = []
+    if year and undated_dropped:
+        caveats.append(
+            f"{undated_dropped} record(s) excluded from the year={year} filter "
+            "because they have no publish date."
+        )
+
     coverage = infra_sample_coverage(filtered)
     return {
         **summary.model_dump(mode="json"),
-        "caveats": [],
+        "caveats": caveats,
         "upstream_error": False,
         "data_status": DATA_STATUS_SUCCESS,
         "data_retrieved_at": retrieved_at.isoformat(),

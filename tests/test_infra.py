@@ -177,6 +177,31 @@ async def test_search_infra_year_filter_excludes_undated_record(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_summarize_infra_spending_year_filter_excludes_undated_record(monkeypatch):
+    """search_infra_projects excludes undated records under a year filter.
+
+    The summary must agree, so an undated record does not inflate
+    total_count while the matching search call excludes it.
+    """
+    undated = _record(
+        title="Construction of Flood Control Structure, drainage phase",
+        date_published=None,
+        reference_number="PHILGEPS-INF-UNDATED",
+    )
+
+    async def _stub():
+        return [undated]
+
+    monkeypatch.setattr("ph_civic_data_mcp.sources.infra._fetch_notices", _stub)
+    CACHES["infra_projects"].clear()
+
+    summary = await infra_module.summarize_infra_spending(year=2026)
+    assert summary["total_count"] == 0
+    assert summary["caveats"]
+    assert "1" in summary["caveats"][0]
+
+
+@pytest.mark.asyncio
 async def test_get_infra_project_by_id():
     result = await infra_module.get_infra_project("PHILGEPS-INF-003")
     assert result["matched"] is True
