@@ -101,8 +101,17 @@ async def get_area_profile(location: str) -> dict:
     """
     retrieved_at = _now()
     caveats: list[str] = []
+    resolve_status = DATA_STATUS_SUCCESS
+    hierarchy_status: str | None = None
 
     resolved = await resolve_ph_location(location)
+    if is_failure(resolved):
+        # A resolver outage must never read as "no such place". Codex
+        # cross-model finding on the v0.6.1 diff: the old code only checked
+        # `matched`, so a PSGC API outage looked identical to an unknown name.
+        for c in resolved.get("caveats") or ["PSGC resolver unavailable"]:
+            caveats.append(f"PSGC resolve: {c}")
+        resolve_status = DATA_STATUS_UNAVAILABLE
     matched = bool(resolved.get("matched"))
     region_name: str | None = None
     province_name: str | None = None
@@ -113,6 +122,12 @@ async def get_area_profile(location: str) -> dict:
         if (resolved.get("level") or "") == "region":
             region_name = resolved.get("name")
         hierarchy = await get_location_hierarchy(resolved["psgc_code"])
+        if is_failure(hierarchy):
+            for c in hierarchy.get("caveats") or ["PSGC hierarchy unavailable"]:
+                caveats.append(f"PSGC hierarchy: {c}")
+            hierarchy_status = DATA_STATUS_UNAVAILABLE
+        else:
+            hierarchy_status = DATA_STATUS_SUCCESS
         chain = hierarchy.get("chain") or []
         for node in chain:
             lvl = node.get("level")
@@ -122,7 +137,7 @@ async def get_area_profile(location: str) -> dict:
                 province_name = node.get("name")
             elif lvl in ("city", "municipality"):
                 locality_name = node.get("name")
-    elif not matched:
+    elif not matched and resolve_status == DATA_STATUS_SUCCESS:
         caveats.append(
             f"'{location}' did not resolve to a PSGC record; PSA statistics "
             "(which key on region) are omitted. Hazard and weather use the raw "
@@ -147,7 +162,9 @@ async def get_area_profile(location: str) -> dict:
 
     gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
     results = dict(zip(tasks.keys(), gathered))
-    blocks: dict[str, str] = {}
+    blocks: dict[str, str] = {"resolve": resolve_status}
+    if hierarchy_status is not None:
+        blocks["hierarchy"] = hierarchy_status
 
     def _take(name: str, label: str) -> dict | list | None:
         if name not in results:

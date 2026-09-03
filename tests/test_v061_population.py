@@ -799,6 +799,59 @@ async def test_area_profile_marks_every_block_when_all_succeed(_profile_mocks, m
 
 
 @pytest.mark.asyncio
+async def test_area_profile_never_reads_a_resolver_outage_as_an_unknown_place(
+    _profile_mocks, monkeypatch
+):
+    """Codex cross-model finding: a PSGC outage looked identical to "no match"."""
+
+    async def _resolve_down(location):
+        return {
+            "query": location,
+            "matched": False,
+            "upstream_error": True,
+            "caveats": ["PSGC API unavailable (ConnectError: down)."],
+            "source": "PSGC",
+        }
+
+    async def _pop_ok(**kwargs):
+        return {"population": 1, "year": 2024}
+
+    monkeypatch.setattr(autostitch_module, "resolve_ph_location", _resolve_down)
+    monkeypatch.setattr(autostitch_module, "get_population_stats", _pop_ok)
+
+    profile = await autostitch_module.get_area_profile("Leyte")
+
+    assert profile["blocks"]["resolve"] == "unavailable"
+    assert profile["upstream_error"] is True
+    assert any("PSGC resolve" in c and "ConnectError" in c for c in profile["caveats"])
+    assert not any("did not resolve to a PSGC record" in c for c in profile["caveats"])
+    assert profile["resolved"]["matched"] is False
+
+
+@pytest.mark.asyncio
+async def test_area_profile_folds_a_hierarchy_outage(_profile_mocks, monkeypatch):
+    async def _hierarchy_down(code):
+        return {
+            "psgc_code": code,
+            "chain": [],
+            "upstream_error": True,
+            "caveats": ["PSGC API unavailable while walking hierarchy (ConnectError)."],
+        }
+
+    async def _pop_ok(**kwargs):
+        return {"population": 1, "year": 2024}
+
+    monkeypatch.setattr(autostitch_module, "get_location_hierarchy", _hierarchy_down)
+    monkeypatch.setattr(autostitch_module, "get_population_stats", _pop_ok)
+
+    profile = await autostitch_module.get_area_profile("NCR")
+
+    assert profile["blocks"]["hierarchy"] == "unavailable"
+    assert profile["upstream_error"] is True
+    assert any("PSGC hierarchy" in c for c in profile["caveats"])
+
+
+@pytest.mark.asyncio
 async def test_area_profile_folds_an_infra_envelope_the_same_way(_profile_mocks, monkeypatch):
     async def _pop_ok(**kwargs):
         return {"population": 14_001_751, "year": 2024}
