@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # Every action in .github/workflows/*.yml is pinned to a full commit SHA.
+  # Dependabot still tracks the trailing tag comment and opens a PR that
+  # updates both the SHA and the comment together.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Native uv support: reads pyproject.toml and uv.lock together, the same
+  # files `uv sync --frozen` checks in CI and in the Dockerfile build.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
