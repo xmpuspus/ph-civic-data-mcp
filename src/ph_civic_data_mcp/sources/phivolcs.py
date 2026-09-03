@@ -103,6 +103,33 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Codex cross-model finding: the parser used to detect the header row by
+# name, then read each data row by a fixed cell position (cells[1] for
+# latitude, cells[2] for longitude, and so on). A column reorder upstream
+# would emit longitude as latitude and vice versa with no error. Each name
+# below maps to the keyword the header cell is matched on, so the read
+# position always follows the header, never a hardcoded index.
+REQUIRED_COLUMNS = {
+    "date": "date",
+    "latitude": "latitude",
+    "longitude": "longitude",
+    "depth": "depth",
+    "magnitude": "mag",
+    "location": "location",
+}
+
+
+def _header_column_map(header_cells: list[str]) -> dict[str, int]:
+    """Map each required column name to its index in the header row."""
+    column_map: dict[str, int] = {}
+    for name, keyword in REQUIRED_COLUMNS.items():
+        for idx, cell in enumerate(header_cells):
+            if keyword in cell:
+                column_map[name] = idx
+                break
+    return column_map
+
+
 async def _fetch_earthquake_list() -> list[dict]:
     """Scrape the PHIVOLCS earthquake list table. Returns raw rows."""
     key = cache_key({"endpoint": "eq_list"})
@@ -115,6 +142,7 @@ async def _fetch_earthquake_list() -> list[dict]:
     soup = BeautifulSoup(response.text, "lxml")
 
     target_table = None
+    target_header_cells: list[str] = []
     for table in soup.find_all("table"):
         rows = table.find_all("tr")
         if len(rows) < 5:
@@ -122,6 +150,7 @@ async def _fetch_earthquake_list() -> list[dict]:
         header_cells = [c.get_text(" ", strip=True).lower() for c in rows[0].find_all(["th", "td"])]
         if any("latitude" in h for h in header_cells) and any("mag" in h for h in header_cells):
             target_table = table
+            target_header_cells = header_cells
             break
 
     if target_table is None:
@@ -129,13 +158,21 @@ async def _fetch_earthquake_list() -> list[dict]:
         # failure instead of caching a false all-clear.
         raise RuntimeError("PHIVOLCS earthquake table not found on list page (HTML drift?)")
 
+    column_map = _header_column_map(target_header_cells)
+    missing = sorted(set(REQUIRED_COLUMNS) - set(column_map))
+    if missing:
+        raise RuntimeError(
+            f"PHIVOLCS earthquake table is missing column(s) {missing} (HTML drift?)"
+        )
+
     results: list[dict] = []
     rows = target_table.find_all("tr")
+    min_cells = max(column_map.values()) + 1
     for row in rows[1:]:
         cells = row.find_all(["td", "th"])
-        if len(cells) < 6:
+        if len(cells) < min_cells:
             continue
-        datetime_text = cells[0].get_text(" ", strip=True)
+        datetime_text = cells[column_map["date"]].get_text(" ", strip=True)
         if not datetime_text or "date" in datetime_text.lower():
             continue
 
@@ -146,14 +183,14 @@ async def _fetch_earthquake_list() -> list[dict]:
             bulletin_href = urljoin(PHIVOLCS_EQ_LIST_URL, href)
 
         try:
-            lat = float(cells[1].get_text(strip=True))
-            lng = float(cells[2].get_text(strip=True))
-            depth = float(cells[3].get_text(strip=True))
-            mag = float(cells[4].get_text(strip=True))
+            lat = float(cells[column_map["latitude"]].get_text(strip=True))
+            lng = float(cells[column_map["longitude"]].get_text(strip=True))
+            depth = float(cells[column_map["depth"]].get_text(strip=True))
+            mag = float(cells[column_map["magnitude"]].get_text(strip=True))
         except (ValueError, IndexError):
             continue
 
-        location = cells[5].get_text(" ", strip=True)
+        location = cells[column_map["location"]].get_text(" ", strip=True)
         try:
             dt = date_parser.parse(datetime_text, fuzzy=True)
         except (ValueError, OverflowError):
