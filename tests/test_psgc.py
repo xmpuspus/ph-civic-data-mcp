@@ -130,6 +130,16 @@ async def test_resolve_ph_location_matches_city():
 
 
 @pytest.mark.asyncio
+async def test_resolve_ph_location_fills_region_name_from_region_code():
+    """v0.7.0: the PSGC mirror sends regionCode but never regionName on a
+    child record. `item.get("regionName")` always read None. `region_name`
+    must now resolve through a region-code lookup instead."""
+    result = await psgc_module.resolve_ph_location("Cebu City")
+    assert result["region_code"] == "070000000"
+    assert result["region_name"] == "Central Visayas"
+
+
+@pytest.mark.asyncio
 async def test_resolve_ph_location_handles_unknown():
     result = await psgc_module.resolve_ph_location("zzzzzzzzz-not-a-place")
     assert result["matched"] is False

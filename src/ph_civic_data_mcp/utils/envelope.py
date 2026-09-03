@@ -29,6 +29,19 @@ DATA_STATUS_INDETERMINATE = "indeterminate"
 # `upstream_error` is False, and retrying the same call cannot help.
 DATA_STATUS_INVALID_REQUEST = "invalid_request"
 
+# v0.7.0: the closed set every `data_status` value must belong to. A source
+# module adding its own status string (a typo, a new outage shape) would
+# silently escape the upstream_error/validation_error derivation above.
+DATA_STATUS_VALUES = frozenset(
+    {
+        DATA_STATUS_SUCCESS,
+        DATA_STATUS_EMPTY,
+        DATA_STATUS_UNAVAILABLE,
+        DATA_STATUS_INDETERMINATE,
+        DATA_STATUS_INVALID_REQUEST,
+    }
+)
+
 
 def failure_result(
     source: str,

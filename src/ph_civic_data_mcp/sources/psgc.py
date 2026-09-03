@@ -110,7 +110,25 @@ def _classify_level(record: dict[str, Any], hint: str | None = None) -> str:
     return "barangay"
 
 
-def _record_to_psgc(item: dict[str, Any], level_hint: str | None = None) -> PSGCRecord:
+async def _region_name_for_code(region_code: str | None) -> str | None:
+    """Look up a region's name from its code.
+
+    v0.7.0 finding: the PSGC mirror never sends a `regionName` field on a
+    child record, only `regionCode`. `item.get("regionName")` always read
+    None, so every `PSGCRecord.region_name` was None. `_fetch_level("region")`
+    is already 24h-cached, so this only pays for a real fetch once per
+    process.
+    """
+    if not region_code:
+        return None
+    regions = await _fetch_level("region")
+    for r in regions:
+        if r.get("code") == region_code:
+            return r.get("name")
+    return None
+
+
+async def _record_to_psgc(item: dict[str, Any], level_hint: str | None = None) -> PSGCRecord:
     code = item.get("code") or item.get("psgcCode") or ""
     name = item.get("name") or ""
     parent_code = (
@@ -121,9 +139,10 @@ def _record_to_psgc(item: dict[str, Any], level_hint: str | None = None) -> PSGC
         or item.get("districtCode")
     )
     region_code = item.get("regionCode")
-    region_name = item.get("regionName")
-    island_group = item.get("islandGroupCode")
     level = _classify_level(item, level_hint)
+    # A region record has no parent region to name; skip the extra fetch.
+    region_name = None if level == "region" else await _region_name_for_code(region_code)
+    island_group = item.get("islandGroupCode")
     return PSGCRecord(
         psgc_code=code,
         name=name,
@@ -414,7 +433,7 @@ async def _resolve_query(query: str) -> dict | None:
         return None
 
     score, top, level = best
-    record = _record_to_psgc(top, level_hint=level)
+    record = await _record_to_psgc(top, level_hint=level)
 
     # Surface runner-up candidates so ambiguous names ("San Juan" exists in
     # several provinces) don't resolve silently to one of many equals.
@@ -554,7 +573,7 @@ async def list_admin_units(
             target_level = level or "region"
             items = await _fetch_level(target_level)
             return [
-                _record_to_psgc(it, level_hint=target_level).model_dump(mode="json")
+                (await _record_to_psgc(it, level_hint=target_level)).model_dump(mode="json")
                 for it in items[offset : offset + limit]
             ]
         return await _list_children(parent_code, level, limit, offset)
@@ -607,7 +626,9 @@ async def _list_children(
             matched_so_far += 1
             if matched_so_far <= offset:
                 continue
-            filtered.append(_record_to_psgc(item, level_hint=target_level).model_dump(mode="json"))
+            filtered.append(
+                (await _record_to_psgc(item, level_hint=target_level)).model_dump(mode="json")
+            )
             if len(filtered) >= limit:
                 break
     return filtered
