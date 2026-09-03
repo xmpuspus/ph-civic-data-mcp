@@ -33,9 +33,29 @@ PH_BBOX = {
 # then throws away, leaving far fewer than `limit` results.
 RADIUS_CANDIDATE_POOL = 500
 
+# USGS's documented maximum for the maxradiuskm circle-search parameter.
+MAX_RADIUS_KM = 20001.6
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _tsunami_flag(value: object) -> bool:
+    """Coerce a USGS tsunami field to bool.
+
+    USGS sends 0, 1, "0", "1", or a bool. Python's bool("0") is True, so a
+    plain cast turned "no tsunami" into a tsunami. Treat 1, 1.0, "1", and
+    True as True. Treat everything else, including a malformed value, as
+    False with no crash.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    if isinstance(value, str):
+        return value == "1"
+    return False
 
 
 def _parse_event(feature: dict) -> USGSEarthquake | None:
@@ -67,7 +87,7 @@ def _parse_event(feature: dict) -> USGSEarthquake | None:
         place=props.get("place") or "Philippine region",
         usgs_event_id=feature.get("id", ""),
         felt_reports=props.get("felt"),
-        tsunami=bool(props.get("tsunami")),
+        tsunami=_tsunami_flag(props.get("tsunami")),
         url=props.get("url", ""),
         data_retrieved_at=_now(),
     )
@@ -106,11 +126,12 @@ async def get_usgs_earthquakes_ph(
       get_usgs_earthquakes_ph(start_date="2026-08-01", end_date="2026-08-31")
       get_usgs_earthquakes_ph(center_lat=14.5995, center_lon=120.9842, radius_km=50)  near Manila
 
-    On failure: an invalid trio, or a radius_km at or below zero, gives
-    validation_error true and data_status "invalid_request". An unreachable
-    USGS API, or a payload that is not a GeoJSON FeatureCollection, gives
-    upstream_error true and data_status "unavailable". Both return
-    results: [] with the real error in caveats.
+    On failure: an invalid trio, an out-of-range radius_km, center_lat, or
+    center_lon gives validation_error true and data_status "invalid_request".
+    The same happens for a start_date or end_date that is not YYYY-MM-DD. An
+    unreachable USGS API, or a payload that is not a GeoJSON
+    FeatureCollection, gives upstream_error true and data_status
+    "unavailable". Both return results: [] with the real error in caveats.
 
     Args:
         start_date: ISO date (YYYY-MM-DD). Defaults to 30 days ago.
@@ -137,24 +158,62 @@ async def get_usgs_earthquakes_ph(
             validation_error=True,
             results=[],
         )
-    if radius_km is not None and radius_km <= 0:
+    if radius_km is not None and not (0 < radius_km <= MAX_RADIUS_KM):
         return failure_result(
             "USGS",
             USGS_URL,
-            "radius_km must be a positive number.",
+            f"radius_km must be above 0 and at most {MAX_RADIUS_KM}, got {radius_km}.",
+            license="Public domain (USGS)",
+            validation_error=True,
+            results=[],
+        )
+    if center_lat is not None and not (-90.0 <= center_lat <= 90.0):
+        return failure_result(
+            "USGS",
+            USGS_URL,
+            f"center_lat must be between -90 and 90, got {center_lat}.",
+            license="Public domain (USGS)",
+            validation_error=True,
+            results=[],
+        )
+    if center_lon is not None and not (-180.0 <= center_lon <= 180.0):
+        return failure_result(
+            "USGS",
+            USGS_URL,
+            f"center_lon must be between -180 and 180, got {center_lon}.",
             license="Public domain (USGS)",
             validation_error=True,
             results=[],
         )
 
     today = _now().date()
-    try:
-        sd = date_cls.fromisoformat(start_date) if start_date else today - timedelta(days=30)
-    except ValueError:
+    if start_date is not None:
+        try:
+            sd = date_cls.fromisoformat(start_date)
+        except ValueError:
+            return failure_result(
+                "USGS",
+                USGS_URL,
+                f"start_date {start_date!r} is not a valid YYYY-MM-DD date.",
+                license="Public domain (USGS)",
+                validation_error=True,
+                results=[],
+            )
+    else:
         sd = today - timedelta(days=30)
-    try:
-        ed = date_cls.fromisoformat(end_date) if end_date else today
-    except ValueError:
+    if end_date is not None:
+        try:
+            ed = date_cls.fromisoformat(end_date)
+        except ValueError:
+            return failure_result(
+                "USGS",
+                USGS_URL,
+                f"end_date {end_date!r} is not a valid YYYY-MM-DD date.",
+                license="Public domain (USGS)",
+                validation_error=True,
+                results=[],
+            )
+    else:
         ed = today
     if sd > ed:
         sd, ed = ed, sd

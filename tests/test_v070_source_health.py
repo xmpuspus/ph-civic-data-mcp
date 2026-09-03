@@ -123,6 +123,30 @@ async def test_fetch_with_retry_exhausted_503_records_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_with_retry_terminal_403_records_failure(monkeypatch):
+    """A blocked or rejected request is a host-health signal, not just a
+    caller mistake, so it must show up in get_data_freshness."""
+    _fake_sleep(monkeypatch)
+    client = _AlwaysStatus(403)
+    response = await http_module.fetch_with_retry(client, "GET", "https://example.test/path")
+    assert response.status_code == 403
+    entry = health.snapshot()["example.test"]
+    assert entry["failure_count"] == 1
+    assert entry["last_error"] == "HTTP 403"
+
+
+@pytest.mark.asyncio
+async def test_fetch_with_retry_terminal_404_leaves_registry_empty(monkeypatch):
+    """A 404 is the caller's own bad request, not the host failing, so it
+    must never be recorded as a health event."""
+    _fake_sleep(monkeypatch)
+    client = _AlwaysStatus(404)
+    response = await http_module.fetch_with_retry(client, "GET", "https://example.test/path")
+    assert response.status_code == 404
+    assert health.snapshot() == {}
+
+
+@pytest.mark.asyncio
 async def test_get_data_freshness_carries_source_health_and_cache_age():
     health.record_success("example.test", latency_ms=10.0)
     result = await get_data_freshness()
