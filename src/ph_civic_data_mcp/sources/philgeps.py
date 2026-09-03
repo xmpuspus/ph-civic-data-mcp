@@ -113,6 +113,9 @@ async def _fetch_notices() -> list[ProcurementRecord]:
             )
         )
 
+    if not records:
+        raise RuntimeError("PhilGEPS Indexes page parsed but yielded no notices (HTML drift?)")
+
     cache[key] = records
     return records
 
@@ -155,7 +158,8 @@ async def search_procurement(
         keyword: Search term matched against title + agency + classification.
         agency: Partial match on procuring entity name.
         region: PH region filter (partial match).
-        date_from / date_to: YYYY-MM-DD bounds on publish date.
+        date_from / date_to: YYYY-MM-DD bounds on publish date. Drops an
+            undated record when either bound is set.
         limit: Max results (default 20, max 100).
 
     Returns a list of matching notices on success.
@@ -182,6 +186,7 @@ async def search_procurement(
     to_date = _parse_phil_date(date_to) if date_to else None
 
     results: list[dict] = []
+    undated_dropped = 0
     for record in records:
         haystack = f"{record.title} {record.agency} {record.mode_of_procurement or ''}".lower()
         if kw_lc and kw_lc not in haystack:
@@ -192,9 +197,12 @@ async def search_procurement(
             record_region = (record.region or "").lower()
             if region_lc not in record_region and region_lc not in record.agency.lower():
                 continue
-        if from_date and record.date_published and record.date_published < from_date:
+        if (from_date or to_date) and record.date_published is None:
+            undated_dropped += 1
             continue
-        if to_date and record.date_published and record.date_published > to_date:
+        if from_date and record.date_published < from_date:
+            continue
+        if to_date and record.date_published > to_date:
             continue
 
         results.append(
@@ -205,6 +213,12 @@ async def search_procurement(
         )
         if len(results) >= limit:
             break
+
+    if (from_date or to_date) and undated_dropped:
+        log_stderr(
+            f"search_procurement: date filter dropped {undated_dropped} "
+            "record(s) with no publish date."
+        )
 
     return results
 
@@ -243,7 +257,8 @@ async def get_procurement_summary(
     Args:
         agency: Partial agency match filter.
         region: PH region filter.
-        year: Filter publish date to this year.
+        year: Filter publish date to this year. Drops an undated record
+            and notes the dropped count in caveats.
 
     Returns:
         Totals, breakdown by procurement mode, top agencies, reference period.
@@ -291,6 +306,7 @@ async def get_procurement_summary(
     region_lc = region.lower().strip() if region else None
 
     filtered: list[ProcurementRecord] = []
+    undated_dropped = 0
     for r in records:
         if agency_lc and agency_lc not in r.agency.lower():
             continue
@@ -300,7 +316,10 @@ async def get_procurement_summary(
             and region_lc not in r.agency.lower()
         ):
             continue
-        if year and r.date_published and r.date_published.year != year:
+        if year and r.date_published is None:
+            undated_dropped += 1
+            continue
+        if year and r.date_published.year != year:
             continue
         filtered.append(r)
 
@@ -338,7 +357,14 @@ async def get_procurement_summary(
                 "reason": "PhilGEPS open notices do not publish approved budget amounts.",
             }
         ],
-        "caveats": [],
+        "caveats": (
+            [
+                f"{undated_dropped} record(s) excluded from the year={year} filter "
+                "because they have no publish date."
+            ]
+            if year and undated_dropped
+            else []
+        ),
         "upstream_error": False,
         "data_status": DATA_STATUS_SUCCESS,
         "source": "PhilGEPS",

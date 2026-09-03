@@ -23,6 +23,7 @@ def _record(
     mode: str | None = "Public Bidding",
     approved_budget: float | None = None,
     reference_number: str | None = "REF-001",
+    date_published: date | None = date(2025, 4, 15),
 ) -> ProcurementRecord:
     return ProcurementRecord(
         reference_number=reference_number,
@@ -33,7 +34,7 @@ def _record(
         approved_budget=approved_budget,
         currency="PHP",
         status="Open",
-        date_published=date(2025, 4, 15),
+        date_published=date_published,
     )
 
 
@@ -122,3 +123,69 @@ async def test_get_procurement_summary_upstream_failure_sets_data_status(monkeyp
     assert summary["upstream_error"] is True
     assert summary["rules_evaluated"] == []
     assert summary["rules_not_computable"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_notices_header_only_table_raises(monkeypatch):
+    """A page that parses but yields zero rows must raise, never cache empty.
+
+    A seven-column header-only table (no data rows) once cached as [] for
+    the full 6h TTL, which read as "no procurement activity" to a caller.
+    """
+    html = (
+        "<table>"
+        "<tr><th>Ref</th><th>Title</th><th>Mode</th><th>Class</th>"
+        "<th>Agency</th><th>Published</th><th>Closes</th></tr>"
+        "</table>"
+    )
+
+    class _StubResponse:
+        text = html
+
+        def raise_for_status(self) -> None:
+            return None
+
+    async def _stub_fetch(client, method, url):
+        return _StubResponse()
+
+    monkeypatch.setattr(philgeps_module, "fetch_with_retry", _stub_fetch)
+
+    with pytest.raises(RuntimeError):
+        await philgeps_module._fetch_notices()
+
+    assert CACHES["philgeps_data"] == {}
+
+
+@pytest.mark.asyncio
+async def test_search_procurement_date_range_excludes_undated_record(monkeypatch):
+    """A date bound must drop an undated record, not let it pass by default."""
+    dated = _record(reference_number="REF-DATED", date_published=date(2026, 3, 1))
+    undated = _record(reference_number="REF-UNDATED", date_published=None)
+
+    async def _stub():
+        return [dated, undated]
+
+    monkeypatch.setattr(philgeps_module, "_fetch_notices", _stub)
+
+    results = await philgeps_module.search_procurement(
+        keyword="", date_from="2026-01-01", date_to="2026-12-31", limit=100
+    )
+    ref_numbers = {r["reference_number"] for r in results}
+    assert "REF-DATED" in ref_numbers
+    assert "REF-UNDATED" not in ref_numbers
+
+
+@pytest.mark.asyncio
+async def test_get_procurement_summary_year_filter_excludes_undated_record(monkeypatch):
+    """A year filter must drop an undated record and name the drop in caveats."""
+    dated = _record(reference_number="REF-DATED", date_published=date(2026, 3, 1))
+    undated = _record(reference_number="REF-UNDATED", date_published=None)
+
+    async def _stub():
+        return [dated, undated]
+
+    monkeypatch.setattr(philgeps_module, "_fetch_notices", _stub)
+
+    summary = await philgeps_module.get_procurement_summary(year=2026)
+    assert summary["total_count"] == 1
+    assert any("1" in c for c in summary["caveats"])
