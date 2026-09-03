@@ -90,12 +90,21 @@ async def get_vegetation_index(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict:
-    """NASA MODIS MOD13Q1 NDVI + EVI vegetation index at any coordinate.
+    """NASA MODIS MOD13Q1 NDVI and EVI vegetation index at any coordinate.
 
-    NDVI (Normalized Difference Vegetation Index) ranges -1..1. Higher values
-    indicate denser healthy vegetation. EVI is more sensitive in high-biomass
-    areas. Composite period is 16 days at 250m resolution. Useful for
-    agricultural monitoring, deforestation tracking, drought stress indicators.
+    NDVI (Normalized Difference Vegetation Index) ranges -1 to 1. Higher
+    values indicate denser healthy vegetation. EVI is more sensitive in
+    high-biomass areas. The composite period is 16 days at 250m resolution.
+    Useful for farm monitoring, deforestation tracking, and drought checks. Examples:
+
+      get_vegetation_index(15.58, 121.0)                              # last ~90 days at a point in Isabela
+      get_vegetation_index(15.58, 121.0, "2026-08-01", "2026-08-15")  # a fixed 15-day window
+
+    On failure: both MODIS bands failing returns data_status "unavailable",
+    upstream_error true, samples [], and both band errors in caveats. One
+    band failing still returns the other band's samples, but data_status
+    stays "unavailable" with upstream_error true. A pixel with no composite
+    in range, such as one over water, is a real success with samples [].
 
     Args:
         latitude: Decimal degrees, WGS84.

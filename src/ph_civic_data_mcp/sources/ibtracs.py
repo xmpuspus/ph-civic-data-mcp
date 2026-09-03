@@ -215,11 +215,21 @@ async def _stream_storms(url: str) -> tuple[int, dict[str, dict]]:
 async def get_historical_typhoons_ph(year: int | None = None, limit: int = 30) -> list[dict] | dict:
     """Historical tropical cyclone tracks that passed through the Philippine AOR.
 
-    Sourced from NOAA IBTrACS (International Best Track Archive) — the
+    Sourced from NOAA IBTrACS (International Best Track Archive), the
     authoritative global archive for tropical cyclone tracks. Filtered to the
-    Western Pacific basin + coordinates inside the Philippine Area of
-    Responsibility, aggregated per storm. Returns peak intensity, minimum
-    pressure, and track period.
+    Western Pacific basin and coordinates inside the Philippine Area of
+    Responsibility, aggregated per storm. The result streams the source CSV
+    row by row and returns the most recent storms that crossed the PAR,
+    sorted by start time. Returns peak intensity, minimum pressure, and
+    track period. Examples:
+
+      get_historical_typhoons_ph()                     # last 3 years, up to 30 storms
+      get_historical_typhoons_ph(year=2024)             # season 2024, up to 30 storms
+      get_historical_typhoons_ph(year=2024, limit=10)   # season 2024, up to 10 storms
+
+    On failure: a stream error or a response with no data rows returns a
+    dict. data_status is "unavailable", upstream_error is true, and results
+    is empty, with the real error text in caveats.
 
     Args:
         year: Season year. None returns recent (last 3 years).

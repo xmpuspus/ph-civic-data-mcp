@@ -63,11 +63,19 @@ async def get_solar_and_climate(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict:
-    """Daily solar irradiance + climate variables from NASA POWER for any coordinate.
+    """Daily solar irradiance and climate variables from NASA POWER for any coordinate.
 
-    Returns daily all-sky surface shortwave irradiance (kWh/m²/day), 2m temperature (°C),
-    corrected precipitation (mm/day), and 2m wind speed (m/s). Useful for solar energy
-    siting, agricultural planning, and historical climate analysis.
+    Returns daily solar irradiance, 2m temperature, corrected precipitation,
+    and 2m wind speed, in kWh per m2, Celsius, mm, and m per second. Useful
+    for solar-site screening, farm planning, and historical climate checks. Examples:
+
+      get_solar_and_climate(14.5995, 120.9842)                              # Manila, last 14 days
+      get_solar_and_climate(14.5995, 120.9842, "2026-04-01", "2026-04-02")  # a fixed 2-day window
+
+    On failure: an upstream fetch failure or a malformed response body
+    returns data_status "unavailable", with upstream_error true, days [],
+    and the real error text in caveats. A bad start_date or end_date string
+    falls back to the default window instead of failing.
 
     Args:
         latitude: Decimal degrees, WGS84.
