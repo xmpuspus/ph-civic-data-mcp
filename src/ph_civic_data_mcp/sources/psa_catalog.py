@@ -42,7 +42,9 @@ from ph_civic_data_mcp.sources.psa import (
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
 from ph_civic_data_mcp.utils.envelope import (
     DATA_STATUS_INDETERMINATE,
+    DATA_STATUS_INVALID_REQUEST,
     DATA_STATUS_SUCCESS,
+    DATA_STATUS_UNAVAILABLE,
     DATA_STATUS_VALUES,
     failure_result,
 )
@@ -308,11 +310,17 @@ def _dataset_url(path: str) -> str:
 
 
 def _base_envelope(source_url: str) -> dict:
+    # Every catalog response starts as a success. A failure helper below, or
+    # a later drift check, overwrites data_status and the matching flag, so
+    # the three keys can never disagree with each other.
     return {
         "source": SOURCE_NAME,
         "source_url": source_url,
         "license": PSA_LICENSE,
         "data_retrieved_at": _now().isoformat(),
+        "data_status": DATA_STATUS_SUCCESS,
+        "upstream_error": False,
+        "validation_error": False,
         "caveats": [],
     }
 
@@ -320,6 +328,7 @@ def _base_envelope(source_url: str) -> dict:
 def _validation_envelope(source_url: str, message: str, **extra: Any) -> dict:
     out = _base_envelope(source_url)
     out.update(extra)
+    out["data_status"] = DATA_STATUS_INVALID_REQUEST
     out["validation_error"] = True
     out["caveats"] = [message]
     return out
@@ -328,6 +337,7 @@ def _validation_envelope(source_url: str, message: str, **extra: Any) -> dict:
 def _upstream_envelope(source_url: str, message: str, **extra: Any) -> dict:
     out = _base_envelope(source_url)
     out.update(extra)
+    out["data_status"] = DATA_STATUS_UNAVAILABLE
     out["upstream_error"] = True
     out["caveats"] = [message]
     return out
@@ -469,7 +479,8 @@ async def browse_psa_catalog(path: str | None = None) -> dict:
       browse_psa_catalog("1F")      one level into the Poverty subject
       browse_psa_catalog("1F/FY")   the Full Year Poverty Statistics tables
 
-    On failure: this tool sets no data_status on any failure path. A bad
+    On failure: data_status is "invalid_request" for a rejected argument
+    and "unavailable" for an OpenSTAT outage. A bad
     path sets validation_error true before any request goes out. An
     unreachable catalog sets upstream_error true, with the real error in
     caveats. Both return an empty entries list, which never means an empty
@@ -557,7 +568,8 @@ async def describe_psa_dataset(dataset_path: str) -> dict:
 
       describe_psa_dataset("1F/FY/0241F3DF013.px")   dimensions and value codes for one table
 
-    On failure: this tool sets no data_status on any failure path. A path
+    On failure: data_status is "invalid_request" for a rejected argument
+    and "unavailable" for an OpenSTAT outage. A path
     that is not a `.px` dataset sets validation_error true before any
     request goes out. An unreadable dataset sets upstream_error true, with
     the real error in caveats. Both return an empty dimensions list.
@@ -754,8 +766,8 @@ async def query_psa_dataset(
 
     On failure: a bad path, a bad max_rows, or a rejected selection (a
     missing dimension, an unknown code, or "all"/"*") sets validation_error
-    true and no data_status, before any request goes out. An OpenSTAT
-    outage sets upstream_error true and no data_status. A zero-row reply for
+    true and data_status "invalid_request", before any request goes out. An
+    OpenSTAT outage sets upstream_error true and data_status "unavailable". A zero-row reply for
     a nonzero selection, or a row whose key does not map to the declared
     columns, sets data_status "indeterminate" and upstream_error true on a
     real HTTP 200. All four cases return an empty rows list.
