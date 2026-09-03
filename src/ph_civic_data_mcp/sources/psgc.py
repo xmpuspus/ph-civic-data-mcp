@@ -171,14 +171,31 @@ async def _fetch_level(level: str) -> list[dict[str, Any]]:
     return data
 
 
+class PSGCFetchError(RuntimeError):
+    """A PSGC code lookup could not complete because of a transport failure.
+
+    Raised instead of a plain None so a caller can tell "the mirror is down"
+    from "no record exists at this code". Codex cross-model finding on the
+    v0.6.1 diff: `_fetch_barangay_by_code` used to swallow every exception
+    into None, so `get_location_hierarchy` reported a genuine outage as an
+    unknown code with no `upstream_error`.
+    """
+
+
 async def _fetch_one(code: str) -> dict[str, Any] | None:
-    """Try each level endpoint to retrieve one PSGC record by code."""
+    """Try each level endpoint to retrieve one PSGC record by code.
+
+    Raises PSGCFetchError only when every endpoint failed on a transport
+    error and none answered cleanly (a 200 or a 404). A clean "not found at
+    any level" still returns None.
+    """
     key = cache_key({"endpoint": "one", "code": code})
     cache = CACHES["psgc_browse"]
     if key in cache:
         return cache[key]
 
     had_errors = False
+    last_exc: Exception | None = None
     for endpoint in (
         "regions",
         "provinces",
@@ -196,24 +213,30 @@ async def _fetch_one(code: str) -> dict[str, Any] | None:
         except Exception as exc:
             log_stderr(f"PSGC code fetch error ({endpoint}/{code}): {exc}")
             had_errors = True
+            last_exc = exc
             continue
     # Only cache a genuine miss; a None born from upstream errors must not
     # pin "code does not exist" for the 24h TTL.
-    if not had_errors:
-        cache[key] = None
+    if had_errors:
+        raise PSGCFetchError(f"PSGC mirror unreachable for code '{code}': {last_exc}")
+    cache[key] = None
     return None
 
 
 async def _fetch_barangay_by_code(code: str) -> dict[str, Any] | None:
-    """Barangay lookup endpoint exists separately."""
+    """Barangay lookup endpoint exists separately.
+
+    Raises PSGCFetchError on a transport failure. Returns None only for a
+    clean non-200 response, which means the code is not a barangay.
+    """
     try:
         response = await fetch_with_retry(CLIENT, "GET", f"{PSGC_BASE}/barangays/{code}/")
-        if response.status_code == 200:
-            payload = response.json()
-            if isinstance(payload, dict) and payload.get("code"):
-                return payload
     except Exception as exc:
-        log_stderr(f"PSGC barangay fetch error ({code}): {exc}")
+        raise PSGCFetchError(f"PSGC mirror unreachable for barangay '{code}': {exc}") from exc
+    if response.status_code == 200:
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("code"):
+            return payload
     return None
 
 
@@ -727,16 +750,29 @@ async def get_location_hierarchy(psgc_code: str) -> dict:
     record: dict[str, Any] | None = None
     level_hint = "region"
 
-    # Try cheaper endpoints first.
-    record_padded = code.zfill(9)
-    if record_padded[6:] != "000":
-        record = await _fetch_barangay_by_code(code)
-        level_hint = "barangay"
+    try:
+        # Try cheaper endpoints first.
+        record_padded = code.zfill(9)
+        if record_padded[6:] != "000":
+            record = await _fetch_barangay_by_code(code)
+            level_hint = "barangay"
 
-    if record is None:
-        record = await _fetch_one(code)
-        if record is not None:
-            level_hint = _classify_level(record)
+        if record is None:
+            record = await _fetch_one(code)
+            if record is not None:
+                level_hint = _classify_level(record)
+    except PSGCFetchError as exc:
+        log_stderr(f"get_location_hierarchy lookup error: {exc}")
+        return {
+            "psgc_code": code,
+            "chain": [],
+            "upstream_error": True,
+            "caveats": [f"PSGC API unavailable while looking up code '{code}' ({exc})."],
+            "source": "PSGC",
+            "source_url": PSGC_BASE,
+            "license": PSGC_LICENSE,
+            "data_retrieved_at": _now().isoformat(),
+        }
 
     if record is None:
         return {

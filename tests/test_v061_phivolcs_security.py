@@ -191,10 +191,140 @@ async def test_volcano_alert_refuses_an_off_host_url_without_a_request(monkeypat
     fake, calls = _recorder({})
     monkeypatch.setattr(phivolcs_module, "fetch_with_retry", fake)
 
-    level, status = await phivolcs_module._fetch_volcano_alert("https://evil.example/bulletin")
+    level, status, error = await phivolcs_module._fetch_volcano_alert(
+        "https://evil.example/bulletin"
+    )
 
     assert (level, status) == (None, None)
+    assert error is not None
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# A single bulletin timeout never reads as a confirmed normal reading
+# (Codex cross-model finding, reported on two passes over the v0.6.1 diff)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_bulletin_timeout_carries_upstream_error_not_a_null_reading(monkeypatch):
+    mayon = f"{WOVODAT}/bulletin/activity-mvo?bid=100&lang=en"
+    taal = f"{WOVODAT}/bulletin/activity-tvo?bid=200&lang=en"
+    two_volcano_page = f"""
+    <html><body>
+    <a href="/bulletin/activity-mvo?bid=100&lang=en">Mayon Summary</a>
+    <a href="/bulletin/activity-tvo?bid=200&lang=en">Taal Summary</a>
+    </body></html>
+    """
+
+    async def _fake(client, method, url, **kwargs):
+        if url == phivolcs_module.WOVODAT_BULLETIN_LIST_URL:
+            return _page(two_volcano_page)
+        if url == mayon:
+            raise httpx.ReadTimeout("slow")
+        if url == taal:
+            return _page("TAAL VOLCANO ... ALERT LEVEL 1 (Low-level unrest)")
+        raise AssertionError(f"unexpected fetch of {url}")
+
+    monkeypatch.setattr(phivolcs_module, "fetch_with_retry", _fake)
+    CACHES["phivolcs_volcanoes"].clear()
+
+    results = await phivolcs_module.get_volcano_status()
+
+    by_name = {r["name"]: r for r in results}
+    assert by_name["Mayon"]["alert_level"] is None
+    assert by_name["Mayon"]["upstream_error"] is True
+    assert any("bulletin fetch failed" in c for c in by_name["Mayon"]["caveats"])
+    assert by_name["Taal"]["alert_level"] == 1
+    assert "upstream_error" not in by_name["Taal"]
+    CACHES["phivolcs_volcanoes"].clear()
+
+
+@pytest.mark.asyncio
+async def test_a_single_volcano_query_reports_its_own_bulletin_outage(monkeypatch):
+    one_volcano_page = """
+    <html><body>
+    <a href="/bulletin/activity-mvo?bid=100&lang=en">Mayon Summary</a>
+    </body></html>
+    """
+
+    async def _fake(client, method, url, **kwargs):
+        if url == phivolcs_module.WOVODAT_BULLETIN_LIST_URL:
+            return _page(one_volcano_page)
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(phivolcs_module, "fetch_with_retry", _fake)
+    CACHES["phivolcs_volcanoes"].clear()
+
+    results = await phivolcs_module.get_volcano_status("Mayon")
+
+    assert len(results) == 1
+    assert results[0]["alert_level"] is None
+    assert results[0]["upstream_error"] is True
+    CACHES["phivolcs_volcanoes"].clear()
+
+
+# ---------------------------------------------------------------------------
+# get_location_hierarchy: a PSGC lookup outage never reads as an unknown code
+# (Codex cross-model finding on the v0.6.1 diff)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_barangay_lookup_outage_is_upstream_error_not_unknown_code(monkeypatch):
+    from ph_civic_data_mcp.sources import psgc as psgc_module
+
+    async def _boom(client, method, url, **kwargs):
+        raise httpx.ConnectError("psgc mirror down")
+
+    monkeypatch.setattr(psgc_module, "fetch_with_retry", _boom)
+    for name in ("psgc_browse",):
+        CACHES[name].clear()
+
+    result = await psgc_module.get_location_hierarchy("133901001")
+
+    assert result["chain"] == []
+    assert result["upstream_error"] is True
+    assert any("133901001" in c for c in result["caveats"])
+    assert len(CACHES["psgc_browse"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_code_endpoint_outage_is_upstream_error_not_unknown_code(monkeypatch):
+    from ph_civic_data_mcp.sources import psgc as psgc_module
+
+    async def _boom(client, method, url, **kwargs):
+        raise httpx.ConnectError("psgc mirror down")
+
+    monkeypatch.setattr(psgc_module, "fetch_with_retry", _boom)
+    CACHES["psgc_browse"].clear()
+
+    # A 9-digit code with a non-zero barangay slot tries the barangay
+    # endpoint first, so this exercises _fetch_one directly: a code whose
+    # barangay slot is zero skips straight to the level-by-level lookup.
+    result = await psgc_module.get_location_hierarchy("130000000")
+
+    assert result["chain"] == []
+    assert result["upstream_error"] is True
+    assert len(CACHES["psgc_browse"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_clean_404_at_every_level_is_still_an_unknown_code(monkeypatch):
+    """A real miss must not turn into a false outage."""
+    from ph_civic_data_mcp.sources import psgc as psgc_module
+
+    async def _not_found(client, method, url, **kwargs):
+        return httpx.Response(404, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(psgc_module, "fetch_with_retry", _not_found)
+    CACHES["psgc_browse"].clear()
+
+    result = await psgc_module.get_location_hierarchy("999999999")
+
+    assert result["chain"] == []
+    assert "upstream_error" not in result
+    assert any("No PSGC record found" in c for c in result["caveats"])
 
 
 # ---------------------------------------------------------------------------

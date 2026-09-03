@@ -405,14 +405,20 @@ async def _fetch_volcano_bulletin_list() -> dict[str, dict]:
     return result
 
 
-async def _fetch_volcano_alert(bulletin_url: str) -> tuple[int | None, str | None]:
-    """Fetch a single volcano bulletin and extract (alert_level, status_description)."""
+async def _fetch_volcano_alert(bulletin_url: str) -> tuple[int | None, str | None, str | None]:
+    """Fetch a single volcano bulletin and extract (alert_level, status_description, error).
+
+    `error` is None on a completed fetch, even when the page carries no
+    matchable alert text. It names the failure only when the fetch itself
+    could not complete, so a caller can tell an outage from a bulletin that
+    loaded but published no ALERT LEVEL line.
+    """
     try:
         response = await _fetch_phivolcs(bulletin_url)
         response.raise_for_status()
     except Exception as exc:
         log_stderr(f"volcano bulletin fetch error: {exc}")
-        return None, None
+        return None, None, f"{type(exc).__name__}: {exc}"
 
     soup = BeautifulSoup(response.text, "lxml")
     text = soup.get_text(" ", strip=True)
@@ -425,7 +431,7 @@ async def _fetch_volcano_alert(bulletin_url: str) -> tuple[int | None, str | Non
     if status_match:
         status = status_match.group(1).strip()
 
-    return alert_level, status
+    return alert_level, status, None
 
 
 @mcp.tool(
@@ -448,6 +454,8 @@ async def get_volcano_status(volcano_name: str | None = None) -> list[dict] | di
 
     Returns a list on success. If the WOVODAT bulletin list is unreachable or
     parses to nothing, returns {results: [], upstream_error: true, caveats}.
+    A list entry whose own bulletin fetch failed carries upstream_error: true
+    and a caveat instead of a null alert_level with no explanation.
     """
     try:
         bulletins = await _fetch_volcano_bulletin_list()
@@ -500,18 +508,25 @@ async def get_volcano_status(volcano_name: str | None = None) -> list[dict] | di
         *(_fetch_volcano_alert(bulletins[name]["bulletin_url"]) for name in target_volcanoes)
     )
     results: list[dict] = []
-    for name, (alert_level, status) in zip(target_volcanoes, alerts):
+    for name, (alert_level, status, error) in zip(target_volcanoes, alerts):
         info = bulletins[name]
-        results.append(
-            {
-                "name": name,
-                "alert_level": alert_level,
-                "status_description": status,
-                "last_updated": None,
-                "bulletin_url": info["bulletin_url"],
-                "bulletin_title": info.get("title"),
-                "source": "PHIVOLCS",
-                "data_retrieved_at": _now().isoformat(),
-            }
-        )
+        entry = {
+            "name": name,
+            "alert_level": alert_level,
+            "status_description": status,
+            "last_updated": None,
+            "bulletin_url": info["bulletin_url"],
+            "bulletin_title": info.get("title"),
+            "source": "PHIVOLCS",
+            "data_retrieved_at": _now().isoformat(),
+        }
+        if error is not None:
+            # A fetch failure on one volcano's bulletin must not read as a
+            # confirmed normal reading. Reported twice on the v0.6.1 diff.
+            entry["upstream_error"] = True
+            entry["caveats"] = [
+                f"This volcano's bulletin fetch failed ({error}). alert_level and "
+                "status_description are unknown, not confirmed normal."
+            ]
+        results.append(entry)
     return results
