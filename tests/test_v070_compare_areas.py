@@ -398,6 +398,17 @@ async def test_compare_rejects_duplicate_metrics(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_compare_rejects_an_unhashable_metric_entry_without_raising(monkeypatch):
+    """A metrics list must reject bad input, never raise. A list entry
+    inside metrics cannot be hashed, so a duplicate check that runs before
+    the allowlist check would crash instead of returning validation_error."""
+    _install_never_called(monkeypatch)
+    out = await compare.compare_areas(["Cebu City", "Davao City"], metrics=[["population"]])
+    assert out["validation_error"] is True
+    assert out["data_status"] == "invalid_request"
+
+
+@pytest.mark.asyncio
 async def test_compare_one_resolved_one_no_match_is_not_comparable(monkeypatch):
     """Codex cross-model finding: one resolved row next to a clean no-match
     row reported comparable true, although the second row held only nulls."""

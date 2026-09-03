@@ -128,14 +128,13 @@ def _validate_request(locations: object, metrics: object, format: object) -> str
     if metrics is not None:
         if not isinstance(metrics, list) or not metrics:
             return "metrics must be a non-empty list when given"
-        if len(metrics) > len(COMPARE_METRICS) or len(set(metrics)) != len(metrics):
-            return (
-                f"metrics must have at most {len(COMPARE_METRICS)} unique entries, "
-                f"got {len(metrics)}"
-            )
+        if len(metrics) > len(COMPARE_METRICS):
+            return f"metrics must have at most {len(COMPARE_METRICS)} entries, got {len(metrics)}"
         bad = [m for m in metrics if m not in COMPARE_METRICS]
         if bad:
             return f"unknown metric(s) {bad}; pick from {list(COMPARE_METRICS)}"
+        if len(set(metrics)) != len(metrics):
+            return "metrics must not repeat an entry"
     if format not in ("json", "csv"):
         return f"format must be 'json' or 'csv', got {format!r}"
     return None
