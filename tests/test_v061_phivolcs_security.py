@@ -386,3 +386,17 @@ async def test_out_of_range_trio_is_a_validation_error_not_a_fetch(monkeypatch, 
     assert result["validation_error"] is True
     assert result["upstream_error"] is False
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_off_host_bulletin_rejection_carries_the_status_contract():
+    """Codex pass 7: the two caller-mistake paths returned a bare dict with no
+    data_status. Every tool sets it now."""
+    from ph_civic_data_mcp.sources.phivolcs import get_earthquake_bulletin
+
+    for bad in ("https://evil.example/x", "", "not-a-url"):
+        out = await get_earthquake_bulletin(bad)
+        assert out["data_status"] == "invalid_request", bad
+        assert out["validation_error"] is True
+        assert out["upstream_error"] is False
+        assert out["url"] == bad

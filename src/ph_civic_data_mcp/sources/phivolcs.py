@@ -394,23 +394,27 @@ async def get_earthquake_bulletin(bulletin_url: str) -> dict:
     Args:
         bulletin_url: Full URL returned by get_latest_earthquakes.bulletin_url.
     """
+    # Both rejections are caller mistakes, so they carry the same
+    # invalid_request status every other tool uses, never a bare dict.
     if not bulletin_url or not bulletin_url.startswith("http"):
-        return {
-            "url": bulletin_url,
-            "source": "PHIVOLCS",
-            "caveats": ["bulletin_url is empty or malformed"],
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            "bulletin_url is empty or malformed",
+            license=PHIVOLCS_LICENSE,
+            validation_error=True,
+            url=bulletin_url,
+        )
     if not _is_phivolcs_url(bulletin_url):
-        return {
-            "url": bulletin_url,
-            "source": "PHIVOLCS",
-            "caveats": [
-                "bulletin_url must be a *.phivolcs.dost.gov.ph URL returned by "
-                "get_latest_earthquakes; refusing to fetch other hosts."
-            ],
-            "data_retrieved_at": _now().isoformat(),
-        }
+        return failure_result(
+            "PHIVOLCS",
+            PHIVOLCS_EQ_LIST_URL,
+            "bulletin_url must be a *.phivolcs.dost.gov.ph URL returned by "
+            "get_latest_earthquakes. This tool refuses to fetch other hosts.",
+            license=PHIVOLCS_LICENSE,
+            validation_error=True,
+            url=bulletin_url,
+        )
 
     key = cache_key({"bulletin_url": bulletin_url})
     cache = CACHES["phivolcs_bulletins"]

@@ -659,3 +659,23 @@ async def test_poverty_malformed_values_field_is_indeterminate_not_a_silent_gap(
     assert result["upstream_error"] is True
     assert result["poverty_incidence_pct"] is None
     assert len(CACHES["psa_poverty"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_inflation_unknown_area_is_a_caller_mistake_not_an_outage(monkeypatch):
+    """Codex pass 7: an area that PSA's CPI dimension does not carry read as
+    data_status unavailable. PSA answered, so it is invalid_request."""
+    _clear_state()
+
+    def _never(method, url):
+        raise AssertionError("no year query must run for an unknown area")
+
+    _install_cpi_query(monkeypatch, _never)
+
+    result = await psa_module.get_inflation_stats(area="Wakanda")
+
+    assert result["data_status"] == "invalid_request"
+    assert result["validation_error"] is True
+    assert result["upstream_error"] is False
+    assert result["headline_inflation_pct"] is None
+    assert len(CACHES["psa_prices"]) == 0

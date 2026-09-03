@@ -22,7 +22,11 @@ jobs:
     env:
       UV_PYTHON: "3.12"
     steps:
+      # persist-credentials off: this job holds issues: write, and the live
+      # tests run repository code, so the token must not sit in .git/config.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       # Exact tag on purpose: setup-uv stopped publishing floating major tags
       # at v8, so @v9 is a 404 and every job fails at checkout.

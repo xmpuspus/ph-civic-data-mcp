@@ -1580,7 +1580,18 @@ async def get_inflation_stats(area: str | None = None) -> dict:
 
     geo_hit = _find_geo_value(meta, area, "Geolocation")
     if geo_hit is None:
-        return _err(f"Area '{area}' not found in PSA CPI geographic dimension")
+        # A caller mistake, not an outage: PSA answered, the area name did not
+        # match its geographic dimension.
+        return failure_result(
+            "PSA",
+            f"{PSA_API_BASE}/DB/2M/PI/CPI/",
+            f"Area '{area}' not found in PSA CPI geographic dimension",
+            license=PSA_LICENSE,
+            validation_error=True,
+            area=area or "Philippines",
+            headline_inflation_pct=None,
+            reference_period=None,
+        )
     geo_val, geo_text = geo_hit
 
     all_items = _match_value(meta, "Commodity Description", "all item")
