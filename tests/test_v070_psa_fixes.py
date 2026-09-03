@@ -226,11 +226,12 @@ async def test_poverty_unknown_region_keeps_the_headline_key_and_is_invalid_requ
     async def _fake_discover():
         return "https://example.test/poverty.px", meta
 
-    async def _no_subsistence():
-        raise RuntimeError("subsistence table not needed here")
+    async def _fake_subsistence():
+        # Any discoverable table works. The region check runs before any query.
+        return "https://example.test/subsistence.px", meta
 
     monkeypatch.setattr(psa_module, "_discover_poverty_table", _fake_discover)
-    monkeypatch.setattr(psa_module, "_discover_subsistence_table", _no_subsistence)
+    monkeypatch.setattr(psa_module, "_discover_subsistence_table", _fake_subsistence)
 
     result = await psa_module.get_poverty_stats(region="Wakanda")
 
