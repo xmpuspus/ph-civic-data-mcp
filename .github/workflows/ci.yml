@@ -14,6 +14,11 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+    env:
+      # Every `uv run` below binds to the matrix interpreter. Without this, uv
+      # reads .python-version (3.11) as the request and only a warning says
+      # which interpreter the tests really ran on.
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -28,7 +33,21 @@ jobs:
       # --locked fails the job if uv.lock drifted from pyproject.toml, so a
       # dependency edit that skipped `uv lock` cannot reach main.
       - name: Install dependencies
-        run: uv sync --locked --extra dev --python ${{ matrix.python-version }}
+        run: uv sync --locked --extra dev
+
+      # The job name says 3.14; this step proves it. A stale cache or a
+      # dropped --python would otherwise run every leg on 3.11 and stay green.
+      - name: Check the interpreter matches the matrix entry
+        env:
+          EXPECTED_PYTHON: ${{ matrix.python-version }}
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os, sys
+          expected = os.environ["EXPECTED_PYTHON"]
+          actual = f"{sys.version_info.major}.{sys.version_info.minor}"
+          print("sys.version:", sys.version)
+          assert actual == expected, f"matrix asked for Python {expected}, got {actual}"
+          PY
 
       - name: Lint
         run: uv run --no-sync ruff check .

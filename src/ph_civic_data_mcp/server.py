@@ -56,7 +56,9 @@ SOURCE_CATALOG: list[dict] = [
         "source": "PSA OpenSTAT",
         "source_url": "https://openstat.psa.gov.ph/PXWeb/api/v1/en/",
         "freshness": (
-            "Per-table vintage. Population: 2020 Census. Poverty: 2023. "
+            "Per-table vintage. Population: 2024 Census of Population "
+            "(reference date 2024-07-01), with 2010, 2015 and 2020 by year. "
+            "Poverty: 2023. "
             "CPI/inflation: latest published month (lagged). Labor Force "
             "Survey: latest published quarter. Health (1D): per-indicator."
         ),

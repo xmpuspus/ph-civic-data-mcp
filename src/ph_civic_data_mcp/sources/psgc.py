@@ -127,6 +127,7 @@ def _record_to_psgc(item: dict[str, Any], level_hint: str | None = None) -> PSGC
     return PSGCRecord(
         psgc_code=code,
         name=name,
+        psgc_10digit_code=item.get("psgc10DigitCode") or None,
         level=level
         if level
         in (
@@ -213,6 +214,52 @@ async def _fetch_barangay_by_code(code: str) -> dict[str, Any] | None:
                 return payload
     except Exception as exc:
         log_stderr(f"PSGC barangay fetch error ({code}): {exc}")
+    return None
+
+
+def _lookup_shape(item: dict[str, Any], level: str) -> dict[str, Any]:
+    if level == "city-municipality":
+        level = "city" if item.get("isCity") else "municipality"
+    return {
+        "psgc_code": str(item.get("code") or ""),
+        "psgc_10digit_code": item.get("psgc10DigitCode") or None,
+        "name": item.get("name") or "",
+        "level": level,
+        "region_code": item.get("regionCode") or None,
+        "province_code": item.get("provinceCode") or None,
+    }
+
+
+async def lookup_psgc_code(code: str) -> dict[str, Any] | None:
+    """One PSGC record by 9- or 10-digit code, or None when no level carries it.
+
+    Unlike `_fetch_one`, a transport failure raises, so a caller can tell an
+    unknown code from an unreachable mirror. The mirror keys its per-record
+    endpoints on the 9-digit code, so a 10-digit code is found by scanning the
+    cached level lists (the barangay list is about 11 MB, fetched once a day).
+    Not a tool.
+    """
+    code = code.strip()
+    if len(code) == 10:
+        for level in ("region", "province", "city-municipality", "barangay"):
+            for item in await _fetch_level(level):
+                if str(item.get("psgc10DigitCode") or "") == code:
+                    return _lookup_shape(item, level)
+        return None
+    for endpoint, level in (
+        ("regions", "region"),
+        ("provinces", "province"),
+        ("cities-municipalities", "city-municipality"),
+        ("barangays", "barangay"),
+    ):
+        response = await fetch_with_retry(CLIENT, "GET", f"{PSGC_BASE}/{endpoint}/{code}/")
+        if response.status_code >= 500:
+            response.raise_for_status()
+        if response.status_code != 200:
+            continue
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("code"):
+            return _lookup_shape(payload, level)
     return None
 
 

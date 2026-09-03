@@ -13,6 +13,9 @@ class PSGCRecord(BaseModel):
     psgc_code: str
     name: str
     level: PSGCLevel
+    # The 2023 PSGC edition widened codes from 9 to 10 digits. PSA OpenSTAT's
+    # 2024 Census tables key their geography on the 10-digit form.
+    psgc_10digit_code: str | None = None
     parent_code: str | None = None
     region_code: str | None = None
     region_name: str | None = None

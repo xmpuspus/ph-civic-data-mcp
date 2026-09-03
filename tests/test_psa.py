@@ -6,16 +6,15 @@ import pytest
 
 
 from ph_civic_data_mcp.sources.psa import get_population_stats, get_poverty_stats
+from tests.live_helpers import skip_if_outage as _skip_if_upstream_down
 
 # Hits the live PSA PXWeb API with no offline fallback — live-marked so a
 # transient upstream outage cannot red the offline CI gate (`pytest -x`).
+#
+# The guard skips on a positively identified outage only. The old one skipped
+# on any `caveats` entry, which kept the weekly run green for weeks while
+# population discovery returned nothing.
 pytestmark = pytest.mark.live
-
-
-def _skip_if_upstream_down(payload: dict, label: str) -> None:
-    """A PSA outage or a 429 is not scraper drift; degrade to a skip."""
-    if payload.get("upstream_error") or payload.get("caveats"):
-        pytest.skip(f"{label} unavailable: {payload.get('caveats')}")
 
 
 @pytest.mark.asyncio
@@ -39,6 +38,9 @@ async def test_population_ncr() -> None:
 @pytest.mark.asyncio
 async def test_population_unknown_region() -> None:
     result = await get_population_stats(region="Wakanda")
+    _skip_if_upstream_down(result, "PSA population")
+    assert result["validation_error"] is True
+    assert result["upstream_error"] is False
     assert "caveats" in result
 
 

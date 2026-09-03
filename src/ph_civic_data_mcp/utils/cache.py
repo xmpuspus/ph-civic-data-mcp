@@ -22,6 +22,9 @@ CACHES: dict[str, TTLCache[str, Any]] = {
     "psa_labor": TTLCache(maxsize=50, ttl=86400),
     "psa_health": TTLCache(maxsize=50, ttl=86400),
     "psa_browse": TTLCache(maxsize=100, ttl=86400),
+    # Discovered table locations. A TTL, because a process that ran for weeks
+    # kept using a table PSA had since moved.
+    "psa_discovery": TTLCache(maxsize=100, ttl=86400),
     "area_profile": TTLCache(maxsize=100, ttl=3600),
     "nasa_power": TTLCache(maxsize=100, ttl=86400),
     "open_meteo_aq": TTLCache(maxsize=50, ttl=900),

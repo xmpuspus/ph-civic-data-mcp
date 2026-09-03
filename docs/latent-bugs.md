@@ -1,7 +1,8 @@
 # Latent bugs found but not fixed in v0.6.0
 
 > Items 1, 4 and 8 were fixed during the review rounds and are marked below.
-> Items 12 to 16 came from rounds 5 and 6. Everything else still stands.
+> Items 12 to 16 came from rounds 5 and 6. v0.6.1 fixed items 2, 7 and 21.
+> Everything else still stands.
 
 Found by an adversarial and a cross-model review of the v0.6.0 branch on
 2026-08-06. Every item here predates that branch, so none of them ship as a
@@ -31,7 +32,7 @@ data-integrity rule forbids.
 Fixed: `_first_cell` reads the cell with a type check at every level, and an
 unreadable cell returns an envelope with `upstream_error` that never caches.
 
-## 2. The volcano bulletin path fetches an absolute URL on the TLS-relaxed client
+## 2. FIXED in v0.6.1. The volcano bulletin path fetches an absolute URL on the TLS-relaxed client
 
 `sources/phivolcs.py`, in `_fetch_volcano_bulletin_list` and
 `_fetch_volcano_alert`. `urljoin(WOVODAT_BASE, href)` keeps an absolute href
@@ -45,6 +46,11 @@ Fix shape: run every URL through `_is_phivolcs_url` before any
 `PHIVOLCS_CLIENT` fetch, not only the one an agent supplies.
 
 Severity: medium. It needs a compromised or changed upstream page to fire.
+
+Fixed: every PHIVOLCS fetch goes through `_fetch_phivolcs`, which checks the
+URL and every redirect hop against the https host allowlist. The client no
+longer follows redirects on its own. `tests/test_v061_phivolcs_security.py`
+holds the adversarial cases.
 
 ## 3. A per-volcano bulletin failure reads as a real alert with null fields
 
@@ -81,13 +87,16 @@ and enters the cache.
 
 Severity: medium. Same class as the v0.5.0 list-tool fix, one tool short.
 
-## 7. `get_area_profile` drops a sibling's failure envelope
+## 7. FIXED in v0.6.1. `get_area_profile` drops a sibling's failure envelope
 
 `sources/autostitch.py`. The composite catches a raised exception but passes a
 returned failure envelope through as data. The block reads as present when its
 source was down.
 
 Severity: medium.
+
+Fixed: `_unwrap` folds both shapes into `caveats`, and the profile carries
+`blocks` with one status per block plus a top-level `upstream_error`.
 
 ## 8. FIXED in v0.6.0. An unparseable poverty reference year silently becomes 2023
 
@@ -191,12 +200,15 @@ curated tools still queue duplicate metadata GETs.
 
 Severity: low. It costs duplicate fetches, never a wrong answer.
 
-## 21. A non-integral population value truncates
+## 21. FIXED in v0.6.1. A non-integral population value truncates
 
 `sources/psa.py`. `int()` on a float population silently drops the fraction
 rather than reporting the unexpected type.
 
 Severity: low.
+
+Fixed: the value rounds to the nearest whole person and a `caveats` entry
+names the non-integral cell.
 
 ## Suggested order
 

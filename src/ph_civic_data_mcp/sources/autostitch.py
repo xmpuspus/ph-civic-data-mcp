@@ -30,6 +30,11 @@ from ph_civic_data_mcp.sources.psa import (
     get_poverty_stats,
 )
 from ph_civic_data_mcp.sources.psgc import get_location_hierarchy, resolve_ph_location
+from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_SUCCESS,
+    DATA_STATUS_UNAVAILABLE,
+    is_failure,
+)
 
 PROFILE_DISCLAIMER = (
     "Statistical indicators derived from public data. Patterns may have "
@@ -42,12 +47,27 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _unwrap(result: object, caveats: list[str], label: str) -> dict | list | None:
-    """Normalize a gathered result; record upstream failures as caveats."""
+BLOCK_SKIPPED = "skipped"
+
+
+def _unwrap(result: object, caveats: list[str], label: str) -> tuple[dict | list | None, str]:
+    """Normalize a gathered result into (data, status).
+
+    Both a raised exception and a returned failure envelope land in `caveats`
+    with the real error text, so a block that reads null downstream always has
+    a caveat naming why. Before v0.6.1 only the exception branch existed: a
+    sibling that returned `{upstream_error: true}` passed through as data, and
+    the profile showed `population: null` beside an empty caveat list.
+    """
     if isinstance(result, BaseException):
-        caveats.append(f"{label} failed: {type(result).__name__}")
-        return None
-    return result  # type: ignore[return-value]
+        caveats.append(f"{label} failed: {type(result).__name__}: {result}")
+        return None, DATA_STATUS_UNAVAILABLE
+    if is_failure(result):
+        detail = result.get("caveats") or ["upstream error with no detail"]  # type: ignore[union-attr]
+        for c in detail:
+            caveats.append(f"{label}: {c}")
+        return None, DATA_STATUS_UNAVAILABLE
+    return result, DATA_STATUS_SUCCESS  # type: ignore[return-value]
 
 
 @mcp.tool(
@@ -127,26 +147,32 @@ async def get_area_profile(location: str) -> dict:
 
     gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
     results = dict(zip(tasks.keys(), gathered))
+    blocks: dict[str, str] = {}
 
-    population = _unwrap(results.get("population"), caveats, "PSA population") or {}
-    poverty = _unwrap(results.get("poverty"), caveats, "PSA poverty") or {}
-    inflation = _unwrap(results.get("inflation"), caveats, "PSA inflation") or {}
-    labor = _unwrap(results.get("labor"), caveats, "PSA labor") or {}
-    hazard = _unwrap(results.get("hazard"), caveats, "Hazard assessment") or {}
-    weather = _unwrap(results.get("weather"), caveats, "Weather forecast") or {}
-    infra = _unwrap(results.get("infra"), caveats, "PhilGEPS infra search") or []
-    if isinstance(infra, dict):
-        # List tools return a dict failure envelope on upstream outage.
-        for c in infra.get("caveats") or []:
-            caveats.append(f"PhilGEPS infra search: {c}")
-        infra = []
+    def _take(name: str, label: str) -> dict | list | None:
+        if name not in results:
+            blocks[name] = BLOCK_SKIPPED
+            return None
+        data, status = _unwrap(results[name], caveats, label)
+        blocks[name] = status
+        return data
+
+    population = _take("population", "PSA population") or {}
+    poverty = _take("poverty", "PSA poverty") or {}
+    inflation = _take("inflation", "PSA inflation") or {}
+    labor = _take("labor", "PSA labor") or {}
+    hazard = _take("hazard", "Hazard assessment") or {}
+    weather = _take("weather", "Weather forecast") or {}
+    infra = _take("infra", "PhilGEPS infra search")
     if not isinstance(infra, list):
-        infra = []
+        infra = None
+    if not isinstance(population, dict):
+        population = {}
 
-    pop_value = population.get("population") if isinstance(population, dict) else None
-    infra_count = len(infra)
+    pop_value = population.get("population")
+    infra_count: int | None = len(infra) if infra is not None else None
     infra_per_100k: float | None = None
-    if isinstance(pop_value, int) and pop_value > 0:
+    if infra_count is not None and isinstance(pop_value, int) and pop_value > 0:
         infra_per_100k = round(infra_count / pop_value * 100_000, 2)
 
     correlations = {
@@ -174,6 +200,8 @@ async def get_area_profile(location: str) -> dict:
         },
         "demographics": {
             "population": pop_value,
+            "population_year": population.get("year"),
+            "population_census": population.get("census"),
             "population_reference": population.get("reference_note"),
             "poverty_incidence_pct": poverty.get("poverty_incidence_pct"),
             "poverty_reference_year": poverty.get("reference_year"),
@@ -190,7 +218,7 @@ async def get_area_profile(location: str) -> dict:
         },
         "procurement": {
             "infra_notice_count": infra_count,
-            "sample": infra[:5],
+            "sample": infra[:5] if infra else [],
         },
         "hazard": {
             "earthquake_risk_level": hazard.get("earthquake_risk_level"),
@@ -207,6 +235,8 @@ async def get_area_profile(location: str) -> dict:
             "days": weather.get("days", []),
         },
         "correlations": correlations,
+        "blocks": blocks,
+        "upstream_error": any(v == DATA_STATUS_UNAVAILABLE for v in blocks.values()),
         "caveats": caveats,
         "assessment_datetime": retrieved_at.isoformat(),
         "source": "PSGC + PSA + PhilGEPS + PHIVOLCS + PAGASA",

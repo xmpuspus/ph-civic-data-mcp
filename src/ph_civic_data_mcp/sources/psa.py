@@ -2,7 +2,12 @@
 
 Landmines (from validation log):
 - 6: Never hardcode table paths. Discover via browse API.
-- Table 1A/PO holds population (2020 Census only, no year dimension).
+- The census folders under 1A carry the year in their TITLE ("2024 Census of
+  Population"), never in a stable id. PSA moved the 2020 Census from
+  `DB/1A/PO/` to `DB/1A/PO_2020/` and left one projection table under `PO/`,
+  so population discovery returned nothing for weeks. Discover the folder by
+  title, then validate the table's shape before publishing a figure.
+- No census table has a Year dimension. `_pick_latest_table` cannot rank them.
 - Poverty tables move between subjects. PSA relocated Full-Year Poverty
   Statistics from `DB/1E/FY` to `DB/1F/FY` some time before 2026-08-06, and
   `DB/1E/FY` now 404s. So poverty discovery walks the catalog by title:
@@ -20,7 +25,13 @@ from datetime import datetime, timezone
 from ph_civic_data_mcp._mcp import mcp
 from ph_civic_data_mcp.models.population import PopulationStats, PovertyStats
 from ph_civic_data_mcp.models.psa import HealthIndicator, InflationStats, LaborStats
+from ph_civic_data_mcp.sources.psgc import lookup_psgc_code
 from ph_civic_data_mcp.utils.cache import CACHES, cache_key
+from ph_civic_data_mcp.utils.envelope import (
+    DATA_STATUS_EMPTY,
+    DATA_STATUS_SUCCESS,
+    failure_result,
+)
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 PSA_API_BASE = "https://openstat.psa.gov.ph/PXWeb/api/v1/en"
@@ -156,26 +167,341 @@ async def _post_json(url: str, query: dict) -> dict | None:
         return None
 
 
-_DISCOVERY_CACHE: dict[str, tuple[str, dict]] = {}
+# Discovered table locations live in a TTL cache, never a bare dict. A process
+# that ran for weeks kept serving a table PSA had since moved.
+_DISCOVERY_CACHE = CACHES["psa_discovery"]
+
+# ---------------------------------------------------------------------------
+# Population: the Census of Population, discovered by title under subject 1A
+# ---------------------------------------------------------------------------
+#
+# PSA moved the 2020 Census from `DB/1A/PO/` to `DB/1A/PO_2020/` and left one
+# projection table under `PO/`, so a pinned path found nothing for weeks. The
+# 2024 Census sits under `DB/1A/PO_2024/` with PSGC-coded geography down to
+# barangay level. Nothing below pins a folder id or a table id: the census
+# folders come from their titles, the summary table from its title plus a
+# shape check, and the regional barangay tables from the region each title
+# names after its colon.
+
+_CENSUS_FOLDER_TITLE = re.compile(r"\b((?:19|20)\d{2})\b.*\bcensus of population\b", re.IGNORECASE)
+
+# Reference dates PSA states for each census. The 2024 barangay tables carry
+# theirs in the title ("as of 01 July 2024"); the summary tables do not, so
+# these are the published values, keyed by census year.
+CENSUS_REFERENCE_DATES: dict[int, str] = {
+    2010: "2010-05-01",
+    2015: "2015-08-01",
+    2020: "2020-05-01",
+    2024: "2024-07-01",
+}
+
+# Words a census summary table must not carry. Each names a sibling table in
+# the same folder that also says "Total Population" and "Region".
+_SUMMARY_TITLE_MUST_NOT = (
+    "barangay",
+    # "urban" alone would reject every title, because they all say "Highly
+    # Urbanized City". The urban-classification tables say "Urban Population".
+    "urban population",
+    "age group",
+    "age-group",
+    "growth",
+    "density",
+    "land area",
+    "housing unit",
+)
+
+# ASCII digits only. `\d` accepts Unicode digits, which no PSGC code carries.
+_PSGC_CODE = re.compile(r"^[0-9]{9}[0-9]?$")
+_LEADING_DOTS = re.compile(r"^\.+")
+_TRAILING_FOOTNOTE = re.compile(r"\s+(?:\d+/|/[a-z]|\d*\*+)$")
+_PHILIPPINES_FOOTNOTE = re.compile(r"^(philippines)\s+[a-z]$", re.IGNORECASE)
 
 
-async def _discover_population_table() -> tuple[str, dict] | None:
-    """Return (table_url, metadata) for the total-population table."""
-    if "population" in _DISCOVERY_CACHE:
-        return _DISCOVERY_CACHE["population"]
-    tables = await _get_json(f"{PSA_API_BASE}/DB/1A/PO/")
-    if not isinstance(tables, list):
+def _clean_geo_label(text: str) -> str:
+    """Strip PXWeb indentation dots and PSA footnote markers from a geography label.
+
+    "..Negros Island Region (NIR) 3/" -> "Negros Island Region (NIR)".
+    "Philippines a" -> "Philippines". "PHILIPPINES /a" -> "PHILIPPINES".
+    """
+    s = _LEADING_DOTS.sub("", str(text)).strip()
+    s = _TRAILING_FOOTNOTE.sub("", s).strip()
+    match = _PHILIPPINES_FOOTNOTE.match(s)
+    if match:
+        s = match.group(1)
+    return s
+
+
+def _geo_depth(text: str) -> int:
+    """Indentation depth of a PXWeb geography label, from its leading dots."""
+    return len(str(text)) - len(_LEADING_DOTS.sub("", str(text)))
+
+
+def _geo_level_from_label(text: str) -> str:
+    """Administrative level of a census row, from its indentation and wording.
+
+    0 dots is the national total, 2 a region, 4 a province or a highly
+    urbanized city (NCR cities take the province slot). The barangay tables
+    go on to 6 dots for a city or municipality and 8 for a barangay.
+    """
+    depth = _geo_depth(text)
+    label = _clean_geo_label(text).lower()
+    if depth == 0:
+        return "national"
+    if depth <= 2:
+        return "region"
+    if depth <= 4:
+        if label.startswith("city of ") or label.endswith(" city"):
+            return "highly_urbanized_city"
+        return "province"
+    if depth <= 6:
+        return "city_or_municipality"
+    return "barangay"
+
+
+def _level_from_psgc10(code: str) -> str:
+    """Administrative level a 10-digit PSGC code encodes: RR PPP MM BBB."""
+    if code[7:] != "000":
+        return "barangay"
+    if code[5:7] != "00":
+        return "city_or_municipality"
+    if code[2:5] != "000":
+        return "province"
+    if code[:2] != "00":
+        return "region"
+    return "national"
+
+
+def _summary_title_matches(title: str) -> bool:
+    t = title.lower()
+    if "total population" not in t or "region" not in t:
+        return False
+    return not any(bad in t for bad in _SUMMARY_TITLE_MUST_NOT)
+
+
+def _barangay_title_matches(title: str) -> bool:
+    t = title.lower()
+    return "total population" in t and "barangay" in t and "urban population" not in t
+
+
+def _population_layout(meta: object) -> dict | None:
+    """Codes needed to query a census table, or None when its shape is wrong.
+
+    A table passes only when it declares a geography variable and a Parameter
+    variable with a "Total Population" value. `geo_values` is empty for the
+    barangay tables: PXWeb leaves the value list out of their metadata, so a
+    row there is reachable only by a PSGC code the caller already knows.
+    """
+    if not isinstance(meta, dict):
         return None
-    for entry in tables:
-        text = entry.get("text", "").lower()
-        if "total population" in text and ("region" in text or "household" in text):
-            table_id = entry.get("id")
-            table_url = f"{PSA_API_BASE}/DB/1A/PO/{table_id}"
-            meta = await _get_json(table_url)
-            if isinstance(meta, dict):
-                _DISCOVERY_CACHE["population"] = (table_url, meta)
-                return table_url, meta
+    geo = _var_by_code(meta, "geographic", "geolocation")
+    param = _var_by_code(meta, "parameter")
+    if geo is None or param is None:
+        return None
+    total_code: str | None = None
+    for code, text in zip(param.get("values") or [], param.get("valueTexts") or []):
+        if str(text).strip().lower().startswith("total population"):
+            total_code = str(code)
+            break
+    if total_code is None:
+        return None
+    values = geo.get("values")
+    texts = geo.get("valueTexts")
+    geo_values = [str(v) for v in values] if isinstance(values, list) else []
+    geo_texts = [str(t) for t in texts] if isinstance(texts, list) else []
+    return {
+        "geo_code": str(geo.get("code") or "Geographic Location"),
+        "param_code": str(param.get("code") or "Parameter"),
+        "total_code": total_code,
+        "geo_values": geo_values,
+        "geo_texts": geo_texts,
+        "has_national": any("philippines" in t.lower() for t in geo_texts),
+        "psgc_coded": bool(geo_values)
+        and all(len(v) == 10 and v.isascii() and v.isdigit() for v in geo_values),
+    }
+
+
+async def _discover_census_vintages() -> dict[int, str]:
+    """{census_year: folder path under DB/} for every census folder in subject 1A.
+
+    Read from the folder titles ("2024 Census of Population"), never from the
+    folder ids, because PSA renamed the ids once already.
+    """
+    cached = _DISCOVERY_CACHE.get("census_vintages")
+    if cached is not None:
+        return cached
+    entries = await _browse("1A")
+    vintages: dict[int, str] = {}
+    titles: dict[int, str] = {}
+    for entry in entries:
+        if entry.get("type") == "t" or not entry.get("id"):
+            continue
+        title = str(entry.get("text") or "").strip()
+        match = _CENSUS_FOLDER_TITLE.search(title)
+        if match:
+            year = int(match.group(1))
+            vintages[year] = f"1A/{entry['id']}"
+            titles[year] = title
+    if not vintages:
+        raise PSAUpstreamError(
+            "No 'Census of Population' folder under PSA OpenSTAT subject 1A; the catalog moved."
+        )
+    _DISCOVERY_CACHE["census_titles"] = titles
+    _DISCOVERY_CACHE["census_vintages"] = vintages
+    return vintages
+
+
+def _census_title_for(year: int) -> str:
+    titles = _DISCOVERY_CACHE.get("census_titles") or {}
+    return str(titles.get(year) or f"{year} Census of Population")
+
+
+async def _discover_census_summary_table(year: int, folder: str) -> tuple[str, dict, dict]:
+    """(table_url, meta, layout) for the census table with national, region and province rows.
+
+    Title first, then shape: the table must declare a geography variable with
+    a Philippines row and a Parameter variable with Total Population. A table
+    that matches the title but fails the shape is skipped, and a folder where
+    none passes raises, so a wrong table can never publish a figure.
+    """
+    slot = f"census_summary::{year}"
+    cached = _DISCOVERY_CACHE.get(slot)
+    if cached is not None:
+        return cached
+    entries = await _browse(folder)
+    rejected: list[str] = []
+    for entry in entries:
+        if entry.get("type") != "t":
+            continue
+        title = str(entry.get("text") or "")
+        if not _summary_title_matches(title):
+            continue
+        table_url = f"{PSA_API_BASE}/DB/{folder}/{entry.get('id')}"
+        meta = await _get_json_or_raise(table_url)
+        layout = _population_layout(meta)
+        if layout is None or not layout["has_national"]:
+            rejected.append(title)
+            continue
+        found = (table_url, meta, layout)
+        _DISCOVERY_CACHE[slot] = found
+        return found
+    raise PSAUpstreamError(
+        f"No table under PSA {folder} passed validation as the {year} census summary "
+        "(title, geography with a Philippines row, Total Population measure). "
+        f"Rejected: {rejected or 'none matched the title'}."
+    )
+
+
+def _region_names(label: str) -> set[str]:
+    """Names a region label answers to: the text outside and inside its parentheses.
+
+    "Region VIII (Eastern Visayas)" -> {"region viii", "viii", "eastern visayas"}.
+    "MIMAROPA Region" -> {"mimaropa region", "mimaropa"}. Pairs a summary-table
+    region row with the barangay table that names that region in its title,
+    where PSA writes one region three different ways (and once with a typo).
+    """
+    text = _clean_geo_label(label).lower()
+    names: set[str] = set()
+    for inner in re.findall(r"\(([^)]*)\)", text):
+        inner = " ".join(inner.split())
+        if inner:
+            names.add(inner)
+    outer = " ".join(re.sub(r"\([^)]*\)", " ", text).split())
+    if outer:
+        names.add(outer)
+        stripped = " ".join(re.sub(r"\bregion\b", " ", outer).split())
+        if stripped and stripped != outer:
+            names.add(stripped)
+    return names
+
+
+async def _discover_barangay_table(region_label: str, folder: str) -> tuple[str, dict, dict] | None:
+    """(table_url, meta, layout) for the barangay-level table of one region, or None.
+
+    The barangay tables carry no geography values in their metadata, so the
+    only handle is the region named after the colon in each title.
+    """
+    slot = f"census_barangay::{folder}::{_clean_geo_label(region_label).lower()}"
+    cached = _DISCOVERY_CACHE.get(slot)
+    if cached is not None:
+        return cached
+    wanted = _region_names(region_label)
+    entries = await _browse(folder)
+    for entry in entries:
+        if entry.get("type") != "t":
+            continue
+        title = str(entry.get("text") or "")
+        if not _barangay_title_matches(title):
+            continue
+        suffix = title.rsplit(":", 1)[-1] if ":" in title else ""
+        if not (_region_names(suffix) & wanted):
+            continue
+        table_url = f"{PSA_API_BASE}/DB/{folder}/{entry.get('id')}"
+        meta = await _get_json_or_raise(table_url)
+        layout = _population_layout(meta)
+        if layout is None:
+            continue
+        found = (table_url, meta, layout)
+        _DISCOVERY_CACHE[slot] = found
+        return found
     return None
+
+
+async def _query_total_population(table_url: str, layout: dict, geo_value: str) -> float | None:
+    """One bounded POST for the Total Population cell of one geography code.
+
+    Raises PSAUpstreamError on a transport failure. Returns None when PXWeb
+    answers with no row, which is how it reports a code the table lacks.
+    """
+    query = {
+        "query": [
+            {"code": layout["geo_code"], "selection": {"filter": "item", "values": [geo_value]}},
+            {
+                "code": layout["param_code"],
+                "selection": {"filter": "item", "values": [layout["total_code"]]},
+            },
+        ],
+        "response": {"format": "json"},
+    }
+    payload = await _post_json_or_raise(table_url, query)
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        return None
+    return _first_cell(payload)
+
+
+def _containing_region(layout: dict, index: int) -> str | None:
+    """Label of the nearest region row above `index` in a summary table.
+
+    None for the national row and for a region row itself: a region has no
+    parent region, and the national total sits above every region.
+    """
+    if _geo_depth(layout["geo_texts"][index]) <= 2:
+        return None
+    for i in range(index, -1, -1):
+        if _geo_depth(layout["geo_texts"][i]) == 2:
+            return _clean_geo_label(layout["geo_texts"][i])
+    return None
+
+
+def _region_row_for_code(layout: dict, code10: str) -> tuple[int, str] | None:
+    """(index, raw label) of the region row a 10-digit PSGC code belongs to."""
+    wanted = code10[:2] + "00000000"
+    for i, value in enumerate(layout["geo_values"]):
+        if value == wanted:
+            return i, layout["geo_texts"][i]
+    return None
+
+
+def _region_field(level: str, geography: str | None, parent: str | None, fallback: str) -> str:
+    """Value of the compatibility `region` field.
+
+    For a national or regional row it is the row itself. For anything below a
+    region it names the containing region, which is what the field always
+    claimed to hold.
+    """
+    if level in ("national", "region") and geography:
+        return geography
+    return parent or geography or fallback
 
 
 def _first_cell(payload: dict) -> float | None:
@@ -386,7 +712,7 @@ def _variable_values(meta: dict, code_match: str) -> tuple[str, list[str], list[
 
 @mcp.tool(
     title="Philippine population statistics",
-    tags={"openstat", "philippines", "population", "psa"},
+    tags={"openstat", "philippines", "population", "psa", "census"},
     annotations={
         "title": "Philippine population statistics",
         "readOnlyHint": True,
@@ -398,97 +724,291 @@ def _variable_values(meta: dict, code_match: str) -> tuple[str, list[str], list[
 async def get_population_stats(
     region: str | None = None,
     year: int | None = None,
+    psgc_code: str | None = None,
 ) -> dict:
-    """Philippine population from PSA OpenSTAT (2020 Census).
+    """Population from the PSA Census of Population, discovered live on OpenSTAT.
+
+    Defaults to the latest census PSA publishes: the 2024 Census of Population,
+    reference date 2024-07-01, as of 2026-09. Pass `year` for an older census
+    (2010, 2015, 2020). Every result names its census, reference date and
+    geography level, and for the 2024 tables the PSGC code PSA keyed the row
+    on. Examples:
+
+      get_population_stats()                       national total, latest census
+      get_population_stats(region="NCR")           one region, province or HUC by PSA label
+      get_population_stats(region="Cebu", year=2020)
+      get_population_stats(psgc_code="0831600000") City of Tacloban, 2024 Census
+      get_population_stats(psgc_code="083747000")  same place, 9-digit code
+      get_population_stats(psgc_code="1380100001") one barangay, 2024 Census
+
+    On an OpenSTAT outage: population null, upstream_error true, data_status
+    "unavailable", the real error in caveats. On a bad argument:
+    validation_error true, data_status "invalid_request". A code no census
+    table carries: data_status "empty". Failures are never cached.
 
     Args:
-        region: e.g. "NCR", "Region VII", "Cordillera Administrative Region".
-                None returns national total.
-        year: Ignored — latest data is 2020 Census; field kept for API stability.
+        region: Region, province or highly urbanized city as PSA labels it,
+            such as "NCR", "Region VII", "CAR", "BARMM", "Leyte",
+            "City of Manila". None returns the national total.
+        year: Census year. None picks the latest. A year PSA has no census
+            for returns validation_error with available_vintages.
+        psgc_code: A 9- or 10-digit PSGC code from resolve_ph_location.
+            Reaches cities, municipalities and barangays (2024 Census only).
+            Not combined with region.
+
+    Returns: population, year, census, reference_date, geography,
+    geography_level, psgc_code, region, parent_region, available_vintages,
+    source_table, data_status, caveats, source, source_url, license,
+    data_retrieved_at.
     """
-    key = cache_key({"tool": "population", "region": region, "year": year})
+    label_arg = region or "Philippines"
+    subject_url = f"{PSA_API_BASE}/DB/1A/"
+
+    def _invalid(msg: str, **extra: object) -> dict:
+        return failure_result(
+            "PSA",
+            subject_url,
+            msg,
+            license=PSA_LICENSE,
+            validation_error=True,
+            region=label_arg,
+            population=None,
+            year=year,
+            **extra,
+        )
+
+    def _down(msg: str, **extra: object) -> dict:
+        return failure_result(
+            "PSA",
+            subject_url,
+            msg,
+            license=PSA_LICENSE,
+            region=label_arg,
+            population=None,
+            year=year,
+            **extra,
+        )
+
+    if region and psgc_code is not None:
+        return _invalid("Pass either region or psgc_code, not both.")
+    code: str | None = None
+    if psgc_code is not None:
+        code = psgc_code.strip()
+        if not _PSGC_CODE.match(code):
+            return _invalid(
+                f"psgc_code {psgc_code!r} is not a 9- or 10-digit PSGC code. "
+                "Get one from resolve_ph_location."
+            )
+
+    key = cache_key({"tool": "population", "region": region, "year": year, "psgc_code": code})
     cache = CACHES["psa_population"]
     if key in cache:
         return cache[key]
 
-    discovered = await _discover_population_table()
-    if discovered is None:
-        return {
-            "region": region or "Philippines",
-            "caveats": ["PSA PXWeb population table discovery failed"],
-            "source": "PSA",
-            "data_retrieved_at": _now().isoformat(),
-        }
-    table_url, meta = discovered
+    try:
+        vintages = await _discover_census_vintages()
+    except PSAUpstreamError as exc:
+        return _down(f"PSA census discovery failed: {exc}")
+    available = sorted(vintages)
+    chosen = year if year is not None else available[-1]
+    if chosen not in vintages:
+        return _invalid(
+            f"PSA OpenSTAT has no Census of Population for {year}. "
+            f"Available census years: {available}.",
+            available_vintages=available,
+        )
+    folder = vintages[chosen]
 
-    geo_hit = _find_geo_value(meta, region, "Geographic Location")
-    if geo_hit is None:
-        # Not cached: the geo dimension can drift; don't pin a miss for 24h.
-        return {
-            "region": region or "Philippines",
-            "caveats": [f"Region '{region}' not found in PSA geographic dimension"],
-            "source": "PSA",
-            "data_retrieved_at": _now().isoformat(),
-        }
-    geo_val, geo_text = geo_hit
+    try:
+        summary_url, summary_meta, summary = await _discover_census_summary_table(chosen, folder)
+    except PSAUpstreamError as exc:
+        return _down(f"PSA census summary discovery failed: {exc}", available_vintages=available)
 
-    param_code, param_values, _ = _variable_values(meta, "Parameter")
-    param_val = param_values[0] if param_values else "0"
+    caveats: list[str] = []
+    cacheable = True
+    geography: str | None
+    level: str
+    out_code: str | None
+    parent_region: str | None
+    table_url = summary_url
+    layout = summary
 
-    query = {
-        "query": [
-            {"code": "Geographic Location", "selection": {"filter": "item", "values": [geo_val]}},
-            {
-                "code": param_code or "Parameter",
-                "selection": {"filter": "item", "values": [param_val]},
-            },
-        ],
-        "response": {"format": "json"},
-    }
-    payload = await _post_json(table_url, query)
-    if payload is None or not payload.get("data"):
-        # Not cached: likely a transient PXWeb failure, not a data property.
-        return {
-            "region": geo_text,
-            "upstream_error": True,
-            "caveats": ["PSA PXWeb query returned no data"],
-            "source": "PSA",
-            "data_retrieved_at": _now().isoformat(),
-        }
+    if code is None:
+        geo_hit = _find_geo_value(summary_meta, region, summary["geo_code"])
+        if geo_hit is None:
+            return _invalid(
+                f"Region '{region}' not found in the PSA {chosen} census geography. "
+                "Use a PSA label such as 'NCR', 'Region VII', 'CAR', 'Leyte', or pass "
+                "psgc_code from resolve_ph_location.",
+                available_vintages=available,
+            )
+        geo_value = geo_hit[0]
+        index = summary["geo_values"].index(geo_value)
+        raw_label = summary["geo_texts"][index]
+        geography = _clean_geo_label(raw_label)
+        level = _geo_level_from_label(raw_label)
+        parent_region = _containing_region(summary, index)
+        out_code = geo_value if summary["psgc_coded"] else None
+    else:
+        record: dict | None = None
+        try:
+            record = await lookup_psgc_code(code)
+        except Exception as exc:
+            log_stderr(f"PSGC lookup failed for {code}: {exc}")
+            caveats.append(
+                f"PSGC name lookup unavailable ({type(exc).__name__}: {exc}); "
+                "geography name omitted."
+            )
+            cacheable = False
+        if len(code) == 9:
+            code10 = str((record or {}).get("psgc_10digit_code") or "")
+            if not code10:
+                if not cacheable:
+                    return _down(
+                        f"Cannot widen 9-digit PSGC code {code} without the PSGC mirror. "
+                        "Retry later or pass the 10-digit code.",
+                        available_vintages=available,
+                    )
+                return _invalid(
+                    f"PSGC code {code} is unknown to the PSGC mirror.", available_vintages=available
+                )
+        else:
+            code10 = code
+        geography = (record or {}).get("name") or None
+        level = str((record or {}).get("level") or _level_from_psgc10(code10))
+        out_code = code10
 
-    raw_population = _first_cell(payload)
+        if not summary["psgc_coded"]:
+            # An older census keys geography on sequential codes, so the only
+            # bridge is the PSGC record's name, and only down to province/HUC.
+            if _level_from_psgc10(code10) in ("city_or_municipality", "barangay"):
+                return _invalid(
+                    "City, municipality and barangay populations exist in the 2024 Census "
+                    f"only; PSA's {chosen} tables stop at province and highly urbanized city. "
+                    "Omit year or pass year=2024.",
+                    available_vintages=available,
+                )
+            if not geography:
+                return _down(
+                    f"The {chosen} census keys geography by label, and the PSGC mirror "
+                    f"could not name code {code}.",
+                    available_vintages=available,
+                )
+            geo_hit = _find_geo_value(summary_meta, geography, summary["geo_code"])
+            if geo_hit is None:
+                return _invalid(
+                    f"'{geography}' (PSGC {code}) is not a row in the PSA {chosen} census "
+                    "summary table.",
+                    available_vintages=available,
+                )
+            geo_value = geo_hit[0]
+            index = summary["geo_values"].index(geo_value)
+            raw_label = summary["geo_texts"][index]
+            geography = _clean_geo_label(raw_label)
+            level = _geo_level_from_label(raw_label)
+            parent_region = _containing_region(summary, index)
+            out_code = None
+        elif code10 in summary["geo_values"]:
+            geo_value = code10
+            index = summary["geo_values"].index(geo_value)
+            raw_label = summary["geo_texts"][index]
+            geography = _clean_geo_label(raw_label)
+            level = _geo_level_from_label(raw_label)
+            parent_region = _containing_region(summary, index)
+        else:
+            region_row = _region_row_for_code(summary, code10)
+            if region_row is None:
+                return _invalid(
+                    f"PSGC code {code10} names a region ({code10[:2]}) that the PSA {chosen} "
+                    "census summary does not list.",
+                    available_vintages=available,
+                )
+            parent_region = _clean_geo_label(region_row[1])
+            try:
+                found = await _discover_barangay_table(region_row[1], folder)
+            except PSAUpstreamError as exc:
+                return _down(
+                    f"PSA barangay table discovery failed: {exc}", available_vintages=available
+                )
+            if found is None:
+                return _down(
+                    f"No barangay-level {chosen} census table for {parent_region} under PSA "
+                    f"{folder}; the table titles changed.",
+                    available_vintages=available,
+                )
+            table_url, _meta, layout = found
+            geo_value = code10
+
+    try:
+        raw_population = await _query_total_population(table_url, layout, geo_value)
+    except PSAUpstreamError as exc:
+        return _down(
+            f"PSA PXWeb population query failed: {exc}",
+            available_vintages=available,
+            source_table=table_url,
+        )
+    if raw_population is None and code is not None and table_url != summary_url:
+        # PXWeb answers a code its table lacks with zero rows, not an error.
+        return failure_result(
+            "PSA",
+            table_url,
+            f"PSGC code {code10} has no row in the PSA {chosen} census table for "
+            f"{parent_region}. The census keyed this table on the PSGC edition current at "
+            "its reference date, so a code created or retired since may be absent.",
+            license=PSA_LICENSE,
+            validation_error=True,
+            data_status=DATA_STATUS_EMPTY,
+            region=parent_region or label_arg,
+            population=None,
+            year=chosen,
+            psgc_code=code10,
+            available_vintages=available,
+            source_table=table_url,
+        )
     if raw_population is None:
-        # This used to fall back to 0 and follow the success path into the 24h
-        # cache, reporting the Philippines as having no people.
-        return {
-            "region": geo_text,
-            "population": None,
-            "upstream_error": True,
-            "caveats": [
-                "PSA returned a population cell this server could not read as a "
-                "number. That is a parse failure, never a population of zero."
-            ],
-            "source": "PSA",
-            "source_url": f"{PSA_API_BASE}/DB/1A/PO/",
-            "license": PSA_LICENSE,
-            "data_retrieved_at": _now().isoformat(),
-        }
-    population = int(raw_population)
+        return _down(
+            "PSA PXWeb returned no readable population cell. That is a query or parse "
+            "failure, never a population of zero.",
+            available_vintages=available,
+            source_table=table_url,
+        )
+    if raw_population != int(raw_population):
+        caveats.append(
+            "PSA returned a non-integral population cell; rounded to the nearest whole person."
+        )
+    population = int(round(raw_population))
 
+    reference_date = CENSUS_REFERENCE_DATES.get(chosen)
+    census_title = _census_title_for(chosen)
     stats = PopulationStats(
-        region=geo_text,
-        year=2020,
+        region=_region_field(level, geography, parent_region, label_arg),
+        year=chosen,
         population=population,
+        geography=geography,
+        geography_level=level,
+        psgc_code=out_code,
+        census=census_title,
+        reference_date=reference_date,
         reference_note=(
-            "PSA 2020 Census of Population and Housing. Latest available PH census data."
+            f"PSA {census_title}, reference date {reference_date or 'see table'}. "
+            f"Latest census PSA publishes on OpenSTAT: {available[-1]}."
         ),
     )
     result = {
         **stats.model_dump(mode="json"),
+        "parent_region": parent_region,
+        "available_vintages": available,
+        "data_status": DATA_STATUS_SUCCESS,
+        "upstream_error": False,
+        "validation_error": False,
+        "caveats": caveats,
+        "source_url": table_url,
         "source_table": table_url,
+        "license": PSA_LICENSE,
         "data_retrieved_at": _now().isoformat(),
     }
-    cache[key] = result
+    if cacheable:
+        cache[key] = result
     return result
 
 

@@ -1,6 +1,6 @@
 # Tool reference
 
-All 32 tools in `ph-civic-data-mcp` 0.6.0. Every tool is read-only and
+All 32 tools in `ph-civic-data-mcp` 0.6.1. Every tool is read-only and
 idempotent, and every one that calls an upstream service declares
 `openWorldHint`.
 
@@ -74,7 +74,7 @@ Run live 2026-08-06. The `psa_data_explorer` prompt drives this same sequence.
 
 | Tool | Returns | Params | Vintage |
 |---|---|---|---|
-| `get_population_stats` | Population by region | `region?`, `year?` | 2020 Census |
+| `get_population_stats` | Census population for the nation, a region, province or highly urbanized city by name, or any place down to barangay by `psgc_code`. Every result carries `census`, `reference_date`, `geography_level`, `psgc_code` (2024 tables), `available_vintages` and `data_status`. | `region?`, `year?`, `psgc_code?` | 2024 Census of Population by default; 2010, 2015, 2020 by `year` |
 | `get_poverty_stats` | Poverty and subsistence incidence | `region?` | 2023 Full Year |
 | `get_inflation_stats` | Headline year-on-year CPI inflation | `area?` | Latest published month |
 | `get_labor_stats` | Labor Force Survey key rates | `region?` | Latest published quarter |
@@ -152,6 +152,10 @@ The window is the latest ~100 published notices, not a census of projects.
 
 Both fan out with `asyncio.gather` and degrade per upstream. A block that fails
 carries its own `caveats` entry rather than sinking the whole response.
+`get_area_profile` also returns `blocks`, one status per block (`success`,
+`unavailable`, `skipped`), and sets `upstream_error: true` when any block is
+unavailable. A returned failure envelope from a sibling tool folds into
+`caveats` the same way a raised exception does.
 
 ## Science and open data
 
@@ -216,3 +220,31 @@ Three rules follow from it:
 
 The three OpenSTAT catalog tools add `validation_error: true` for a rejected
 argument. That one is not retryable. Fix the argument that `caveats` names.
+
+Single-value tools use the same builder, `failure_result` in
+`utils/envelope.py`, and carry `data_status`:
+
+| `data_status` | `upstream_error` | `validation_error` | Meaning |
+|---|---|---|---|
+| `success` | false | false | A figure, with its provenance |
+| `empty` | false | false | The source answered and has no row for this request |
+| `unavailable` | true | false | The source was down or answered with an unreadable body |
+| `indeterminate` | true | false | The source answered but the result cannot be trusted |
+| `invalid_request` | false | true | A caller mistake, named in `caveats` |
+
+`get_population_stats` sets every one of these. The other single-value tools
+adopt the field in 0.7.0.
+
+Single-value tools use the same builder, `utils/envelope.py::failure_result`,
+and carry `data_status`:
+
+| `data_status` | `upstream_error` | `validation_error` | Meaning |
+|---|---|---|---|
+| `success` | false | false | A figure, with its provenance |
+| `empty` | false | false | The source answered and has no row for this request |
+| `unavailable` | true | false | The source was down or answered with an unreadable body |
+| `indeterminate` | true | false | The source answered but the result cannot be trusted |
+| `invalid_request` | false | true | A caller mistake, named in `caveats` |
+
+`get_population_stats` sets every one of these. The other single-value tools
+adopt the field in 0.7.0.

@@ -40,9 +40,13 @@ async def test_area_profile_resolved_province() -> None:
 
     demo = profile["demographics"]
     if demo.get("population") is None:
+        # Only an outage may skip. A null with no caveat is the v0.6.0 bug.
+        assert profile["blocks"]["population"] == "unavailable"
+        assert any("PSA population" in c for c in profile["caveats"]), profile["caveats"]
         pytest.skip(f"PSA population unavailable: {profile['caveats']}")
     assert isinstance(demo["population"], int)
     assert demo["population"] > 0
+    assert demo["population_year"] >= 2020
 
     econ = profile["economy"]
     assert "headline_inflation_pct" in econ

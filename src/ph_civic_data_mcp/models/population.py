@@ -12,6 +12,14 @@ class PopulationStats(BaseModel):
     growth_rate_pct: float | None = None
     density_per_sqkm: float | None = None
     reference_note: str | None = None
+    # Added in 0.6.1 (additive). `region` keeps the matched label for older
+    # callers; `geography` carries the same label, and `geography_level` says
+    # what kind of place it is.
+    geography: str | None = None
+    geography_level: str | None = None
+    psgc_code: str | None = None
+    census: str | None = None
+    reference_date: str | None = None
     source: Literal["PSA"] = "PSA"
 
 

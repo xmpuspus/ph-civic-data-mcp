@@ -57,8 +57,9 @@ Add it to any stdio MCP client:
 That recording is `vhs docs/demo_setup.tape`. It spawns Claude Code with
 `--mcp-config` pointed at this server, and Claude fans out to
 `get_weather_forecast` and `get_population_stats`, then correlates them. The
-temperatures and the NCR population of 13,484,462 are what the live sources
-returned while it recorded.
+temperatures and the population are what the live sources returned while it
+recorded. Since 0.6.1 the population turn answers from the 2024 Census of
+Population (NCR: 14,001,751 as of 1 July 2024).
 
 ## Start here
 
@@ -68,6 +69,7 @@ returned while it recorded.
 | "Is it safe there right now?" | `assess_area_risk("Leyte")` |
 | "Find me PSA data on school enrollment" | `browse_psa_catalog()` then `describe_psa_dataset` then `query_psa_dataset` |
 | "What is the PSGC code for QC?" | `resolve_ph_location("QC")` |
+| "How many people live in Tacloban?" | `resolve_ph_location("Tacloban")` then `get_population_stats(psgc_code=...)` |
 | "Flood control contracts in Pampanga" | `search_infra_projects(province="Pampanga", keyword="flood control")` |
 | "What version am I running?" | `get_data_freshness()` |
 
@@ -81,8 +83,10 @@ notices already normalized per 100k residents.
 **PSA OpenSTAT, the whole catalog (new in 0.6.0).** `browse_psa_catalog`,
 `describe_psa_dataset`, `query_psa_dataset`. See the worked example below.
 
-**PSA curated statistics.** Population (2020 Census), poverty (2023 Full Year),
-CPI inflation, Labor Force Survey rates, health indicators.
+**PSA curated statistics.** Population (2024 Census of Population by default,
+down to barangay level by PSGC code, with 2010, 2015 and 2020 by year),
+poverty (2023 Full Year), CPI inflation, Labor Force Survey rates, health
+indicators.
 
 **Locations.** PSGC resolution from free text, admin-unit browsing, full
 hierarchies. Nicknames and ambiguous names both work.
@@ -147,8 +151,13 @@ Read that as "the source was unreachable", never as "no earthquakes" or "no
 notices". Failures never enter a cache, so a retry is meaningful, and a
 `caveats` entry carries the real error rather than an exception class name.
 
-The three OpenSTAT catalog tools add `validation_error: true` for a rejected
-argument. Fix the argument the message names; retrying will not help.
+The three OpenSTAT catalog tools and `get_population_stats` add
+`validation_error: true` for a rejected argument. Fix the argument the message
+names. A retry cannot help. Single-value tools carry `data_status`, one of
+`success`, `empty`, `unavailable`, `indeterminate` or `invalid_request`.
+`get_area_profile` reports one status per block in `blocks` and folds every
+failed block into `caveats`, so a null never sits beside an empty `caveats`
+list.
 
 Every response carries `source` and `data_retrieved_at`.
 
@@ -169,12 +178,16 @@ Every response carries `source` and `data_retrieved_at`.
 | World Bank | Philippine macro indicators | Annual | None |
 
 `PAGASA_API_TOKEN` is the only environment variable, and it is optional. PAGASA
-gates it behind a formal request; without it, forecasts use Open-Meteo. Every
+gates it behind a formal request. Without it, forecasts use Open-Meteo. Every
 one of the 32 tools works with no token at all.
 
 Three vintages worth stating plainly:
 
-- **Population is 2020 Census.** No later national count exists.
+- **Population defaults to the 2024 Census of Population** (reference date
+  1 July 2024). PSA moved the census folders on OpenSTAT in 2026, so the
+  server discovers them by title on every cold start and names the census,
+  reference date and geography level in every result. Pass `year` for 2010,
+  2015 or 2020, and `psgc_code` for a city, municipality or barangay.
 - **Poverty is 2023 Full Year.** PSA publishes it every three years.
 - **Procurement is not real time.** The public portal exposes no filterable
   API, so this server reads the latest ~100 notices and filters locally.
@@ -226,7 +239,9 @@ Ruff format, a build, and a fresh-process check that a bare import exposes all
 Architecture notes: Python 3.11+, `fastmcp>=3.0.0,<4.0.0`, stdio only,
 in-memory TTL caches and no disk writes, and two HTTP clients. The second one
 exists because PHIVOLCS serves a broken certificate chain. This server never
-disables TLS verification globally or for any other host.
+disables TLS checks globally or for any other host, and that client never
+follows a redirect on its own: every hop is checked against the PHIVOLCS host
+allowlist first.
 
 ## Related projects
 
