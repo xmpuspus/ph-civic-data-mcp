@@ -15,6 +15,7 @@ CACHES: dict[str, TTLCache[str, Any]] = {
     "pagasa_forecast": TTLCache(maxsize=100, ttl=3600),
     "pagasa_typhoons": TTLCache(maxsize=5, ttl=600),
     "pagasa_alerts": TTLCache(maxsize=10, ttl=600),
+    "pagasa_files": TTLCache(maxsize=10, ttl=900),
     "philgeps_data": TTLCache(maxsize=50, ttl=21600),
     "psa_population": TTLCache(maxsize=50, ttl=86400),
     "psa_poverty": TTLCache(maxsize=50, ttl=86400),
@@ -32,13 +33,24 @@ CACHES: dict[str, TTLCache[str, Any]] = {
     "area_profile": TTLCache(maxsize=100, ttl=3600),
     "nasa_power": TTLCache(maxsize=100, ttl=86400),
     "open_meteo_aq": TTLCache(maxsize=50, ttl=900),
+    "open_meteo_flood": TTLCache(maxsize=50, ttl=3600),
     "modis_ndvi": TTLCache(maxsize=50, ttl=86400),
     "usgs_events": TTLCache(maxsize=20, ttl=600),
     "ibtracs_tracks": TTLCache(maxsize=20, ttl=86400),
     "world_bank": TTLCache(maxsize=50, ttl=86400),
+    "hdx_search": TTLCache(maxsize=50, ttl=21600),
     "psgc_resolve": TTLCache(maxsize=200, ttl=86400),
     "psgc_browse": TTLCache(maxsize=200, ttl=86400),
     "infra_projects": TTLCache(maxsize=50, ttl=21600),
+    "gazette_feed": TTLCache(maxsize=50, ttl=1200),
+    # The whole parsed PSIC table, one entry, not one per query. A query
+    # matches in memory against this cached list.
+    "psic_table": TTLCache(maxsize=2, ttl=86400),
+    # The archive is frozen (see CLAUDE.md), so a 24h TTL only bounds process
+    # memory; it is never a race against a live update.
+    "comelec_tree": TTLCache(maxsize=500, ttl=86400),
+    "comelec_return": TTLCache(maxsize=500, ttl=86400),
+    "comelec_meta": TTLCache(maxsize=4, ttl=86400),
 }
 
 

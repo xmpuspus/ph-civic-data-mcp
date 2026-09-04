@@ -2,9 +2,9 @@
   "manifest_version": "0.2",
   "name": "ph-civic-data",
   "display_name": "Philippine Civic Data",
-  "version": "0.7.0",
-  "description": "Live PH civic data as agent tools: the full PSA OpenSTAT statistical catalog (browse, describe, query), plus earthquakes, weather, typhoons, procurement, infra-spending accountability, population, poverty, and NASA / NOAA / World Bank feeds. 34 tools, no API keys required.",
-  "long_description": "Multi-source MCP server for Philippine civic data. v0.6.0 opens the whole PSA OpenSTAT catalog through browse_psa_catalog, describe_psa_dataset, and query_psa_dataset, with explicit per-dimension selections and a hard cell ceiling. It also ships the PSGC location resolver, PHIVOLCS earthquakes and volcano alerts, PAGASA weather and typhoons, PhilGEPS procurement and infra-spending, PSA population, poverty, inflation, labor and health stats, NASA POWER solar/climate, Open-Meteo air quality, NASA MODIS NDVI, USGS earthquakes, NOAA IBTrACS historical typhoons, and World Bank macro indicators. Cross-source tools surface multi-hazard risk profiles and heuristic infra anomaly indicators (for further review, never as evidence of wrongdoing).",
+  "version": "0.8.0",
+  "description": "Live PH civic data as agent tools: the full PSA OpenSTAT statistical catalog (browse, describe, query), plus earthquakes, weather, typhoons, procurement, infra-spending accountability, population, poverty, and NASA / NOAA / World Bank feeds. 41 tools, no API keys required.",
+  "long_description": "Multi-source MCP server for Philippine civic data. v0.6.0 opens the whole PSA OpenSTAT catalog through browse_psa_catalog, describe_psa_dataset, and query_psa_dataset, with explicit per-dimension selections and a hard cell ceiling. It also ships the PSGC location resolver, PHIVOLCS earthquakes and volcano alerts, PAGASA weather and typhoons, PhilGEPS procurement and infra-spending, PSA population, poverty, inflation, labor and health stats, NASA POWER solar/climate, Open-Meteo air quality, NASA MODIS NDVI, USGS earthquakes, NOAA IBTrACS historical typhoons, and World Bank macro indicators. Cross-source tools surface multi-hazard risk profiles and heuristic infra anomaly indicators (for further review, never as evidence of wrongdoing). v0.8.0 adds Open-Meteo flood forecasts, HDX dataset search, PAGASA advisory file listings, COMELEC 2025 election returns, the Official Gazette feed, and PSIC code search, on FastMCP 4.",
   "author": {
     "name": "Xavier Puspus",
     "url": "https://github.com/xmpuspus"

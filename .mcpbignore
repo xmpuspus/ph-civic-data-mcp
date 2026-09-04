@@ -46,6 +46,9 @@ tmp/
 .claude/
 .git/
 .github/
+tests/
+scripts/
+.planning/
 
 # Other bundles in the repo (don't recurse a .mcpb into a .mcpb)
 *.mcpb

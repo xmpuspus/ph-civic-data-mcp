@@ -24,10 +24,16 @@ WHAT_IT_GIVES: dict[str, str] = {
     "Area profile (auto-stitch)": "One place profile composed live from every source below",
     "NASA POWER": "Daily solar irradiance and climate at any point",
     "Open-Meteo air quality": "PM2.5, PM10, NO2, SO2, O3, CO, and AQI",
+    "Open-Meteo flood forecast": "Daily river discharge forecast (GloFAS model) for the nearest river cell",
     "NASA MODIS NDVI": "NDVI and EVI vegetation indices at any point",
     "USGS FDSN": "Philippine-region earthquakes, cross-checked against PHIVOLCS",
     "NOAA IBTrACS": "Historical tropical cyclone tracks through the Philippine AOR",
     "World Bank Open Data": "Philippine macroeconomic indicators",
+    "HDX": "Humanitarian dataset search, with a per-dataset license",
+    "Official Gazette RSS": "Proclamations, memorandum circulars, and other government issuances",
+    "PAGASA public files": "Raw advisory, bulletin, and storm surge PDF file listing",
+    "PSIC": "Industrial classification code lookup, by code prefix or description",
+    "COMELEC 2025 election results": "Precinct-level vote tallies, region down to barangay",
 }
 
 

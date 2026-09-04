@@ -65,3 +65,4 @@ tmp/
 
 # Harness-created agent worktrees nest inside a checkout. Never commit them.
 .claude/worktrees/
+.planning/

@@ -92,6 +92,13 @@ SOURCE_CATALOG: list[dict] = [
         "license": "Open-Meteo CC-BY 4.0",
     },
     {
+        "source": "Open-Meteo flood forecast",
+        "source_url": "https://flood-api.open-meteo.com/v1/flood",
+        "freshness": "Daily GloFAS model run",
+        "cache_ttl_seconds": 3600,
+        "license": "Open-Meteo CC-BY 4.0",
+    },
+    {
         "source": "NASA MODIS NDVI",
         "source_url": "https://modis.ornl.gov/rst/api/v1/",
         "freshness": "16-day composite, ~14-day latency",
@@ -118,6 +125,44 @@ SOURCE_CATALOG: list[dict] = [
         "freshness": "Annual; lag varies by indicator",
         "cache_ttl_seconds": 86400,
         "license": "World Bank Open Data CC-BY 4.0",
+    },
+    {
+        "source": "HDX",
+        "source_url": "https://data.humdata.org/api/3/action/package_search",
+        "freshness": "Per-dataset metadata_modified; the catalog is searched fresh each query",
+        "cache_ttl_seconds": 21600,
+        "license": "HDX (Humanitarian Data Exchange) CKAN API, per-dataset license",
+    },
+    {
+        "source": "Official Gazette RSS",
+        "source_url": "https://www.officialgazette.gov.ph/feed/",
+        "freshness": "New issuances posted the same day; feed rebuilds on every request",
+        "cache_ttl_seconds": 1200,
+        "license": "Public, Official Gazette government record, RA 8293 section 176 default",
+    },
+    {
+        "source": "PAGASA public files",
+        "source_url": "https://pubfiles.pagasa.dost.gov.ph/tamss/weather/",
+        "freshness": (
+            "weather_advisory updates about every 6 hours; bulletin only while a "
+            "cyclone is active; stormsurge has not published since 2019-12-02"
+        ),
+        "cache_ttl_seconds": 900,
+        "license": "PAGASA public files (pubfiles.pagasa.dost.gov.ph), government record",
+    },
+    {
+        "source": "PSIC",
+        "source_url": "https://psa.gov.ph/classification/psic/search-results",
+        "freshness": "PSIC revisions change on the order of years",
+        "cache_ttl_seconds": 86400,
+        "license": "PSA Philippine Standard Industrial Classification (PSIC), CC BY 4.0",
+    },
+    {
+        "source": "COMELEC 2025 election results",
+        "source_url": "https://2025electionresults.comelec.gov.ph",
+        "freshness": "Archive frozen 2025-05-16 10:00:09 AM; a fixed public record, not a live feed",
+        "cache_ttl_seconds": 86400,
+        "license": "Public, COMELEC 2025 election results archive",
     },
 ]
 
@@ -326,12 +371,18 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import autostitch  # noqa: F401
     from ph_civic_data_mcp.sources import nasa_power  # noqa: F401
     from ph_civic_data_mcp.sources import open_meteo_aq  # noqa: F401
+    from ph_civic_data_mcp.sources import open_meteo_flood  # noqa: F401
     from ph_civic_data_mcp.sources import modis_ndvi  # noqa: F401
     from ph_civic_data_mcp.sources import usgs  # noqa: F401
     from ph_civic_data_mcp.sources import ibtracs  # noqa: F401
     from ph_civic_data_mcp.sources import world_bank  # noqa: F401
     from ph_civic_data_mcp.sources import psa_catalog  # noqa: F401
     from ph_civic_data_mcp.sources import compare  # noqa: F401
+    from ph_civic_data_mcp.sources import hdx  # noqa: F401
+    from ph_civic_data_mcp.sources import gazette  # noqa: F401
+    from ph_civic_data_mcp.sources import pagasa_files  # noqa: F401
+    from ph_civic_data_mcp.sources import psic  # noqa: F401
+    from ph_civic_data_mcp.sources import comelec  # noqa: F401
 
 
 def main() -> None:

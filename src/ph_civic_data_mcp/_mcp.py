@@ -40,7 +40,9 @@ mcp = FastMCP(
     - PSGC: place-name resolution, admin-unit browsing (list_admin_units
       supports offset pagination), full hierarchies
     - PHIVOLCS: real-time earthquakes (5-min updates), bulletins, volcano alerts
-    - PAGASA: 10-day weather forecast, active typhoons, weather alerts
+    - PAGASA: 10-day weather forecast, active typhoons, weather alerts,
+      list_pagasa_advisory_files for the raw advisory/bulletin/stormsurge
+      PDF listing
     - PhilGEPS: procurement notices. search_procurement covers ALL notices;
       search_infra_projects is the infra-only subset (construction, roads,
       flood control) with get_infra_project / summarize_infra_spending on top
@@ -55,6 +57,11 @@ mcp = FastMCP(
       browse_psa_catalog(path) walks it level by level when a keyword is not
       enough. Always describe before you query: every dimension needs explicit value codes, "all" and "*"
       are rejected, and one query is capped at 1000 cells.
+    - get_official_gazette_feed(page) reads the government's own RSS feed
+      of proclamations, memorandum circulars, and other issuances.
+    - search_psic_codes(query, limit) looks up the Philippine Standard
+      Industrial Classification by code prefix (digits) or by a whole-word
+      match on the class description.
 
     Accountability:
     - flag_infra_anomalies — heuristic indicators
@@ -65,10 +72,19 @@ mcp = FastMCP(
     Open-data + NASA / NOAA / World Bank sources:
     - NASA POWER: daily solar irradiance + climate (temp, precip, wind) at any lat/lng
     - Open-Meteo Air Quality: PM2.5/PM10/NO2/SO2/O3/CO + AQI (no auth)
+    - Open-Meteo Flood: get_flood_forecast, daily river discharge (GloFAS
+      model) for flood-risk screening, up to 30 days ahead (no auth)
     - NASA MODIS via ORNL: NDVI + EVI vegetation indices at any lat/lng
     - USGS FDSN: Philippine-region earthquakes from global network (cross-ref to PHIVOLCS)
     - NOAA IBTrACS: historical tropical cyclone tracks through Philippine AOR
     - World Bank Open Data: Philippine macro indicators (GDP, poverty, inflation, etc.)
+    - HDX (Humanitarian Data Exchange): search_hdx_datasets(query) finds
+      Philippine humanitarian datasets by keyword. Each dataset carries its
+      own license (license_id) and up to 20 resources; check the license
+      before you reuse a resource.
+    - COMELEC 2025 election results: browse_election_results (region down to
+      barangay, then precinct) and get_election_return (one precinct's vote
+      tally). The archive is frozen at 2025-05-16, a fixed public record.
 
     Failure semantics: list tools return a real list on success. On upstream
     failure they return {results: [], upstream_error: true, caveats: [...]}

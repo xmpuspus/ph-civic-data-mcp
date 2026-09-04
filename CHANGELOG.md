@@ -4,6 +4,88 @@ All notable changes to `ph-civic-data-mcp` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-04
+
+`v0.8.0` adds six sources and seven tools, which takes the surface from 34
+to 41 tools across 19 public sources. Eleven candidates went through the
+admission gate (machine-readable, legal, bounded, testable offline,
+operationally supportable). Six passed, four are deferred, one is rejected,
+and the ledgers with live probes and fixtures record every verdict. The
+server now runs on FastMCP 4. No existing tool name changed, and every
+existing response shape is unchanged.
+
+### Added
+
+- `get_flood_forecast(location, forecast_days, past_days)`: daily river
+  discharge forecast from the Open-Meteo Flood API (GloFAS model) for a
+  resolved place, up to 30 days ahead and 30 days back, CC BY 4.0.
+- `search_hdx_datasets(query, rows)`: keyword search over the Philippine
+  datasets on the Humanitarian Data Exchange (HDX) CKAN API, with each
+  dataset's own `license_id`, resources, and last-modified date passed
+  through.
+- `get_official_gazette_feed(page)`: the Official Gazette's own RSS feed of
+  proclamations, memorandum circulars, and other issuances, ten items per
+  page. The tool sends only a GET to `/feed/`, because every other path and
+  every HEAD request on that host returns a Cloudflare block.
+- `list_pagasa_advisory_files(kind, limit)`: PAGASA public advisory,
+  bulletin, and storm surge PDF files from the live pubfiles directory
+  listing, newest first, with a warning when the newest file is older than
+  a year.
+- `search_psic_codes(query, limit)`: a PSIC industrial classification code
+  by code prefix or by a whole-word match on the description, from the PSA
+  classification page, CC BY 4.0.
+- `browse_election_results(code)`: the COMELEC 2025 election results tree
+  from region down to precinct.
+- `get_election_return(precinct_code)`: one precinct's official vote tally,
+  with every national and local contest and each candidate's vote count and
+  share. The archive froze on 2025-05-16, so it is a fixed public record,
+  not a live feed.
+
+### Changed
+
+- FastMCP moves from 3.4.7 to 4.0.2 on MCP SDK 2.1.1, with the pydantic
+  floor at 2.12. The tests that read tool annotations use the SDK 2
+  snake_case names.
+- Six new `SOURCE_CATALOG` rows, so `get_data_freshness` and the README
+  source matrix list 19 sources.
+
+### Fixed
+
+Each of these came from an independent review of one new source before its
+merge, and each carries a regression test.
+
+- Flood: a body with dates but no discharge list is `indeterminate`, not a
+  cached success of nulls. A NaN or infinite discharge reads as null.
+- HDX: empty results beside a missing or non-integer `count` are
+  `indeterminate`. The cache-check-then-fetch is single-flight per key.
+- Gazette: a 200 body that does not parse as RSS is `indeterminate`, not an
+  outage. The fetch is single-flight per page.
+- PAGASA files: a parser defect after a 200 body is `indeterminate`, not an
+  outage. Only PDF links under the PAGASA folder come back, and skipped rows
+  are counted in `caveats`. The stale-folder warning comes from the newest
+  file's age, not a hard-coded date. The fetch is single-flight per kind.
+- PSIC: a table with fewer than 1000 rows or a missing section letter is
+  `indeterminate`, never a cached "no match".
+- COMELEC: a 403 is an unknown code only when the body carries the
+  archive's `AccessDenied` marker, and any other 403 is an outage. A
+  malformed `local` section, a wrong-typed `candidates` value, or a tree
+  page whose rows all fail to parse is `indeterminate`, never a crash or a
+  cached empty. Both tools are single-flight per key.
+- A final two-pass review of the whole diff found eight more, all closed:
+  the COMELEC browse path now checks the same `AccessDenied` marker as the
+  return path, a wrong-typed `candidates` wrapper is `indeterminate`, an
+  empty browse code is `invalid_request`, a `river_discharge` list shorter
+  than the date list is `indeterminate`, an RSS item with no title and no
+  link is skipped and counted, a wrong-typed HDX `count` beside results is
+  disclosed and not cached, and the README names FastMCP 4.0.2. Two last
+  passes on the merged head added three: a wrong-typed `limit` in
+  `list_pagasa_advisory_files` is `invalid_request`, not a TypeError, the
+  flood tool single-flights a cold cache miss like every sibling, and a
+  COMELEC contest row that is not an object is `indeterminate`, never a
+  cached empty ballot. A third pass added two: the PAGASA PDF allowlist
+  decodes a URL before it tests for traversal, and an HDX resource URL
+  comes back only when its scheme is http or https.
+
 ## [0.7.0] - 2026-09-04
 
 `v0.7.0` adds two tools, `compare_areas` and `search_psa_catalog`, and raises

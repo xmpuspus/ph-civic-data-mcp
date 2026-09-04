@@ -1,6 +1,6 @@
 # Tool reference
 
-All 34 tools in `ph-civic-data-mcp` 0.7.0. Every tool is read-only and
+All 41 tools in `ph-civic-data-mcp` 0.8.0. Every tool is read-only and
 idempotent, and every one that calls an upstream service declares
 `openWorldHint`.
 
@@ -13,6 +13,7 @@ Every successful response carries `source` and `data_retrieved_at`. Read
 - [Hazards](#hazards)
 - [Weather](#weather)
 - [Procurement and infrastructure](#procurement-and-infrastructure)
+- [Elections (COMELEC 2025)](#elections-comelec-2025)
 - [Composites](#composites)
 - [Science and open data](#science-and-open-data)
 - [Server](#server)
@@ -226,6 +227,30 @@ discovery walks the catalog by title, because PSA moved that subtree from
 Read the vintage from each response's reference field. The OpenSTAT `updated`
 timestamp is server wall clock, not data vintage.
 
+## PSA classification (PSIC)
+
+### search_psic_codes
+
+Finds a PSIC code by description keyword or by code prefix. New in 0.8.0.
+
+```python
+search_psic_codes(query: str, limit: int = 20) -> dict
+```
+
+Returns: `query`, `matches` (each with `code`, `level`, `description`),
+`match_count`, `total_codes`, `truncated`, `data_status`. `limit` is 1 to
+100. A query of only digits matches a code prefix. Any other query matches
+a whole word in the description, case-insensitive.
+
+On failure: an empty, over-long, or non-printable `query`, or a `limit`
+outside 1-100, returns `validation_error: true`. A Cloudflare challenge in
+place of the table returns `data_status: "unavailable"`. A missing or empty
+PSIC table returns `data_status: "indeterminate"`.
+
+PSA publishes the full 1362-row table on one page, with no key needed. The
+first call fetches and caches it for 24 hours, so a later query answers
+from memory.
+
 ## Locations (PSGC)
 
 ### resolve_ph_location
@@ -374,6 +399,27 @@ NOAA IBTrACS. No `year` returns the last three years.
 
 On failure: an ERDDAP outage returns `upstream_error: true`.
 
+### get_flood_forecast
+
+Daily river discharge forecast for a Philippine place, from Open-Meteo's
+GloFAS flood model.
+
+```python
+get_flood_forecast(location: str, forecast_days: int = 7, past_days: int = 0) -> dict
+```
+
+Returns: `location`, `latitude`, `longitude`, `days` (a list of `date`,
+`river_discharge_m3s`, `river_discharge_max_m3s`, `river_discharge_min_m3s`),
+`units`, `forecast_days`, `past_days`, `note` (the reading is a model value
+for the nearest river cell, not a gauge). `forecast_days` runs 1 to 30.
+`past_days` runs 0 to 30.
+
+On failure: an unresolved `location`, or a `forecast_days` or `past_days`
+outside its range, returns `data_status: "invalid_request"`. A PSGC outage
+during location lookup, or an Open-Meteo fetch failure, returns
+`data_status: "unavailable"`. A response with no readable daily dates
+returns `data_status: "indeterminate"` and is never cached.
+
 `get_earthquake_bulletin` only accepts a PHIVOLCS host. PHIVOLCS serves a
 broken certificate chain, so it is the one source behind a dedicated client
 with verification off. That exception never reaches another host.
@@ -421,6 +467,29 @@ reachable but its state is unclear, and `[]` with an explicit
 "no active warnings" signal when PAGASA says so.
 
 On failure: an unreachable page returns `upstream_error: true`.
+
+### list_pagasa_advisory_files
+
+Lists PAGASA public advisory, bulletin, or storm surge PDF files, newest first.
+
+```python
+list_pagasa_advisory_files(kind: str = "weather_advisory", limit: int = 20) -> dict
+```
+
+Reads the nginx directory listing at
+`pubfiles.pagasa.dost.gov.ph/tamss/weather/<kind>/` and returns each PDF's
+name, URL, last-modified time, and size. `kind` is `weather_advisory`,
+`bulletin`, or `stormsurge`. Returns file URLs only, never PDF bytes.
+
+Returns: `kind`, `folder_url`, `files` (name, url, last_modified,
+size_bytes), `file_count` (before the `limit` cut), `latest_name`,
+`latest_url`, `latest_modified`. The `stormsurge` kind always adds a warning
+to `caveats` that the folder has not published since 2019-12-02.
+
+On failure: an unknown `kind`, or a `limit` outside 1 to 100, returns
+`validation_error: true`. A 404 or a page with zero files returns
+`data_status: "indeterminate"`. An unreachable host returns
+`data_status: "unavailable"`.
 
 ## Procurement and infrastructure
 
@@ -548,6 +617,42 @@ public data, and patterns may have legitimate explanations. Present results as
 starting points for investigation, never as evidence of wrongdoing.
 
 The window is the latest ~100 published notices, not a census of projects.
+
+## Elections (COMELEC 2025)
+
+The archive froze on 2025-05-16 at 10:00:09 AM. It is a fixed public
+record, not a live feed.
+
+### browse_election_results
+
+Walks the region, province, city, barangay, and precinct tree. New in 0.8.0.
+
+```python
+browse_election_results(code: str = "0") -> dict
+```
+
+Returns: `code`, `level`, `children` (each with `code`, `name`,
+`category_code`, `master_code`), `child_count`, `truncated`,
+`data_frozen_at`.
+
+On failure: a code that is not `"0"`, a region code, or 7 digits returns
+`validation_error: true`. An outage returns `upstream_error: true`.
+
+### get_election_return
+
+Reads one precinct's official vote tally. New in 0.8.0.
+
+```python
+get_election_return(precinct_code: str) -> dict
+```
+
+Returns: `information` (machine ID, location, voting center, voter
+counts), `total_er_received`, `national_contests` and `local_contests`
+(each with `contest_code`, `contest_name`, `statistics`, `candidates`).
+
+On failure: a `precinct_code` that is not 8 digits, or an unknown one,
+returns `validation_error: true`. A malformed body returns `data_status:
+"indeterminate"`. An outage returns `upstream_error: true`.
 
 ## Composites
 
@@ -689,6 +794,47 @@ first. Accepts a World Bank code (`NY.GDP.MKTP.CD`) or an alias (`gdp`,
 
 On failure: an unresolvable code or alias returns `validation_error: true`
 with no upstream call.
+
+### search_hdx_datasets
+
+Finds Philippine datasets on the Humanitarian Data Exchange (HDX) by
+keyword. Each dataset carries its own license, so read `license_id` before
+reuse. New in 0.8.0.
+
+```python
+search_hdx_datasets(query: str, rows: int = 10) -> dict
+```
+
+Returns: `query`, `total_count`, `datasets` (each with `name`, `title`,
+`organization`, `license_id`, `license_title`, `license_url`,
+`last_modified`, `num_resources`, `hdx_url`, and up to 20 `resources` with
+`name`, `format`, `url`, `size`, `last_modified`), `rows` (1 to 50, default
+10). Results sort by `metadata_modified` descending. A query with no match
+returns `data_status: "empty"` with an empty list.
+
+On failure: an empty query, a query over 200 characters, or `rows` outside
+1 to 50 returns `validation_error: true`. A body whose `success` field is
+not true, or whose `results` is not a list, returns
+`data_status: "indeterminate"`. An outage returns `upstream_error: true`.
+## Government record
+
+### get_official_gazette_feed
+
+Reads the Official Gazette's own RSS feed of laws and issuances.
+
+```python
+get_official_gazette_feed(page: int = 1) -> dict
+```
+
+Returns: `page`, `items` (title, link, pub_date, creator, categories, guid,
+description), `item_count`, `feed_title`, and `feed_link`, ten issuances per
+page, newest first. `page` runs from 1 to 50.
+
+On failure: a `page` outside 1 to 50 returns `validation_error: true`. This
+host returns a Cloudflare block page on every other path, and on a HEAD
+request even on `/feed/`, so this tool sends only a GET to `/feed/` or
+`/feed/?paged=<page>`. A block page returns `upstream_error: true`, never an
+empty item list.
 
 ## Server
 
