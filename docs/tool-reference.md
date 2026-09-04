@@ -1,6 +1,6 @@
 # Tool reference
 
-All 35 tools in `ph-civic-data-mcp` 0.7.0. Every tool is read-only and
+All 41 tools in `ph-civic-data-mcp` 0.8.0. Every tool is read-only and
 idempotent, and every one that calls an upstream service declares
 `openWorldHint`.
 

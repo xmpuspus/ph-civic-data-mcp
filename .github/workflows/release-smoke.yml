@@ -97,7 +97,7 @@ jobs:
           resources = {str(r.uri) for r in asyncio.run(mcp.list_resources())}
           print("registered_tool_count =", len(names))
           print("tools:", names)
-          assert len(names) == 34, f"expected 34 tools, got {len(names)}: {names}"
+          assert len(names) == 41, f"expected 41 tools, got {len(names)}: {names}"
           for required in (
               "get_data_freshness",
               "get_poverty_stats",
@@ -127,7 +127,7 @@ jobs:
           from ph_civic_data_mcp.server import _register_tools, mcp
           _register_tools()
           _register_tools()
-          assert len(asyncio.run(mcp.list_tools())) == 34
+          assert len(asyncio.run(mcp.list_tools())) == 41
           print("_register_tools stays callable and idempotent")
           PY
 
@@ -142,7 +142,7 @@ jobs:
           fresh = asyncio.run(get_data_freshness())
           import os
           assert fresh["server_version"] == os.environ["VERSION"], fresh["server_version"]
-          assert fresh["tool_count"] == 34, fresh["tool_count"]
+          assert fresh["tool_count"] == 41, fresh["tool_count"]
           assert isinstance(fresh["sources"], list) and len(fresh["sources"]) >= 12
           print("get_data_freshness OK", fresh["server_version"], fresh["tool_count"], "tools")
           PY
@@ -176,7 +176,7 @@ jobs:
               transport = StdioTransport(command="ph-civic-data-mcp", args=[])
               async with Client(transport) as client:
                   tools = await client.list_tools()
-                  assert len(tools) == 34, f"stdio surface has {len(tools)} tools"
+                  assert len(tools) == 41, f"stdio surface has {len(tools)} tools"
                   prompts = await client.list_prompts()
                   assert len(prompts) == 3, f"stdio surface has {len(prompts)} prompts"
                   result = await client.call_tool("get_data_freshness", {})
