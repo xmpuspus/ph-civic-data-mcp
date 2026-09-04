@@ -7,6 +7,8 @@ The fixture below is the real nginx autoindex body PAGASA served for
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -204,3 +206,190 @@ async def test_a_limit_out_of_range_is_a_validation_error():
 
     assert result["data_status"] == "invalid_request"
     assert result["validation_error"] is True
+
+
+# --- Finding 1: a parser bug after a 200 body is "indeterminate", never
+# "unavailable", and _parse_size never raises. ---------------------------
+
+_HUGE_SIZE_TOKEN = "1" * 400
+HUGE_SIZE_HTML = f"""<html>
+<head><title>Index of /tamss/weather/weather_advisory/</title></head>
+<body bgcolor="white">
+<h1>Index of /tamss/weather/weather_advisory/</h1><hr><pre><a href="../">../</a>
+<a href="Advisory%2399.pdf">Advisory#99.pdf</a>                                    03-Sep-2026 20:41    {_HUGE_SIZE_TOKEN}
+</pre><hr></body>
+</html>
+"""
+
+
+def test_parse_size_returns_none_instead_of_raising_on_a_huge_token():
+    size_bytes, rounded = pagasa_files_module._parse_size(_HUGE_SIZE_TOKEN)
+
+    assert size_bytes is None
+    assert rounded is False
+
+
+@pytest.mark.asyncio
+async def test_a_5xx_status_stays_unavailable_not_indeterminate(monkeypatch):
+    """A non-2xx status is a transport failure, not a parse-time bug, so it
+    must stay "unavailable" even though the body carries real HTML."""
+
+    async def _fake(client, method, url, **kwargs):
+        return _response(503, "<html><body>Service Unavailable</body></html>")
+
+    monkeypatch.setattr(pagasa_files_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_files_module.list_pagasa_advisory_files()
+
+    assert result["data_status"] == "unavailable"
+    assert result["upstream_error"] is True
+    assert len(CACHES["pagasa_files"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_huge_size_token_does_not_crash_the_whole_row(monkeypatch):
+    async def _fake(client, method, url, **kwargs):
+        return _response(200, HUGE_SIZE_HTML)
+
+    monkeypatch.setattr(pagasa_files_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_files_module.list_pagasa_advisory_files()
+
+    assert result["data_status"] == "success"
+    assert result["files"][0]["size_bytes"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_parser_bug_after_a_200_body_is_indeterminate_not_unavailable(monkeypatch):
+    async def _fake(client, method, url, **kwargs):
+        return _response(200, WEATHER_ADVISORY_HTML)
+
+    def _broken_parse(html, folder_url):
+        raise AttributeError("boom")
+
+    monkeypatch.setattr(pagasa_files_module, "fetch_with_retry", _fake)
+    monkeypatch.setattr(pagasa_files_module, "_parse_autoindex", _broken_parse)
+
+    result = await pagasa_files_module.list_pagasa_advisory_files()
+
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert any("AttributeError" in c and "boom" in c for c in result["caveats"]), result["caveats"]
+    assert len(CACHES["pagasa_files"]) == 0
+
+
+# --- Finding 2: concurrent cold calls for one kind are single-flighted. --
+
+
+@pytest.mark.asyncio
+async def test_twenty_concurrent_cold_calls_reach_the_fetch_once(monkeypatch):
+    call_count = 0
+
+    async def _fake(client, method, url, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        await asyncio.sleep(0.05)
+        return _response(200, WEATHER_ADVISORY_HTML)
+
+    monkeypatch.setattr(pagasa_files_module, "fetch_with_retry", _fake)
+
+    results = await asyncio.gather(
+        *(pagasa_files_module.list_pagasa_advisory_files() for _ in range(20))
+    )
+
+    assert call_count == 1
+    assert all(r["data_status"] == "success" for r in results)
+    assert all(r["latest_name"] == "Advisory#50.pdf" for r in results)
+
+
+# --- Finding 3: an index row must resolve to a trusted PAGASA PDF. -------
+
+MIXED_TRUST_HTML = """<html>
+<head><title>Index of /tamss/weather/bulletin/</title></head>
+<body bgcolor="white">
+<h1>Index of /tamss/weather/bulletin/</h1><hr><pre><a href="../">../</a>
+<a href="TCB%231_good.pdf">TCB#1_good.pdf</a>                                    01-Sep-2026 10:00    100K
+<a href="https://evil.example/payload.pdf">payload.pdf</a>                       01-Sep-2026 10:05    100K
+<a href="../../../secret.pdf">secret.pdf</a>                                01-Sep-2026 10:10    100K
+<a href="notes.txt">notes.txt</a>                                         01-Sep-2026 10:15    5K
+</pre><hr></body>
+</html>
+"""
+
+
+@pytest.mark.asyncio
+async def test_untrusted_hrefs_are_dropped_and_counted_in_one_caveat(monkeypatch):
+    async def _fake(client, method, url, **kwargs):
+        return _response(200, MIXED_TRUST_HTML, url=pagasa_files_module._folder_url("bulletin"))
+
+    monkeypatch.setattr(pagasa_files_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_files_module.list_pagasa_advisory_files(kind="bulletin")
+
+    assert result["data_status"] == "success"
+    assert result["file_count"] == 1
+    assert result["files"][0]["name"] == "TCB#1_good.pdf"
+    assert all("evil.example" not in f["url"] for f in result["files"])
+    assert any(
+        "3 index rows skipped: not a PDF under the PAGASA folder" in c for c in result["caveats"]
+    ), result["caveats"]
+
+
+# --- Finding 4: the stale warning is derived from the newest file's real
+# age, for every kind, not hardcoded to stormsurge. -----------------------
+
+BULLETIN_STALE_HTML = """<html>
+<head><title>Index of /tamss/weather/bulletin/</title></head>
+<body bgcolor="white">
+<h1>Index of /tamss/weather/bulletin/</h1><hr><pre><a href="../">../</a>
+<a href="TCB%231_old.pdf">TCB#1_old.pdf</a>                                     15-Jan-2020 08:00    100K
+</pre><hr></body>
+</html>
+"""
+
+
+def _fresh_row_html(kind: str) -> str:
+    date_text = pagasa_files_module._now().strftime("%d-%b-%Y %H:%M")
+    return (
+        f"<html><head><title>Index of /tamss/weather/{kind}/</title></head>"
+        f'<body bgcolor="white"><h1>Index of /tamss/weather/{kind}/</h1><hr>'
+        f'<pre><a href="../">../</a>\n'
+        f'<a href="Fresh.pdf">Fresh.pdf</a>                                     '
+        f"{date_text}    50K\n</pre><hr></body></html>"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_stale_bulletin_folder_gets_the_warning_too(monkeypatch):
+    """The rule runs for every kind, not only stormsurge: a bulletin folder
+    that has gone quiet for over a year is just as stale a source."""
+
+    async def _fake(client, method, url, **kwargs):
+        return _response(200, BULLETIN_STALE_HTML, url=pagasa_files_module._folder_url("bulletin"))
+
+    monkeypatch.setattr(pagasa_files_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_files_module.list_pagasa_advisory_files(kind="bulletin")
+
+    assert result["data_status"] == "success"
+    assert any("2020-01-15" in c and "days ago" in c for c in result["caveats"]), result["caveats"]
+
+
+@pytest.mark.asyncio
+async def test_a_freshly_updated_stormsurge_folder_gets_no_stale_warning(monkeypatch):
+    """A folder is flagged stale from its real data, not from its kind: a
+    stormsurge folder with a fresh file must carry no stale warning."""
+
+    async def _fake(client, method, url, **kwargs):
+        return _response(
+            200,
+            _fresh_row_html("stormsurge"),
+            url=pagasa_files_module._folder_url("stormsurge"),
+        )
+
+    monkeypatch.setattr(pagasa_files_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_files_module.list_pagasa_advisory_files(kind="stormsurge")
+
+    assert result["data_status"] == "success"
+    assert not any("days ago" in c for c in result["caveats"]), result["caveats"]
