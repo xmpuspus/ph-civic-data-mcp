@@ -61,13 +61,22 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _safe_http_url(value: object) -> str | None:
+    # A publisher controls the resource URL. A client that renders links
+    # must never get a javascript: or data: scheme back under HDX's name.
+    if not isinstance(value, str):
+        return None
+    lowered = value.strip().lower()
+    return value.strip() if lowered.startswith(("http://", "https://")) else None
+
+
 def _parse_resource(res: object) -> dict | None:
     if not isinstance(res, dict):
         return None
     return {
         "name": res.get("name"),
         "format": res.get("format"),
-        "url": res.get("url"),
+        "url": _safe_http_url(res.get("url")),
         "size": res.get("size"),
         "last_modified": res.get("last_modified"),
     }

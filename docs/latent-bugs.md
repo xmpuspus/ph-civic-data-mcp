@@ -306,6 +306,14 @@ integer but not that it is at least the number of datasets returned. A
 `count` of 1 beside 5 datasets reads as consistent. Reject a count below
 `len(datasets)` as `indeterminate`.
 
+## 33. COMELEC reads any 403 body with the substring `AccessDenied` as an unknown code
+
+Codex receipt pass on the v0.8.0 head. The archive answers an unknown code
+with an S3-style XML body, `<Error><Code>AccessDenied</Code>`. The check
+looks for the substring anywhere in the body, so an infrastructure 403 page
+that happens to carry the word reads as `invalid_request` instead of
+`unavailable`. Parse the XML and match the `Code` element instead.
+
 ## Suggested order
 
 1, then 10, then 2, then 6 and 7 together, then 3 and 5, then 4, 8, 9 and 11.

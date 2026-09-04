@@ -386,3 +386,30 @@ async def test_twenty_five_concurrent_cold_calls_fetch_once(monkeypatch):
     assert calls["n"] == 1
     assert all(r["data_status"] == "success" for r in results)
     assert len(CACHES["hdx_search"]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_url",
+    ["javascript:alert(document.domain)", "data:text/html,hi", "ftp://x/y.csv", "  ", 5, None],
+)
+async def test_a_resource_url_that_is_not_http_comes_back_as_null(monkeypatch, bad_url):
+    # Receipt pass on v0.8.0: a publisher-controlled resource URL of any
+    # scheme passed through under HDX's name.
+    dataset = _dataset()
+    dataset["resources"][0]["url"] = bad_url
+    _install_fake_fetch(monkeypatch, _payload([dataset]))
+
+    result = await hdx_module.search_hdx_datasets("boundaries")
+
+    assert result["data_status"] == "success"
+    assert result["datasets"][0]["resources"][0]["url"] is None
+
+
+@pytest.mark.asyncio
+async def test_an_http_resource_url_passes_through_unchanged(monkeypatch):
+    _install_fake_fetch(monkeypatch, _payload([_dataset()]))
+
+    result = await hdx_module.search_hdx_datasets("boundaries")
+
+    assert result["datasets"][0]["resources"][0]["url"].startswith("https://data.humdata.org/")

@@ -82,7 +82,9 @@ merge, and each carries a regression test.
   `list_pagasa_advisory_files` is `invalid_request`, not a TypeError, the
   flood tool single-flights a cold cache miss like every sibling, and a
   COMELEC contest row that is not an object is `indeterminate`, never a
-  cached empty ballot.
+  cached empty ballot. A third pass added two: the PAGASA PDF allowlist
+  decodes a URL before it tests for traversal, and an HDX resource URL
+  comes back only when its scheme is http or https.
 
 ## [0.7.0] - 2026-09-04
 
