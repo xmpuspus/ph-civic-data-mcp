@@ -30,6 +30,7 @@ WHAT_IT_GIVES: dict[str, str] = {
     "NOAA IBTrACS": "Historical tropical cyclone tracks through the Philippine AOR",
     "World Bank Open Data": "Philippine macroeconomic indicators",
     "HDX": "Humanitarian dataset search, with a per-dataset license",
+    "Official Gazette RSS": "Proclamations, memorandum circulars, and other government issuances",
 }
 
 

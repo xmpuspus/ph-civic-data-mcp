@@ -732,6 +732,25 @@ On failure: an empty query, a query over 200 characters, or `rows` outside
 1 to 50 returns `validation_error: true`. A body whose `success` field is
 not true, or whose `results` is not a list, returns
 `data_status: "indeterminate"`. An outage returns `upstream_error: true`.
+## Government record
+
+### get_official_gazette_feed
+
+Reads the Official Gazette's own RSS feed of laws and issuances.
+
+```python
+get_official_gazette_feed(page: int = 1) -> dict
+```
+
+Returns: `page`, `items` (title, link, pub_date, creator, categories, guid,
+description), `item_count`, `feed_title`, and `feed_link`, ten issuances per
+page, newest first. `page` runs from 1 to 50.
+
+On failure: a `page` outside 1 to 50 returns `validation_error: true`. This
+host returns a Cloudflare block page on every other path, and on a HEAD
+request even on `/feed/`, so this tool sends only a GET to `/feed/` or
+`/feed/?paged=<page>`. A block page returns `upstream_error: true`, never an
+empty item list.
 
 ## Server
 

@@ -14,6 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `search_hdx_datasets`: keyword search over the Philippine datasets on the
   Humanitarian Data Exchange (HDX) CKAN API, with each dataset's own
   `license_id`, resources, and last-modified date passed through.
+- **`get_official_gazette_feed(page)`** reads the Official Gazette's own RSS
+  feed of proclamations, memorandum circulars, and other issuances, ten
+  items per page. This is the government's primary record of new laws.
 
 ## [0.7.0] - 2026-09-04
 

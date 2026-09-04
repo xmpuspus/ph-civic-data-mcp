@@ -41,6 +41,7 @@ CACHES: dict[str, TTLCache[str, Any]] = {
     "psgc_resolve": TTLCache(maxsize=200, ttl=86400),
     "psgc_browse": TTLCache(maxsize=200, ttl=86400),
     "infra_projects": TTLCache(maxsize=50, ttl=21600),
+    "gazette_feed": TTLCache(maxsize=50, ttl=1200),
 }
 
 
