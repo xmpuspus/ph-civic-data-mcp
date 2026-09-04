@@ -60,6 +60,10 @@ merge, and each carries a regression test.
   `indeterminate`. The cache-check-then-fetch is single-flight per key.
 - Gazette: a 200 body that does not parse as RSS is `indeterminate`, not an
   outage. The fetch is single-flight per page.
+- PAGASA files: a parser defect after a 200 body is `indeterminate`, not an
+  outage. Only PDF links under the PAGASA folder come back, and skipped rows
+  are counted in `caveats`. The stale-folder warning comes from the newest
+  file's age, not a hard-coded date. The fetch is single-flight per kind.
 
 ## [0.7.0] - 2026-09-04
 
