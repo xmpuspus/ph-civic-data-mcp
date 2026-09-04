@@ -275,6 +275,23 @@ later release does not rerun it. The v0.7.0 path uploads with twine before
 the tag, so this does not bite yet. Move the smoke trigger to the release
 event, or have publish.yml call the smoke workflow when it finishes.
 
+## 30. The arm64 container crashes at import on Docker Desktop with engine 25.0.2
+
+Found 2026-09-04 while checking the v0.8.0 image on an Apple Silicon Mac.
+`import ph_civic_data_mcp.server` exits with signal 132, illegal
+instruction, inside the `cryptography` Rust extension. MCP SDK 2 imports
+that extension at server construction, so the container healthcheck fails.
+The v0.7.0 image carries the same `cryptography` 50.0.0 wheel and crashes on
+the same import, but its SDK never touched the module at startup.
+
+Every `cryptography` wheel from 48.0.0 up crashes on this VM. 46.0.5 runs,
+but it carries three published vulnerabilities, so a pin is not an option.
+The same Dockerfile built with `--platform linux/amd64` runs the full server
+and lists 41 tools. A real aarch64 Linux host was not tested. The likely
+cause is a CPU feature the old Docker Desktop VM does not expose. Next
+step: retest after a Docker Desktop upgrade, then decide whether the
+Dockerfile needs a platform note.
+
 ## Suggested order
 
 1, then 10, then 2, then 6 and 7 together, then 3 and 5, then 4, 8, 9 and 11.
