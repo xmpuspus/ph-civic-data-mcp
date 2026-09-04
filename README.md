@@ -341,7 +341,7 @@ exposes all 41 tools. CI action refs are pinned to a commit SHA, not a
 floating tag.
 
 The `docker build` step above produces a non-root image with a healthcheck.
-The server pins `fastmcp>=3.0.0,<4.0.0`, currently 3.4.7.
+The server pins `fastmcp>=4.0.0,<5.0.0`, currently 4.0.2 on MCP SDK 2.1.1.
 
 ## More
 
