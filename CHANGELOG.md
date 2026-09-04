@@ -71,6 +71,13 @@ merge, and each carries a regression test.
   malformed `local` section, a wrong-typed `candidates` value, or a tree
   page whose rows all fail to parse is `indeterminate`, never a crash or a
   cached empty. Both tools are single-flight per key.
+- A final two-pass review of the whole diff found eight more, all closed:
+  the COMELEC browse path now checks the same `AccessDenied` marker as the
+  return path, a wrong-typed `candidates` wrapper is `indeterminate`, an
+  empty browse code is `invalid_request`, a `river_discharge` list shorter
+  than the date list is `indeterminate`, an RSS item with no title and no
+  link is skipped and counted, a wrong-typed HDX `count` beside results is
+  disclosed and not cached, and the README names FastMCP 4.0.2.
 
 ## [0.7.0] - 2026-09-04
 
