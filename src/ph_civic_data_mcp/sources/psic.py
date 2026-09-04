@@ -1,4 +1,4 @@
-"""PSIC — Philippine Standard Industrial Classification code lookup.
+"""PSIC: Philippine Standard Industrial Classification code lookup.
 
 PSA publishes the full PSIC table as one HTML page at the URL below, no key
 needed, under CC BY 4.0. The bare `psa.gov.ph/classification/` index page

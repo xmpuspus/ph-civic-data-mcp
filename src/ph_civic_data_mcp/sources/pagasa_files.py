@@ -1,4 +1,4 @@
-"""PAGASA public files — nginx directory listings of advisory, bulletin, and
+"""PAGASA public files: nginx directory listings of advisory, bulletin, and
 storm surge PDFs under pubfiles.pagasa.dost.gov.ph/tamss/weather/<kind>/.
 
 Landmines (from the round-3 source probe):
@@ -29,7 +29,7 @@ from ph_civic_data_mcp.utils.envelope import (
 )
 from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
-PAGASA_FILES_LICENSE = "Public — PAGASA public file listing"
+PAGASA_FILES_LICENSE = "Public, PAGASA public file listing"
 
 PAGASA_FILES_BASE = "https://pubfiles.pagasa.dost.gov.ph/tamss/weather"
 

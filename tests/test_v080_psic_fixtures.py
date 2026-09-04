@@ -322,4 +322,4 @@ async def test_tool_description_carries_examples_and_on_failure_not_args():
     assert "Examples:" in tool.description
     assert "On failure" in tool.description
     assert "Args:" not in tool.description
-    assert tool.annotations.openWorldHint is True
+    assert tool.annotations.open_world_hint is True
