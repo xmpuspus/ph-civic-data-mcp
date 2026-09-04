@@ -13,6 +13,7 @@ Every successful response carries `source` and `data_retrieved_at`. Read
 - [Hazards](#hazards)
 - [Weather](#weather)
 - [Procurement and infrastructure](#procurement-and-infrastructure)
+- [Elections (COMELEC 2025)](#elections-comelec-2025)
 - [Composites](#composites)
 - [Science and open data](#science-and-open-data)
 - [Server](#server)
@@ -616,6 +617,42 @@ public data, and patterns may have legitimate explanations. Present results as
 starting points for investigation, never as evidence of wrongdoing.
 
 The window is the latest ~100 published notices, not a census of projects.
+
+## Elections (COMELEC 2025)
+
+The archive froze on 2025-05-16 at 10:00:09 AM. It is a fixed public
+record, not a live feed.
+
+### browse_election_results
+
+Walks the region, province, city, barangay, and precinct tree. New in 0.8.0.
+
+```python
+browse_election_results(code: str = "0") -> dict
+```
+
+Returns: `code`, `level`, `children` (each with `code`, `name`,
+`category_code`, `master_code`), `child_count`, `truncated`,
+`data_frozen_at`.
+
+On failure: a code that is not `"0"`, a region code, or 7 digits returns
+`validation_error: true`. An outage returns `upstream_error: true`.
+
+### get_election_return
+
+Reads one precinct's official vote tally. New in 0.8.0.
+
+```python
+get_election_return(precinct_code: str) -> dict
+```
+
+Returns: `information` (machine ID, location, voting center, voter
+counts), `total_er_received`, `national_contests` and `local_contests`
+(each with `contest_code`, `contest_name`, `statistics`, `candidates`).
+
+On failure: a `precinct_code` that is not 8 digits, or an unknown one,
+returns `validation_error: true`. A malformed body returns `data_status:
+"indeterminate"`. An outage returns `upstream_error: true`.
 
 ## Composites
 

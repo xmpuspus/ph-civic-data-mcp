@@ -46,6 +46,11 @@ CACHES: dict[str, TTLCache[str, Any]] = {
     # The whole parsed PSIC table, one entry, not one per query. A query
     # matches in memory against this cached list.
     "psic_table": TTLCache(maxsize=2, ttl=86400),
+    # The archive is frozen (see CLAUDE.md), so a 24h TTL only bounds process
+    # memory; it is never a race against a live update.
+    "comelec_tree": TTLCache(maxsize=500, ttl=86400),
+    "comelec_return": TTLCache(maxsize=500, ttl=86400),
+    "comelec_meta": TTLCache(maxsize=4, ttl=86400),
 }
 
 

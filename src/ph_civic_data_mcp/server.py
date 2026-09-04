@@ -157,6 +157,13 @@ SOURCE_CATALOG: list[dict] = [
         "cache_ttl_seconds": 86400,
         "license": "PSA Philippine Standard Industrial Classification (PSIC), CC BY 4.0",
     },
+    {
+        "source": "COMELEC 2025 election results",
+        "source_url": "https://2025electionresults.comelec.gov.ph",
+        "freshness": "Archive frozen 2025-05-16 10:00:09 AM; a fixed public record, not a live feed",
+        "cache_ttl_seconds": 86400,
+        "license": "Public — COMELEC 2025 election results archive",
+    },
 ]
 
 
@@ -375,6 +382,7 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import gazette  # noqa: F401
     from ph_civic_data_mcp.sources import pagasa_files  # noqa: F401
     from ph_civic_data_mcp.sources import psic  # noqa: F401
+    from ph_civic_data_mcp.sources import comelec  # noqa: F401
 
 
 def main() -> None:

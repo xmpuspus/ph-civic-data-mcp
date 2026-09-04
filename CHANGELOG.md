@@ -24,6 +24,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`search_psic_codes(query, limit)`** finds a PSIC industrial
   classification code by code prefix or by a whole-word match on the
   description, from the PSA classification page.
+- **`browse_election_results(code)`** walks the COMELEC 2025 election
+  results tree: region, province, city or municipality, barangay, then
+  precinct.
+- **`get_election_return(precinct_code)`** reads one precinct's official
+  vote tally, with every national and local contest and each candidate's
+  vote count and share. The archive froze on 2025-05-16, a fixed public
+  record, not a live feed.
 
 ## [0.7.0] - 2026-09-04
 

@@ -82,6 +82,9 @@ mcp = FastMCP(
       Philippine humanitarian datasets by keyword. Each dataset carries its
       own license (license_id) and up to 20 resources; check the license
       before you reuse a resource.
+    - COMELEC 2025 election results: browse_election_results (region down to
+      barangay, then precinct) and get_election_return (one precinct's vote
+      tally). The archive is frozen at 2025-05-16, a fixed public record.
 
     Failure semantics: list tools return a real list on success. On upstream
     failure they return {results: [], upstream_error: true, caveats: [...]}

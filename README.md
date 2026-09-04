@@ -273,6 +273,7 @@ actually reports.
 | Official Gazette RSS | Proclamations, memorandum circulars, and other government issuances | New issuances posted the same day; feed rebuilds on every request | 20 min | Public, Official Gazette government record, RA 8293 section 176 default |
 | PAGASA public files | Raw advisory, bulletin, and storm surge PDF file listing | weather_advisory updates about every 6 hours; bulletin only while a cyclone is active; stormsurge has not published since 2019-12-02 | 15 min | PAGASA public files (pubfiles.pagasa.dost.gov.ph), government record |
 | PSIC | Industrial classification code lookup, by code prefix or description | PSIC revisions change on the order of years | 24 h | PSA Philippine Standard Industrial Classification (PSIC), CC BY 4.0 |
+| COMELEC 2025 election results | Precinct-level vote tallies, region down to barangay | Archive frozen 2025-05-16 10:00:09 AM; a fixed public record, not a live feed | 24 h | Public, COMELEC 2025 election results archive |
 <!-- source-matrix:end -->
 
 `PAGASA_API_TOKEN` is the only environment variable, and it is optional.

@@ -33,6 +33,7 @@ WHAT_IT_GIVES: dict[str, str] = {
     "Official Gazette RSS": "Proclamations, memorandum circulars, and other government issuances",
     "PAGASA public files": "Raw advisory, bulletin, and storm surge PDF file listing",
     "PSIC": "Industrial classification code lookup, by code prefix or description",
+    "COMELEC 2025 election results": "Precinct-level vote tallies, region down to barangay",
 }
 
 
