@@ -230,6 +230,23 @@ def test_parse_size_returns_none_instead_of_raising_on_a_huge_token():
 
 
 @pytest.mark.asyncio
+async def test_a_5xx_status_stays_unavailable_not_indeterminate(monkeypatch):
+    """A non-2xx status is a transport failure, not a parse-time bug, so it
+    must stay "unavailable" even though the body carries real HTML."""
+
+    async def _fake(client, method, url, **kwargs):
+        return _response(503, "<html><body>Service Unavailable</body></html>")
+
+    monkeypatch.setattr(pagasa_files_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_files_module.list_pagasa_advisory_files()
+
+    assert result["data_status"] == "unavailable"
+    assert result["upstream_error"] is True
+    assert len(CACHES["pagasa_files"]) == 0
+
+
+@pytest.mark.asyncio
 async def test_a_huge_size_token_does_not_crash_the_whole_row(monkeypatch):
     async def _fake(client, method, url, **kwargs):
         return _response(200, HUGE_SIZE_HTML)
