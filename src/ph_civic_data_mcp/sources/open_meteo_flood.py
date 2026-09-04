@@ -1,4 +1,4 @@
-"""Open-Meteo Flood API — daily river discharge from the GloFAS model, no auth.
+"""Open-Meteo Flood API: daily river discharge from the GloFAS model, no auth.
 
 Matches the existing Open-Meteo client pattern (open_meteo_aq.py): a fetch
 helper that raises on any non-success, a parse step that treats a malformed
@@ -8,6 +8,7 @@ https://open-meteo.com/en/docs/flood-api
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 from ph_civic_data_mcp._mcp import mcp
@@ -46,12 +47,15 @@ def _as_dict(value: object) -> dict:
 
 
 def _to_float(val: object) -> float | None:
-    if val is None:
+    # float() accepts "NaN" and "inf", which are not JSON numbers and would
+    # publish an unusable discharge as a success. Same rule as world_bank.
+    if val is None or isinstance(val, bool):
         return None
     try:
-        return float(val)
+        out = float(val)
     except (TypeError, ValueError):
         return None
+    return out if math.isfinite(out) else None
 
 
 def _bad_day_count(value: object, low: int, high: int) -> bool:
@@ -201,9 +205,21 @@ async def get_flood_forecast(location: str, forecast_days: int = 7, past_days: i
         )
 
     discharge = daily.get("river_discharge")
+    if not isinstance(discharge, list):
+        # Dates without the discharge series is a malformed body, not a
+        # forecast of nulls. Caching it would serve empty numbers for an hour.
+        return failure_result(
+            OPEN_METEO_FLOOD_SOURCE,
+            OPEN_METEO_FLOOD_URL,
+            f"Open-Meteo Flood sent daily.time but no river_discharge list: {discharge!r}.",
+            data_status=DATA_STATUS_INDETERMINATE,
+            location=location,
+            latitude=lat,
+            longitude=lng,
+            days=[],
+        )
     discharge_max = daily.get("river_discharge_max")
     discharge_min = daily.get("river_discharge_min")
-    discharge = discharge if isinstance(discharge, list) else []
     discharge_max = discharge_max if isinstance(discharge_max, list) else []
     discharge_min = discharge_min if isinstance(discharge_min, list) else []
 

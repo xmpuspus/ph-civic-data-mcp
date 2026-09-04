@@ -139,6 +139,43 @@ async def test_an_empty_daily_time_is_indeterminate_and_never_cached(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_dates_without_a_discharge_series_are_indeterminate_not_null_success(monkeypatch):
+    # Codex pass on v0.8.0: only daily.time was required, so a body with
+    # dates and no river_discharge list cached as a success full of nulls.
+    payload = {**FLOOD_PAYLOAD, "daily": {"time": ["2026-09-05"]}}
+
+    async def _fake(client, method, url, **kwargs):
+        return _json_response(method, url, payload)
+
+    monkeypatch.setattr(flood_module, "fetch_with_retry", _fake)
+
+    result = await flood_module.get_flood_forecast("Marikina", forecast_days=1)
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert result["days"] == []
+    assert "river_discharge" in result["caveats"][0]
+    assert len(CACHES["open_meteo_flood"]) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_number", ["NaN", "inf", "-Infinity"])
+async def test_a_non_finite_discharge_reads_as_null_not_as_a_number(monkeypatch, bad_number):
+    payload = {
+        **FLOOD_PAYLOAD,
+        "daily": {"time": ["2026-09-05"], "river_discharge": [bad_number]},
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        return _json_response(method, url, payload)
+
+    monkeypatch.setattr(flood_module, "fetch_with_retry", _fake)
+
+    result = await flood_module.get_flood_forecast("Marikina", forecast_days=1)
+    assert result["data_status"] == "success"
+    assert result["days"][0]["river_discharge_m3s"] is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("bad_value", [0, 31, "seven", 7.5, True])
 async def test_a_bad_forecast_days_is_invalid_request(monkeypatch, bad_value):
     async def _must_not_call(client, method, url, **kwargs):

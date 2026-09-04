@@ -1,4 +1,4 @@
-"""HDX (Humanitarian Data Exchange) CKAN API — Philippine dataset search.
+"""HDX (Humanitarian Data Exchange) CKAN API: Philippine dataset search.
 
 HDX runs a standard CKAN catalog. `package_search` covers every dataset in
 the Philippines country group (481 datasets as of the last live probe), each
@@ -11,6 +11,7 @@ https://data.humdata.org/api/3/action/help_show?name=package_search
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from ph_civic_data_mcp._mcp import mcp
@@ -36,6 +37,24 @@ MAX_ROWS = 50
 MAX_RESOURCES_PER_DATASET = 20
 
 LICENSE_NOTE = "Each dataset carries its own license. Check license_id before you reuse it."
+
+# Single-flight per cache key, the psa_catalog._meta_lock shape: twenty cold
+# calls for one query must not become twenty CKAN requests.
+_MAX_SEARCH_LOCKS = 256
+_SEARCH_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _search_lock(key: str) -> asyncio.Lock:
+    lock = _SEARCH_LOCKS.get(key)
+    if lock is not None:
+        return lock
+    if len(_SEARCH_LOCKS) >= _MAX_SEARCH_LOCKS:
+        # Drop only entries nobody holds, so a caller inside a lock keeps it.
+        for stale in [k for k, held in _SEARCH_LOCKS.items() if not held.locked()]:
+            del _SEARCH_LOCKS[stale]
+        if len(_SEARCH_LOCKS) >= _MAX_SEARCH_LOCKS:
+            return asyncio.Lock()
+    return _SEARCH_LOCKS.setdefault(key, asyncio.Lock())
 
 
 def _now() -> datetime:
@@ -186,7 +205,14 @@ async def search_hdx_datasets(query: str, rows: int = 10) -> dict:
     cache = CACHES["hdx_search"]
     if ckey in cache:
         return cache[ckey]
+    async with _search_lock(ckey):
+        if ckey in cache:
+            return cache[ckey]
+        return await _search_uncached(query, rows, ckey)
 
+
+async def _search_uncached(query: str, rows: int, ckey: str) -> dict:
+    cache = CACHES["hdx_search"]
     params = {
         "q": query,
         "fq": PH_GROUP_FILTER,
@@ -243,11 +269,14 @@ async def search_hdx_datasets(query: str, rows: int = 10) -> dict:
     # `count` above 0 with an empty `results` is the same drift shape
     # world_bank._fetch_observations guards with `total != 0`: a page that
     # always has datasets sent none this time, which is not a real zero.
-    if not raw_results and isinstance(count_field, int) and count_field > 0:
+    # A missing or non-integer `count` beside empty results is the same
+    # shape: CKAN always sends an integer count, so its absence is drift too.
+    count_is_int = isinstance(count_field, int) and not isinstance(count_field, bool)
+    if not raw_results and (not count_is_int or count_field > 0):
         return failure_result(
             SOURCE_NAME,
             HDX_URL,
-            f"HDX reported count={count_field} but sent 0 results; not a real zero.",
+            f"HDX reported count={count_field!r} but sent 0 results; not a real zero.",
             license=HDX_LICENSE,
             data_status=DATA_STATUS_INDETERMINATE,
             query=query,

@@ -8,6 +8,8 @@ recorded 2026-09-03 in tmp/ulw-20260903/r3-fixtures/hdx.json.
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -316,3 +318,38 @@ async def test_query_is_passed_as_a_param_never_concatenated_into_the_url(monkey
     assert seen["params"]["fq"] == "groups:phl"
     assert seen["params"]["rows"] == 5
     assert seen["params"]["sort"] == "metadata_modified desc"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count_value", [None, "12", True, 3.0])
+async def test_empty_results_without_an_integer_count_are_indeterminate(monkeypatch, count_value):
+    # Codex pass on v0.8.0: CKAN always sends an integer count, so empty
+    # results beside a missing or wrong-typed count is drift, not a real zero.
+    payload = {"success": True, "result": {"results": []}}
+    if count_value is not None:
+        payload["result"]["count"] = count_value
+    _install_fake_fetch(monkeypatch, payload)
+
+    result = await hdx_module.search_hdx_datasets("flood")
+
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert len(CACHES["hdx_search"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_twenty_five_concurrent_cold_calls_fetch_once(monkeypatch):
+    calls = {"n": 0}
+
+    async def _fake(client, method, url, **kwargs):
+        calls["n"] += 1
+        await asyncio.sleep(0.05)
+        return httpx.Response(200, json=_payload([_dataset()]), request=httpx.Request(method, url))
+
+    monkeypatch.setattr(hdx_module, "fetch_with_retry", _fake)
+
+    results = await asyncio.gather(*(hdx_module.search_hdx_datasets("same") for _ in range(25)))
+
+    assert calls["n"] == 1
+    assert all(r["data_status"] == "success" for r in results)
+    assert len(CACHES["hdx_search"]) == 1
