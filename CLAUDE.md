@@ -14,11 +14,11 @@ lives in [CHANGELOG.md](CHANGELOG.md).
 | Package | `ph-civic-data-mcp` (PyPI) |
 | Registry name | `io.github.xmpuspus/ph-civic-data-mcp` |
 | Repository | `xmpuspus/ph-civic-data-mcp` |
-| Current version | 0.7.0 |
+| Current version | 0.8.0 |
 | Surface | 34 tools, 3 prompts, 2 resources, 13 public sources |
 | Transport | stdio only, zero hosting cost |
 | Python | 3.11+, tested on 3.11 through 3.14 |
-| Framework | `fastmcp>=3.0.0,<4.0.0` (3.4.7 as of 2026-09-04, 4.x evaluated in `docs/fastmcp-4-evaluation.md`) |
+| Framework | `fastmcp>=4.0.0,<5.0.0` (4.0.2 on MCP SDK 2.1.1 as of 2026-09-04, adopted per `docs/fastmcp-4-evaluation.md`) |
 | Auth | None required. `PAGASA_API_TOKEN` optional. |
 
 Deeper background sits in project memory: `project_ph_civic_data_mcp`,
