@@ -12,6 +12,10 @@ id="psicdata"> at all, so it is the real-world instance of the "missing
 table" drift case, not a source of match rows. _NO_TABLE_HTML below mirrors
 that same shape (a full page, no psicdata table) without committing the
 20 KB file to the test suite.
+
+A live probe on 2026-09-04 found that the code cell is never a bare code.
+Every one of the 1360 rows on the real page reads "Subclass 01111", with
+the level word spelled out ahead of the code. _ROWS mirrors that shape.
 """
 
 from __future__ import annotations
@@ -52,32 +56,35 @@ def _table_page(rows: list[str]) -> str:
 # 2026-09-04): subclass 01111 "Growing of leguminous crops..." and subclass
 # 01112 "Growing of groundnuts", both linked to their parent class page
 # /classification/psic/class/0111 on the real site, never a /subclass/ page.
+# The last row deliberately drops both the level word and the anchor, to
+# exercise the code-length fallback a real row never needs.
 _ROWS = [
     _row(
         '<a href="/classification/psic/section/A" class="psic">Agriculture, Forestry and Fishing</a>',
-        "A",
+        "Section A",
     ),
     _row(
         '<a href="/classification/psic/division/01" class="psic">Crop and Animal Production</a>',
-        "01",
+        "Division 01",
     ),
     _row(
         '<a href="/classification/psic/group/011" class="psic">Growing of Non-Perennial Crops</a>',
-        "011",
+        "Group 011",
     ),
     _row(
         '<a href="/classification/psic/class/0111" class="psic">Growing of Cereals</a>',
-        "0111",
+        "Class 0111",
     ),
     _row(
         '<a href="/classification/psic/class/0111" class="psic">Growing of leguminous crops such '
         "as: mongo, string beans (sitao)</a>",
-        "01111",
+        "Subclass 01111",
     ),
     _row(
-        '<a href="/classification/psic/class/0111" class="psic">Growing of groundnuts</a>', "01112"
+        '<a href="/classification/psic/class/0111" class="psic">Growing of groundnuts</a>',
+        "Subclass 01112",
     ),
-    _row("Growing of rice", "01113"),  # no anchor: level must fall back to code length
+    _row("Growing of rice", "01113"),  # no level word, no anchor: fallback to code length
 ]
 
 _TABLE_HTML = _table_page(_ROWS)
@@ -127,7 +134,7 @@ async def test_description_token_match(monkeypatch):
     assert out["match_count"] == 1
     assert out["matches"][0] == {
         "code": "01112",
-        "level": "class",
+        "level": "subclass",
         "description": "Growing of groundnuts",
     }
     assert out["data_status"] == DATA_STATUS_SUCCESS
@@ -163,13 +170,29 @@ async def test_level_falls_back_to_code_length_when_href_is_missing(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_href_segment_wins_even_when_it_reads_a_shallower_level(monkeypatch):
-    """PSA links every real subclass row to its parent class page, so the href
-    segment reads "class" for a 5-digit subclass code. The href wins over the
-    code length, which is a fallback only when the href is absent."""
+async def test_level_word_in_the_code_cell_wins_over_the_href(monkeypatch):
+    """A real subclass row links to its parent class page, so the href alone
+    would read "class" for a 5-digit subclass code. The level word PSA
+    prints ahead of the code in the cell itself is read first and wins."""
     _install(monkeypatch, _TABLE_HTML)
     out = await psic_module.search_psic_codes("leguminous")
     assert out["matches"][0]["code"] == "01111"
+    assert out["matches"][0]["level"] == "subclass"
+
+
+@pytest.mark.asyncio
+async def test_href_beats_code_length_when_the_level_word_is_absent(monkeypatch):
+    """Defensive fallback: a row with no level word still reads level from
+    the href segment before guessing from the bare code's length."""
+    rows = [
+        _row(
+            '<a href="/classification/psic/class/0111" class="psic">Growing of vegetables</a>',
+            "01199",
+        )
+    ]
+    _install(monkeypatch, _table_page(rows))
+    out = await psic_module.search_psic_codes("vegetables")
+    assert out["matches"][0]["code"] == "01199"
     assert out["matches"][0]["level"] == "class"
 
 

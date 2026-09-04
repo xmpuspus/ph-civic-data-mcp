@@ -46,6 +46,14 @@ _CODE_QUERY_RE = re.compile(r"^\d+$")
 _LEVEL_WORDS = {"section", "division", "group", "class", "subclass"}
 _LEVEL_BY_CODE_LENGTH = {1: "section", 2: "division", 3: "group", 4: "class", 5: "subclass"}
 
+# Live probe on 2026-09-04: the code cell text is not the bare code. It reads
+# "Subclass 01111", with the level word spelled out ahead of the code, for
+# every one of the 1360 rows on this page (the page lists subclasses only).
+# That level word is read first, since it is the most direct signal PSA
+# gives. The href segment and the code length stay as fallbacks for a row
+# that carries no such prefix.
+_LEVEL_PREFIX_RE = re.compile(r"^(section|division|group|class|subclass)\s+(.+)$", re.IGNORECASE)
+
 
 class PsicChallengeError(RuntimeError):
     """PSA served the Cloudflare interstitial instead of the PSIC table."""
@@ -95,15 +103,23 @@ def _parse_psic_table(html: str) -> list[dict]:
         if len(cells) < 2:
             continue
         desc_cell, code_cell = cells[0], cells[1]
-        code = code_cell.get_text(strip=True)
-        if not code:
+        raw_code = code_cell.get_text(" ", strip=True)
+        if not raw_code:
             continue
         link = desc_cell.find("a")
         description = (
             link.get_text(" ", strip=True) if link else desc_cell.get_text(" ", strip=True)
         )
         href = link.get("href") if link else None
-        entries.append({"code": code, "level": _level_for(href, code), "description": description})
+
+        prefix_match = _LEVEL_PREFIX_RE.match(raw_code)
+        if prefix_match:
+            level, code = prefix_match.group(1).lower(), prefix_match.group(2).strip()
+        else:
+            code, level = raw_code, _level_for(href, raw_code)
+        if not code:
+            continue
+        entries.append({"code": code, "level": level, "description": description})
 
     if not entries:
         raise PsicParseError("PSIC table rows carried no readable code (HTML drift?)")
