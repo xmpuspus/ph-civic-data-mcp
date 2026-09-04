@@ -140,9 +140,11 @@ def _parse_children(items: list[dict]) -> tuple[list[dict], int]:
 async def _fetch_tree(code: str) -> list[dict] | None:
     """Children of `code` in the local geography tree, or its precincts.
 
-    Returns None when the archive answers 403 at every path this code can
-    take, meaning the code is unknown. Raises on a transport failure or a
-    status other than 200 or 403, since that is an outage, not an answer.
+    Returns None when the archive answers 403 with its AccessDenied body at
+    every path this code can take, meaning the code is unknown. Raises on a
+    transport failure, a status other than 200 or 403, or a 403 whose body
+    carries no AccessDenied marker, since that last case is an outage, not
+    an answer.
     """
     url = f"{COMELEC_BASE}/data/regions/local/{code}.json"
     response = await fetch_with_retry(CLIENT, "GET", url)
@@ -150,6 +152,8 @@ async def _fetch_tree(code: str) -> list[dict] | None:
         return _unwrap_regions(response.json())
     if response.status_code != 403:
         response.raise_for_status()
+    elif not _is_access_denied_body(response.text):
+        raise RuntimeError(f"COMELEC results archive returned status 403: {response.text[:200]!r}")
 
     # Only a 7-digit code can be a barangay, so only a 7-digit code has a
     # precinct fallback. A 403 on "0" or a region code is a genuine unknown.
@@ -162,6 +166,8 @@ async def _fetch_tree(code: str) -> list[dict] | None:
         return _unwrap_regions(response.json())
     if response.status_code != 403:
         response.raise_for_status()
+    elif not _is_access_denied_body(response.text):
+        raise RuntimeError(f"COMELEC results archive returned status 403: {response.text[:200]!r}")
     return None
 
 
@@ -251,7 +257,7 @@ async def browse_election_results(code: str = "0") -> dict:
     category_code, master_code), child_count, truncated, data_frozen_at,
     source, source_url, license, data_status, note, data_retrieved_at.
     """
-    code = (code or "0").strip()
+    code = "0" if code is None else code.strip()
     if not _valid_browse_code(code):
         return failure_result(
             COMELEC_SOURCE,
@@ -398,12 +404,16 @@ def _is_access_denied_body(body_text: str) -> bool:
 def _parse_contest(raw: dict) -> dict:
     """One contest, or raises `_ContestParseError` if `candidates` is malformed.
 
-    The nested `contest["candidates"]["candidates"]` value should always be
-    a list. A wrong-typed value (an int, a string) used to crash the whole
-    tool with a bare `for c in inner` TypeError. The caller now catches
-    `_ContestParseError` and reports the whole return as indeterminate.
+    Two shapes count as malformed, not a genuine empty ballot: the outer
+    `contest["candidates"]` value present but not a dict, and the nested
+    `contest["candidates"]["candidates"]` value present but not a list. A
+    missing key at either level stays a genuine empty candidate list. The
+    caller catches `_ContestParseError` and reports the whole return as
+    indeterminate, never cached.
     """
     wrapper = raw.get("candidates")
+    if wrapper is not None and not isinstance(wrapper, dict):
+        raise _ContestParseError(raw.get("contestCode") or "")
     inner = wrapper.get("candidates") if isinstance(wrapper, dict) else None
     if inner is not None and not isinstance(inner, list):
         raise _ContestParseError(raw.get("contestCode") or "")
