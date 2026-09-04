@@ -3,7 +3,8 @@
 Where `ph-civic-data-mcp` is listed, how each listing updates, and what a
 release still needs a human to click. Inventory taken live on 2026-08-06,
 then updated the same day after the v0.6.0 release shipped. Updated again
-on 2026-09-03 after the v0.6.1 release, and on 2026-09-04 after v0.7.0.
+on 2026-09-03 after the v0.6.1 release, and on 2026-09-04 after v0.7.0
+and again after v0.8.0.
 
 Identifiers, so every form gets the same values:
 
@@ -16,8 +17,8 @@ Identifiers, so every form gets the same values:
 | License | MIT |
 | Transport | stdio |
 | Auth | None required. `PAGASA_API_TOKEN` is optional. |
-| Tools / prompts / resources | 34 / 3 / 2 |
-| Current version | 0.7.0 |
+| Tools / prompts / resources | 41 / 3 / 2 |
+| Current version | 0.8.0 |
 
 ## Copy to paste into a form
 
@@ -25,7 +26,7 @@ Identifiers, so every form gets the same values:
 
 > Philippine civic data as MCP tools: browse, describe, and query the full PSA
 > OpenSTAT statistical catalog, plus hazards, weather, procurement, and
-> one-call area profiles. 34 tools, no API keys.
+> one-call area profiles. 41 tools, no API keys.
 
 **Long:**
 
@@ -52,6 +53,12 @@ Identifiers, so every form gets the same values:
 > agent can tell success, empty, unavailable, indeterminate, and a bad
 > request apart.
 >
+> Version 0.8.0 adds six sources: Open-Meteo river flood forecasts, HDX
+> humanitarian dataset search, PAGASA advisory and bulletin file listings,
+> COMELEC 2025 election returns down to the precinct, the Official Gazette
+> RSS feed, and PSA PSIC industry code search. 41 tools across 19 sources,
+> on FastMCP 4.
+>
 > Install: `uvx ph-civic-data-mcp`
 
 **Categories:** Government, Open Data, Civic Tech, Research, Statistics
@@ -62,14 +69,14 @@ accountability
 
 ## Where it is listed today
 
-State after the v0.7.0 release on 2026-09-04.
+State after the v0.8.0 release on 2026-09-04.
 
-| Destination | v0.7.0 status | How it updates | What is left |
+| Destination | v0.8.0 status | How it updates | What is left |
 |---|---|---|---|
-| [PyPI](https://pypi.org/project/ph-civic-data-mcp/0.7.0/) | active, checked live | `twine upload` | Nothing |
-| [GitHub Release](https://github.com/xmpuspus/ph-civic-data-mcp/releases/tag/v0.7.0) | active, checked live, release-smoke green | `gh release create` on the merge SHA | Nothing |
-| Repository description and topics | active, description says 34 tools | `gh repo edit` | Nothing |
-| [MCP Registry](https://registry.modelcontextprotocol.io) | 0.7.0 active and isLatest, read back from the versions endpoint on 2026-09-04 after a fresh device login | `mcp-publisher publish server.json` | Nothing. The JWT expires between releases, so run `mcp-publisher login github` on a 401 |
+| [PyPI](https://pypi.org/project/ph-civic-data-mcp/0.8.0/) | active, checked live, digests equal to the local build | `twine upload` | Nothing |
+| [GitHub Release](https://github.com/xmpuspus/ph-civic-data-mcp/releases/tag/v0.8.0) | active, checked live, four assets | `gh release create` on the merge SHA | Watch release-smoke on the tag |
+| Repository description and topics | active, description says 41 tools | `gh repo edit` | Nothing |
+| [MCP Registry](https://registry.modelcontextprotocol.io) | 0.7.0 active and isLatest. The 0.8.0 publish hit a 401 about 90 minutes after a fresh login, so the JWT lives about an hour | `mcp-publisher publish server.json` | Run `mcp-publisher login github`, publish within the hour, read back the versions list |
 | [Glama](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp) | showed 0.6.0 and 32 tools on 2026-09-04, two releases behind | Auto-crawls GitHub and PyPI | Check the page again in a week. Claiming the server is a separate one-time step |
 | [PulseMCP](https://www.pulsemcp.com/servers/xmpuspus-ph-civic-data) | auto-indexed. The page showed no version string on 2026-09-04 | Tracks the registry record | Nothing to do by hand |
 | [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers/pull/6824) | submitted, still open, last activity 2026-08-07, checked live 2026-09-04 | Pull request | Their merge |
