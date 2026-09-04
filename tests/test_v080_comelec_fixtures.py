@@ -7,6 +7,7 @@ return the ledger probe saved from `/data/er/280/28010001.json`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -77,6 +78,12 @@ def _clear_cache():
     CACHES["comelec_tree"].clear()
     CACHES["comelec_return"].clear()
     CACHES["comelec_meta"].clear()
+    # A lock binds to the event loop that first contends it, and
+    # pytest-asyncio gives each test a fresh loop. Several tests share a
+    # cache key ("28010001"), so a stale lock from an earlier test would
+    # bind to a closed loop.
+    comelec_module._TREE_LOCKS.clear()
+    comelec_module._RETURN_LOCKS.clear()
     yield
 
 
@@ -304,3 +311,212 @@ async def test_children_are_capped_at_500_with_a_truncated_flag(monkeypatch):
     assert result["data_status"] == "success"
     assert result["child_count"] == 500
     assert result["truncated"] is True
+
+
+# --- Finding 1: a 403 is an unknown code only with an AccessDenied body ---
+
+
+@pytest.mark.asyncio
+async def test_403_with_access_denied_body_is_invalid_request(monkeypatch):
+    _route(
+        monkeypatch,
+        {
+            _latest_time_url(): (200, LATEST_TIME),
+            _er_url("28010001"): (403, {"Error": {"Code": "AccessDenied"}}),
+        },
+    )
+
+    result = await comelec_module.get_election_return("28010001")
+
+    assert result["data_status"] == "invalid_request"
+    assert result["validation_error"] is True
+    assert result["upstream_error"] is False
+
+
+@pytest.mark.asyncio
+async def test_403_with_html_body_is_unavailable_not_invalid_request(monkeypatch):
+    async def _fake(client, method, url, **kwargs):
+        if url == _latest_time_url():
+            return httpx.Response(200, json=LATEST_TIME, request=httpx.Request(method, url))
+        if url == _er_url("28010001"):
+            return httpx.Response(
+                403,
+                content=b"<html><body>Request blocked</body></html>",
+                request=httpx.Request(method, url),
+            )
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr(comelec_module, "fetch_with_retry", _fake)
+
+    result = await comelec_module.get_election_return("28010001")
+
+    assert result["data_status"] == "unavailable"
+    assert result["upstream_error"] is True
+    assert "403" in result["caveats"][0]
+
+
+# --- Finding 2: a malformed 'local' section, not just 'national' ---
+
+
+@pytest.mark.asyncio
+async def test_malformed_local_section_is_indeterminate_not_cached(monkeypatch):
+    payload = {
+        "totalErReceived": ER_FIXTURE["totalErReceived"],
+        "information": ER_FIXTURE["information"],
+        "national": ER_FIXTURE["national"],
+        "local": "not-a-list",
+    }
+    _route(
+        monkeypatch,
+        {
+            _latest_time_url(): (200, LATEST_TIME),
+            _er_url("28010001"): (200, payload),
+        },
+    )
+
+    result = await comelec_module.get_election_return("28010001")
+
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert not CACHES["comelec_return"], "a malformed local section must never be cached"
+
+
+@pytest.mark.asyncio
+async def test_missing_local_key_still_succeeds(monkeypatch):
+    """A missing 'local' key is a genuine empty local ballot, not drift."""
+    payload = {
+        "totalErReceived": ER_FIXTURE["totalErReceived"],
+        "information": ER_FIXTURE["information"],
+        "national": ER_FIXTURE["national"],
+    }
+    _route(
+        monkeypatch,
+        {
+            _latest_time_url(): (200, LATEST_TIME),
+            _er_url("28010001"): (200, payload),
+        },
+    )
+
+    result = await comelec_module.get_election_return("28010001")
+
+    assert result["data_status"] == "success"
+    assert result["local_contests"] == []
+
+
+# --- Finding 3: a non-list nested 'candidates' value must not raise ---
+
+
+@pytest.mark.asyncio
+async def test_non_list_nested_candidates_does_not_raise(monkeypatch):
+    payload = {
+        "totalErReceived": 1.0,
+        "information": ER_FIXTURE["information"],
+        "national": [{"candidates": {"candidates": 1}}],
+        "local": [],
+    }
+    _route(
+        monkeypatch,
+        {
+            _latest_time_url(): (200, LATEST_TIME),
+            _er_url("28010001"): (200, payload),
+        },
+    )
+
+    result = await comelec_module.get_election_return("28010001")
+
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert not CACHES["comelec_return"], "a malformed contest must never be cached"
+
+
+@pytest.mark.asyncio
+async def test_non_list_nested_candidates_names_the_contest_code_in_caveats(monkeypatch):
+    payload = {
+        "totalErReceived": 1.0,
+        "information": ER_FIXTURE["information"],
+        "national": [{"contestCode": "00399000", "candidates": {"candidates": 1}}],
+        "local": [],
+    }
+    _route(
+        monkeypatch,
+        {
+            _latest_time_url(): (200, LATEST_TIME),
+            _er_url("28010001"): (200, payload),
+        },
+    )
+
+    result = await comelec_module.get_election_return("28010001")
+
+    assert result["data_status"] == "indeterminate"
+    assert "00399000" in result["caveats"][0]
+
+
+# --- Finding 4: malformed tree rows must not cache as an empty success ---
+
+
+@pytest.mark.asyncio
+async def test_tree_rows_all_unparseable_is_indeterminate_not_cached(monkeypatch):
+    bad = {"regions": [{"name": "REGION I"}]}
+    _route(
+        monkeypatch,
+        {
+            _latest_time_url(): (200, LATEST_TIME),
+            _local_url("0"): (200, bad),
+        },
+    )
+
+    result = await comelec_module.browse_election_results()
+
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert not CACHES["comelec_tree"], "an all-bad tree response must never be cached"
+
+
+@pytest.mark.asyncio
+async def test_tree_rows_partly_unparseable_returns_good_rows_with_a_caveat(monkeypatch):
+    mixed = {
+        "regions": [
+            {"code": "R001000", "name": "REGION I"},
+            {"name": "NO CODE HERE"},
+        ]
+    }
+    _route(
+        monkeypatch,
+        {
+            _latest_time_url(): (200, LATEST_TIME),
+            _local_url("0"): (200, mixed),
+        },
+    )
+
+    result = await comelec_module.browse_election_results()
+
+    assert result["data_status"] == "success"
+    assert result["child_count"] == 1
+    assert result["children"][0]["code"] == "R001000"
+    assert any("skipped" in c for c in result["caveats"])
+
+
+# --- Finding 5: a bounded per-key lock closes the cache-write race ---
+
+
+@pytest.mark.asyncio
+async def test_twenty_concurrent_calls_reach_the_fake_once(monkeypatch):
+    calls = 0
+
+    async def _fake(client, method, url, **kwargs):
+        nonlocal calls
+        if url == _latest_time_url():
+            await asyncio.sleep(0)
+            return httpx.Response(200, json=LATEST_TIME, request=httpx.Request(method, url))
+        calls += 1
+        await asyncio.sleep(0)
+        return httpx.Response(200, json=ER_FIXTURE, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(comelec_module, "fetch_with_retry", _fake)
+
+    results = await asyncio.gather(
+        *(comelec_module.get_election_return("28010001") for _ in range(20))
+    )
+
+    assert calls == 1
+    assert all(r["data_status"] == "success" for r in results)
