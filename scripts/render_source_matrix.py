@@ -32,6 +32,7 @@ WHAT_IT_GIVES: dict[str, str] = {
     "HDX": "Humanitarian dataset search, with a per-dataset license",
     "Official Gazette RSS": "Proclamations, memorandum circulars, and other government issuances",
     "PAGASA public files": "Raw advisory, bulletin, and storm surge PDF file listing",
+    "PSIC": "Industrial classification code lookup, by code prefix or description",
 }
 
 

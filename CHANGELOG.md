@@ -21,6 +21,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bulletin, and storm surge PDF files from the live pubfiles directory
   listing, newest first. The stormsurge kind always carries a warning that
   the folder has not published since 2019-12-02.
+- **`search_psic_codes(query, limit)`** finds a PSIC industrial
+  classification code by code prefix or by a whole-word match on the
+  description, from the PSA classification page.
 
 ## [0.7.0] - 2026-09-04
 

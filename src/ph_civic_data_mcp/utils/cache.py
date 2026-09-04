@@ -43,6 +43,9 @@ CACHES: dict[str, TTLCache[str, Any]] = {
     "psgc_browse": TTLCache(maxsize=200, ttl=86400),
     "infra_projects": TTLCache(maxsize=50, ttl=21600),
     "gazette_feed": TTLCache(maxsize=50, ttl=1200),
+    # The whole parsed PSIC table, one entry, not one per query. A query
+    # matches in memory against this cached list.
+    "psic_table": TTLCache(maxsize=2, ttl=86400),
 }
 
 

@@ -59,6 +59,9 @@ mcp = FastMCP(
       are rejected, and one query is capped at 1000 cells.
     - get_official_gazette_feed(page) reads the government's own RSS feed
       of proclamations, memorandum circulars, and other issuances.
+    - search_psic_codes(query, limit) looks up the Philippine Standard
+      Industrial Classification by code prefix (digits) or by a whole-word
+      match on the class description.
 
     Accountability:
     - flag_infra_anomalies — heuristic indicators

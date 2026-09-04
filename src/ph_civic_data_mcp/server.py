@@ -150,6 +150,13 @@ SOURCE_CATALOG: list[dict] = [
         "cache_ttl_seconds": 900,
         "license": "PAGASA public files (pubfiles.pagasa.dost.gov.ph), government record",
     },
+    {
+        "source": "PSIC",
+        "source_url": "https://psa.gov.ph/classification/psic/search-results",
+        "freshness": "PSIC revisions change on the order of years",
+        "cache_ttl_seconds": 86400,
+        "license": "PSA Philippine Standard Industrial Classification (PSIC), CC BY 4.0",
+    },
 ]
 
 
@@ -367,6 +374,7 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import hdx  # noqa: F401
     from ph_civic_data_mcp.sources import gazette  # noqa: F401
     from ph_civic_data_mcp.sources import pagasa_files  # noqa: F401
+    from ph_civic_data_mcp.sources import psic  # noqa: F401
 
 
 def main() -> None:
