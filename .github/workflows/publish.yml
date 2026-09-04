@@ -117,14 +117,41 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
 
-      - name: Generate an SPDX SBOM from the wheel
+      # Two defects fixed here, both found on the v0.8.0 release.
+      # The sbom-action `file` input takes a literal path and never expands a
+      # glob, so `dist/ph_civic_data_mcp-*.whl` failed the step outright.
+      # Scanning the wheel itself then catalogs one package, the wheel, since
+      # a wheel carries no dependencies. Installing it first and scanning the
+      # environment catalogs the real closure, 94 packages as of 0.8.0.
+      - name: Install the wheel into a scratch environment for the SBOM
+        id: sbomenv
+        run: |
+          wheel=$(ls dist/*.whl 2>/dev/null | head -1)
+          if [ -z "$wheel" ]; then
+            echo "no wheel in dist/, cannot build an SBOM" >&2
+            exit 1
+          fi
+          python3 -m venv /tmp/sbom-env
+          /tmp/sbom-env/bin/pip install --quiet --no-cache-dir "$wheel"
+          echo "path=/tmp/sbom-env" >> "$GITHUB_OUTPUT"
+
+      - name: Generate an SPDX SBOM from the installed package
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
-          file: dist/ph_civic_data_mcp-*.whl
+          path: ${{ steps.sbomenv.outputs.path }}
           format: spdx-json
           output-file: dist/ph-civic-data-mcp.spdx.json
           upload-artifact: false
           upload-release-assets: false
+
+      - name: Check the SBOM catalogs a real dependency closure
+        run: |
+          n=$(python3 -c "import json;print(len([p for p in json.load(open('dist/ph-civic-data-mcp.spdx.json')).get('packages',[]) if p.get('versionInfo')]))")
+          echo "SBOM packages with versions: $n"
+          if [ "$n" -lt 20 ]; then
+            echo "SBOM has $n versioned packages, expected at least 20" >&2
+            exit 1
+          fi
 
       # This job never checks out the repository, so gh needs GH_REPO to know
       # which release to attach to. Without it, gh exits "not a git repository".
