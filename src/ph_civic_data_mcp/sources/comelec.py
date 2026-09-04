@@ -1,4 +1,4 @@
-"""COMELEC 2025 election results archive — precinct-level vote tallies.
+"""COMELEC 2025 election results archive: precinct-level vote tallies.
 
 The archive froze on 2025-05-16 10:00:09 AM (`/data/common/latestTime.json`).
 It is a fixed public record, not a live feed.
@@ -38,7 +38,7 @@ from ph_civic_data_mcp.utils.http import CLIENT, fetch_with_retry, log_stderr
 
 COMELEC_BASE = "https://2025electionresults.comelec.gov.ph"
 COMELEC_SOURCE = "COMELEC 2025 election results archive, government record"
-COMELEC_LICENSE = "Public — COMELEC 2025 election results archive"
+COMELEC_LICENSE = "Public, COMELEC 2025 election results archive"
 COMELEC_NOTE = (
     "Official COMELEC 2025 election returns as published on the results "
     "archive. Retrieval only, no interpretation."
@@ -47,7 +47,7 @@ COMELEC_NOTE = (
 # "0" is the root. A region code is "R" plus 6 more characters. Most are
 # digits ("R001000"), but live-checked 2026-09-04: 6 of the 20 root
 # entries are not ("R04A000" CALABARZON, "R04B000" MIMAROPA, "R00LAV0",
-# "R00NIR0", "R0BARMM", "R0CAR00", "R0NCR00" — NCR itself). A digits-only
+# "R00NIR0", "R0BARMM", "R0CAR00", "R0NCR00", which is NCR itself). A digits-only
 # regex rejects NCR and CALABARZON as invalid_request, so it must accept
 # any alphanumeric tail. Every other node (province, city or municipality,
 # barangay) is a 7-digit numeric code PPCCBBB: province (2 digits), city
