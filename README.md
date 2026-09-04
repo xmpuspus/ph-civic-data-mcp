@@ -267,6 +267,7 @@ actually reports.
 | USGS FDSN | Philippine-region earthquakes, cross-checked against PHIVOLCS | Real-time global feed | 10 min | Public domain (USGS) |
 | NOAA IBTrACS | Historical tropical cyclone tracks through the Philippine AOR | Annual update | 24 h | Public domain (NOAA) |
 | World Bank Open Data | Philippine macroeconomic indicators | Annual; lag varies by indicator | 24 h | World Bank Open Data CC-BY 4.0 |
+| COMELEC 2025 election results | Precinct-level vote tallies, region down to barangay | Archive frozen 2025-05-16 10:00:09 AM; a fixed public record, not a live feed | 24 h | Public, COMELEC 2025 election results archive |
 <!-- source-matrix:end -->
 
 `PAGASA_API_TOKEN` is the only environment variable, and it is optional.

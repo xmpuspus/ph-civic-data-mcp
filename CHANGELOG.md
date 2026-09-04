@@ -4,6 +4,18 @@ All notable changes to `ph-civic-data-mcp` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`browse_election_results(code)`** walks the COMELEC 2025 election
+  results tree: region, province, city or municipality, barangay, then
+  precinct.
+- **`get_election_return(precinct_code)`** reads one precinct's official
+  vote tally, with every national and local contest and each candidate's
+  vote count and share. The archive froze on 2025-05-16, a fixed public
+  record, not a live feed.
+
 ## [0.7.0] - 2026-09-04
 
 `v0.7.0` adds two tools, `compare_areas` and `search_psa_catalog`, and raises

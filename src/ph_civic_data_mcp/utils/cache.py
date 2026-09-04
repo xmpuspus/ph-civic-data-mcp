@@ -39,6 +39,11 @@ CACHES: dict[str, TTLCache[str, Any]] = {
     "psgc_resolve": TTLCache(maxsize=200, ttl=86400),
     "psgc_browse": TTLCache(maxsize=200, ttl=86400),
     "infra_projects": TTLCache(maxsize=50, ttl=21600),
+    # The archive is frozen (see CLAUDE.md), so a 24h TTL only bounds process
+    # memory; it is never a race against a live update.
+    "comelec_tree": TTLCache(maxsize=500, ttl=86400),
+    "comelec_return": TTLCache(maxsize=500, ttl=86400),
+    "comelec_meta": TTLCache(maxsize=4, ttl=86400),
 }
 
 
