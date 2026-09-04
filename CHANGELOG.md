@@ -66,6 +66,11 @@ merge, and each carries a regression test.
   file's age, not a hard-coded date. The fetch is single-flight per kind.
 - PSIC: a table with fewer than 1000 rows or a missing section letter is
   `indeterminate`, never a cached "no match".
+- COMELEC: a 403 is an unknown code only when the body carries the
+  archive's `AccessDenied` marker, and any other 403 is an outage. A
+  malformed `local` section, a wrong-typed `candidates` value, or a tree
+  page whose rows all fail to parse is `indeterminate`, never a crash or a
+  cached empty. Both tools are single-flight per key.
 
 ## [0.7.0] - 2026-09-04
 
