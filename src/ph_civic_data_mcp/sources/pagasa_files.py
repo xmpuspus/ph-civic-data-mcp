@@ -313,11 +313,13 @@ async def list_pagasa_advisory_files(kind: str = "weather_advisory", limit: int 
             folder_url=folder_url,
             files=[],
         )
-    if not (1 <= limit <= 100):
+    # A bool is an int in Python and a string compares with TypeError, so
+    # check the type by name before the range, the way the flood tool does.
+    if isinstance(limit, bool) or not isinstance(limit, int) or not (1 <= limit <= 100):
         return failure_result(
             "PAGASA public files",
             folder_url,
-            f"limit must be between 1 and 100, got {limit}.",
+            f"limit must be a whole number between 1 and 100, got {limit!r}.",
             license=PAGASA_FILES_LICENSE,
             validation_error=True,
             kind=kind,

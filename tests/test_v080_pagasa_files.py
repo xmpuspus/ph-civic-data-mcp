@@ -208,6 +208,19 @@ async def test_a_limit_out_of_range_is_a_validation_error():
     assert result["validation_error"] is True
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_limit", ["5", 7.5, True, None])
+async def test_a_wrong_typed_limit_is_a_validation_error_not_a_crash(bad_limit):
+    # Final Codex pass on v0.8.0: a string limit reached the range check and
+    # raised TypeError instead of returning invalid_request.
+    result = await pagasa_files_module.list_pagasa_advisory_files("bulletin", bad_limit)
+
+    assert result["data_status"] == "invalid_request"
+    assert result["validation_error"] is True
+    assert result["upstream_error"] is False
+    assert result["files"] == []
+
+
 # --- Finding 1: a parser bug after a 200 body is "indeterminate", never
 # "unavailable", and _parse_size never raises. ---------------------------
 
