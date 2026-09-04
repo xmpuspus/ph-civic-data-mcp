@@ -21,6 +21,7 @@ Landmines (from the ledger probe log and a live check on 2026-09-04):
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 from datetime import datetime, timezone
@@ -107,13 +108,23 @@ def _unwrap_regions(payload: object) -> list[dict]:
     return payload["regions"]
 
 
-def _parse_children(items: list[dict]) -> list[dict]:
+def _parse_children(items: list[dict]) -> tuple[list[dict], int]:
+    """Parsed rows, and a count of rows that carried no usable code.
+
+    A caller that gets a nonempty `items` back but zero parsed children
+    sees drift, not a genuine empty listing, and must not cache the
+    result. Some good rows and some bad rows is not drift: the caller
+    reports the skipped count in `caveats` and keeps the good rows.
+    """
     children: list[dict] = []
+    skipped = 0
     for item in items:
         if not isinstance(item, dict):
+            skipped += 1
             continue
         code = str(item.get("code") or "")
         if not code:
+            skipped += 1
             continue
         children.append(
             {
@@ -123,7 +134,7 @@ def _parse_children(items: list[dict]) -> list[dict]:
                 "master_code": item.get("masterCode"),
             }
         )
-    return children
+    return children, skipped
 
 
 async def _fetch_tree(code: str) -> list[dict] | None:
@@ -179,6 +190,24 @@ async def _get_data_frozen_at() -> tuple[str | None, str | None]:
     return value, None
 
 
+# One lock per cache key, the hdx._search_lock shape: twenty cold browse
+# calls for one code must not become twenty tree fetches.
+_MAX_TREE_LOCKS = 256
+_TREE_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _tree_lock(key: str) -> asyncio.Lock:
+    lock = _TREE_LOCKS.get(key)
+    if lock is not None:
+        return lock
+    if len(_TREE_LOCKS) >= _MAX_TREE_LOCKS:
+        for stale in [k for k, held in _TREE_LOCKS.items() if not held.locked()]:
+            del _TREE_LOCKS[stale]
+        if len(_TREE_LOCKS) >= _MAX_TREE_LOCKS:
+            return asyncio.Lock()
+    return _TREE_LOCKS.setdefault(key, asyncio.Lock())
+
+
 @mcp.tool(
     title="Browse the COMELEC 2025 election results tree",
     tags={"comelec", "elections", "philippines", "government"},
@@ -206,8 +235,11 @@ async def browse_election_results(code: str = "0") -> dict:
     On failure: a code that is not "0", a region code, or 7 digits gives
     validation_error true and data_status "invalid_request", with no
     request sent. A well-formed code the archive does not recognize gives
-    the same shape after the lookup. A real outage gives upstream_error
-    true and data_status "unavailable", with the real error in caveats.
+    the same shape after the lookup. A tree response whose rows all fail to
+    parse gives data_status "indeterminate", never cached. A response with
+    some bad rows returns the good rows, with a caveat naming the skipped
+    count. A real outage gives upstream_error true and data_status
+    "unavailable", with the real error in caveats.
 
     Args:
         code: "0" for the region list, a region code such as "R001000", or
@@ -242,6 +274,16 @@ async def browse_election_results(code: str = "0") -> dict:
     if ckey in cache:
         return cache[ckey]
 
+    # Single-flight. Without it, concurrent cold browses of one code race
+    # between the cache check and the write, and every one of them fetches.
+    async with _tree_lock(ckey):
+        if ckey in cache:
+            return cache[ckey]
+        return await _browse_uncached(code, ckey)
+
+
+async def _browse_uncached(code: str, ckey: str) -> dict:
+    cache = CACHES["comelec_tree"]
     frozen_at, frozen_err = await _get_data_frozen_at()
 
     try:
@@ -278,9 +320,35 @@ async def browse_election_results(code: str = "0") -> dict:
             note=COMELEC_NOTE,
         )
 
-    all_children = _parse_children(raw_items)
+    all_children, skipped = _parse_children(raw_items)
+    if raw_items and not all_children:
+        # Every row failed to parse. A tree endpoint that always has rows
+        # sent none this run: that is drift, not a genuine empty listing.
+        return failure_result(
+            COMELEC_SOURCE,
+            COMELEC_BASE,
+            f"COMELEC tree endpoint for code {code!r} sent {len(raw_items)} "
+            "row(s) but none carried a usable code.",
+            license=COMELEC_LICENSE,
+            data_status=DATA_STATUS_INDETERMINATE,
+            code=code,
+            level=None,
+            children=[],
+            child_count=0,
+            truncated=False,
+            data_frozen_at=frozen_at,
+            note=COMELEC_NOTE,
+        )
+
     truncated = len(all_children) > MAX_CHILDREN
     children = all_children[:MAX_CHILDREN]
+
+    caveats = [frozen_err] if frozen_err else []
+    if skipped:
+        caveats.append(
+            f"{skipped} of {len(raw_items)} row(s) in the COMELEC tree response "
+            "carried no usable code and were skipped."
+        )
 
     result = {
         "code": code,
@@ -295,7 +363,7 @@ async def browse_election_results(code: str = "0") -> dict:
         "data_status": DATA_STATUS_SUCCESS if all_children else DATA_STATUS_EMPTY,
         "upstream_error": False,
         "validation_error": False,
-        "caveats": [frozen_err] if frozen_err else [],
+        "caveats": caveats,
         "note": COMELEC_NOTE,
         "data_retrieved_at": _now().isoformat(),
     }
@@ -308,9 +376,37 @@ async def browse_election_results(code: str = "0") -> dict:
     return result
 
 
+class _ContestParseError(Exception):
+    """A contest's nested `candidates` value is present but not a list."""
+
+    def __init__(self, contest_code: str):
+        self.contest_code = contest_code
+        super().__init__(f"non-list candidates in contest {contest_code!r}")
+
+
+def _is_access_denied_body(body_text: str) -> bool:
+    """True for the archive's own "unknown code" marker on a 403.
+
+    The archive answers 403 both for a genuine unknown code, an S3-style
+    body carrying `<Error><Code>AccessDenied</Code>...`, and for an
+    infrastructure block such as a WAF or CDN page. Only the marked body is
+    a real answer. Any other 403 body is an outage, not an answer.
+    """
+    return "AccessDenied" in body_text
+
+
 def _parse_contest(raw: dict) -> dict:
+    """One contest, or raises `_ContestParseError` if `candidates` is malformed.
+
+    The nested `contest["candidates"]["candidates"]` value should always be
+    a list. A wrong-typed value (an int, a string) used to crash the whole
+    tool with a bare `for c in inner` TypeError. The caller now catches
+    `_ContestParseError` and reports the whole return as indeterminate.
+    """
     wrapper = raw.get("candidates")
     inner = wrapper.get("candidates") if isinstance(wrapper, dict) else None
+    if inner is not None and not isinstance(inner, list):
+        raise _ContestParseError(raw.get("contestCode") or "")
     candidates = [
         {
             "name": c.get("name", ""),
@@ -326,6 +422,24 @@ def _parse_contest(raw: dict) -> dict:
         "statistics": raw.get("statistic") or {},
         "candidates": candidates,
     }
+
+
+# One lock per cache key, the hdx._search_lock shape: twenty cold ER calls
+# for one precinct must not become twenty ER fetches.
+_MAX_RETURN_LOCKS = 256
+_RETURN_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _return_lock(key: str) -> asyncio.Lock:
+    lock = _RETURN_LOCKS.get(key)
+    if lock is not None:
+        return lock
+    if len(_RETURN_LOCKS) >= _MAX_RETURN_LOCKS:
+        for stale in [k for k, held in _RETURN_LOCKS.items() if not held.locked()]:
+            del _RETURN_LOCKS[stale]
+        if len(_RETURN_LOCKS) >= _MAX_RETURN_LOCKS:
+            return asyncio.Lock()
+    return _RETURN_LOCKS.setdefault(key, asyncio.Lock())
 
 
 @mcp.tool(
@@ -350,11 +464,13 @@ async def get_election_return(precinct_code: str) -> dict:
 
     On failure: a code that is not 8 digits gives validation_error true and
     data_status "invalid_request", with no request sent. A code the
-    archive does not recognize gives the same shape. A body missing
-    'information', or where 'national' is not a list, gives data_status
-    "indeterminate" with upstream_error true. A real outage gives
-    data_status "unavailable" with upstream_error true and the real error
-    in caveats.
+    archive does not recognize (a 403 body carrying its AccessDenied
+    marker) gives the same shape. A body missing 'information', where
+    'national' or 'local' is not a list, or where a contest carries a
+    non-list nested 'candidates' value, gives data_status "indeterminate"
+    with upstream_error true. Any other outage, including a 403 with no
+    AccessDenied marker, gives data_status "unavailable" with
+    upstream_error true and the real error in caveats.
 
     Args:
         precinct_code: 8-digit precinct code, such as "28010001".
@@ -387,6 +503,16 @@ async def get_election_return(precinct_code: str) -> dict:
     if ckey in cache:
         return cache[ckey]
 
+    # Single-flight. Without it, concurrent cold calls for one precinct race
+    # between the cache check and the write, and every one of them fetches.
+    async with _return_lock(ckey):
+        if ckey in cache:
+            return cache[ckey]
+        return await _get_election_return_uncached(code, ckey)
+
+
+async def _get_election_return_uncached(code: str, ckey: str) -> dict:
+    cache = CACHES["comelec_return"]
     frozen_at, frozen_err = await _get_data_frozen_at()
 
     def _fail(message: str, *, data_status: str | None = None) -> dict:
@@ -409,10 +535,16 @@ async def get_election_return(precinct_code: str) -> dict:
     try:
         response = await fetch_with_retry(CLIENT, "GET", url)
         if response.status_code == 403:
-            return _fail(
-                f"No COMELEC election return found for precinct {code!r}.",
-                data_status=DATA_STATUS_INVALID_REQUEST,
-            )
+            if _is_access_denied_body(response.text):
+                return _fail(
+                    f"No COMELEC election return found for precinct {code!r}.",
+                    data_status=DATA_STATUS_INVALID_REQUEST,
+                )
+            # A 403 with no AccessDenied marker is an infrastructure block
+            # (a WAF or CDN page), not the archive's own "unknown code"
+            # answer. Treating it as invalid_request would tell an agent a
+            # real precinct does not exist.
+            return _fail(f"COMELEC results archive returned status 403: {response.text[:200]!r}")
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
@@ -428,15 +560,33 @@ async def get_election_return(precinct_code: str) -> dict:
             data_status=DATA_STATUS_INDETERMINATE,
         )
 
+    # `local` follows the same rule as `national`: a value that is present
+    # but not a list is drift, not an empty local ballot. A missing key
+    # stays a genuine empty list, since some precincts carry no local race.
     local_raw = payload.get("local")
-    local_list = local_raw if isinstance(local_raw, list) else []
+    if local_raw is not None and not isinstance(local_raw, list):
+        return _fail(
+            f"COMELEC election return for precinct {code!r} has a non-list 'local' value.",
+            data_status=DATA_STATUS_INDETERMINATE,
+        )
+    local_list = local_raw or []
+
+    try:
+        national_contests = [_parse_contest(c) for c in national_raw if isinstance(c, dict)]
+        local_contests = [_parse_contest(c) for c in local_list if isinstance(c, dict)]
+    except _ContestParseError as exc:
+        return _fail(
+            f"COMELEC election return for precinct {code!r} has a non-list "
+            f"'candidates' value in contest {exc.contest_code!r}.",
+            data_status=DATA_STATUS_INDETERMINATE,
+        )
 
     result = {
         "precinct_code": code,
         "information": {_snake_case(k): v for k, v in information.items()},
         "total_er_received": payload.get("totalErReceived"),
-        "national_contests": [_parse_contest(c) for c in national_raw if isinstance(c, dict)],
-        "local_contests": [_parse_contest(c) for c in local_list if isinstance(c, dict)],
+        "national_contests": national_contests,
+        "local_contests": local_contests,
         "data_frozen_at": frozen_at,
         "source": COMELEC_SOURCE,
         "source_url": COMELEC_BASE,
