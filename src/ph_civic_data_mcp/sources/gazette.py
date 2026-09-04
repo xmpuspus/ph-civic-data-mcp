@@ -102,12 +102,22 @@ def _looks_like_cloudflare_block(content_type: str, body_text: str) -> bool:
     return "Attention Required" in body_text
 
 
-def _parse_item(item: ET.Element) -> dict:
+def _parse_item(item: ET.Element) -> dict | None:
+    """One <item> into the tool's item shape, or None if unreadable.
+
+    A row with neither a title nor a link carries nothing an agent can act
+    on, so it is dropped the same way an HDX dataset with no name is
+    dropped: one bad row skips itself, never the whole page.
+    """
+    title = (item.findtext("title") or "").strip()
+    link = (item.findtext("link") or "").strip()
+    if not title and not link:
+        return None
     categories = [c.text.strip() for c in item.findall("category") if c.text and c.text.strip()]
     creator = (item.findtext("dc:creator", namespaces=_DC_NS) or "").strip()
     return {
-        "title": (item.findtext("title") or "").strip(),
-        "link": (item.findtext("link") or "").strip(),
+        "title": title,
+        "link": link,
         "pub_date": _parse_pub_date(item.findtext("pubDate") or ""),
         "creator": creator or None,
         "categories": categories,
@@ -116,7 +126,7 @@ def _parse_item(item: ET.Element) -> dict:
     }
 
 
-def _parse_feed(body: bytes) -> tuple[str, str, list[dict]]:
+def _parse_feed(body: bytes) -> tuple[str, str, list[dict], int]:
     """Parse an RSS 2.0 body. Raises ET.ParseError or ValueError on drift."""
     root = ET.fromstring(body)
     channel = root.find("channel")
@@ -124,11 +134,14 @@ def _parse_feed(body: bytes) -> tuple[str, str, list[dict]]:
         raise ValueError("RSS body has no <channel> element")
     feed_title = (channel.findtext("title") or "").strip()
     feed_link = (channel.findtext("link") or "").strip()
-    items = [_parse_item(item) for item in channel.findall("item")]
-    return feed_title, feed_link, items
+    raw_items = channel.findall("item")
+    parsed = [_parse_item(item) for item in raw_items]
+    items = [item for item in parsed if item is not None]
+    skipped = len(raw_items) - len(items)
+    return feed_title, feed_link, items, skipped
 
 
-async def _fetch_feed_page(url: str) -> tuple[str, str, list[dict]]:
+async def _fetch_feed_page(url: str) -> tuple[str, str, list[dict], int]:
     """GET one feed page. Raises GazetteBlockedError on a Cloudflare block,
     or the underlying exception on any other transport or parse failure."""
     response = await fetch_with_retry(CLIENT, "GET", url)
@@ -146,6 +159,7 @@ def _result(
     feed_link: str | None,
     items: list[dict],
     data_status: str,
+    caveats: list[str] | None = None,
 ) -> dict:
     return {
         "page": page,
@@ -158,7 +172,7 @@ def _result(
         "data_status": data_status,
         "upstream_error": False,
         "validation_error": False,
-        "caveats": [],
+        "caveats": caveats or [],
         "data_retrieved_at": _now().isoformat(),
         "license": GAZETTE_LICENSE,
     }
@@ -188,10 +202,12 @@ async def get_official_gazette_feed(page: int = 1) -> dict:
     with validation_error true and no fetch attempted. A Cloudflare block
     page, the only other response this host sends on a bad call, returns
     data_status "unavailable" with upstream_error true and the real status
-    and content type in caveats. A page 1 response that parses as valid RSS
-    but holds zero issuances is drift, and returns data_status
-    "indeterminate". A page above 1 with zero issuances is a genuine empty
-    page and returns data_status "empty".
+    and content type in caveats. An item with neither a title nor a link is
+    dropped and counted in caveats. A page 1 response that parses as valid
+    RSS but keeps zero issuances, whether the feed sent none or every item
+    was dropped, is drift and returns data_status "indeterminate". A page
+    above 1 with zero issuances is a genuine empty page and returns
+    data_status "empty".
 
     Args:
         page: Page of the feed, 1 to 50. Page 1 reads /feed/, a page above 1
@@ -226,7 +242,7 @@ async def _feed_uncached(page: int, ckey: str) -> dict:
     url = _feed_url(page)
 
     try:
-        feed_title, feed_link, items = await _fetch_feed_page(url)
+        feed_title, feed_link, items, skipped = await _fetch_feed_page(url)
     except GazetteBlockedError as exc:
         log_stderr(f"Official Gazette blocked: {exc}")
         return failure_result(
@@ -273,12 +289,17 @@ async def _feed_uncached(page: int, ckey: str) -> dict:
         )
 
     if not items and page == 1:
+        caveat = (
+            "Page 1 parsed as valid RSS but kept zero issuances. This "
+            "feed always carries recent issuances, so this is drift, not an "
+            "absence of posts."
+        )
+        if skipped:
+            caveat += f" All {skipped} <item> element(s) had neither a title nor a link."
         return failure_result(
             GAZETTE_SOURCE,
             url,
-            "Page 1 parsed as valid RSS but held zero <item> elements. This "
-            "feed always carries recent issuances, so this is drift, not an "
-            "absence of posts.",
+            caveat,
             license=GAZETTE_LICENSE,
             data_status=DATA_STATUS_INDETERMINATE,
             page=page,
@@ -288,7 +309,10 @@ async def _feed_uncached(page: int, ckey: str) -> dict:
             feed_link=feed_link,
         )
 
+    caveats = []
+    if skipped:
+        caveats.append(f"Skipped {skipped} item(s) with neither a title nor a link.")
     data_status = DATA_STATUS_EMPTY if not items else DATA_STATUS_SUCCESS
-    result = _result(page, url, feed_title, feed_link, items, data_status)
+    result = _result(page, url, feed_title, feed_link, items, data_status, caveats)
     cache[ckey] = result
     return result
