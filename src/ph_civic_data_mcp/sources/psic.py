@@ -5,9 +5,9 @@ needed, under CC BY 4.0. The bare `psa.gov.ph/classification/` index page
 sits behind a Cloudflare JS challenge, so this module calls the exact data
 path only and never the index.
 
-The page holds one fixed table of 1362 rows. This module fetches it once,
-parses it, and caches the parsed rows for 24 hours on success. A query then
-matches in memory against the cached rows, never against a fresh fetch.
+The page holds one fixed table of roughly 1,360 rows. This module fetches it
+once, parses it, and caches the parsed rows for 24 hours on success. A query
+then matches in memory against the cached rows, never against a fresh fetch.
 """
 
 from __future__ import annotations
@@ -37,6 +37,45 @@ MIN_QUERY_LEN = 1
 MAX_QUERY_LEN = 100
 MIN_LIMIT = 1
 MAX_LIMIT = 100
+
+# A fetch that returns a fragment (a WAF probe page, a truncated response)
+# still parses to a nonempty row list, which would then cache and answer
+# every later query as though PSIC held one industry. The real table has
+# roughly 1,360 rows across 21 sections A to U. Below this row floor, or
+# missing a whole section, the fetch counts as failed, never as a smaller
+# table.
+MIN_TABLE_ROWS = 1000
+
+# PSIC 2009 (ISIC Rev.4) groups every division into one of 21 sections
+# (A-U). Live-verified 2026-09-04: the search-results page never prints a
+# section-level row of its own, every one of its 1360 rows is a subclass,
+# so the letter has to come from the 2-digit division prefix of each row's
+# code instead. Every division the live page carries (01-99, with gaps)
+# fell inside exactly one of these ranges, none left over.
+_SECTION_DIVISION_RANGES: tuple[tuple[str, range], ...] = (
+    ("A", range(1, 4)),
+    ("B", range(5, 10)),
+    ("C", range(10, 34)),
+    ("D", range(35, 36)),
+    ("E", range(36, 40)),
+    ("F", range(41, 44)),
+    ("G", range(45, 48)),
+    ("H", range(49, 54)),
+    ("I", range(55, 57)),
+    ("J", range(58, 64)),
+    ("K", range(64, 67)),
+    ("L", range(68, 69)),
+    ("M", range(69, 76)),
+    ("N", range(77, 83)),
+    ("O", range(84, 85)),
+    ("P", range(85, 86)),
+    ("Q", range(86, 89)),
+    ("R", range(90, 94)),
+    ("S", range(94, 97)),
+    ("T", range(97, 99)),
+    ("U", range(99, 100)),
+)
+_ALL_SECTION_LETTERS = frozenset(letter for letter, _ in _SECTION_DIVISION_RANGES)
 
 _TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 _CODE_QUERY_RE = re.compile(r"^\d+$")
@@ -127,6 +166,47 @@ def _parse_psic_table(html: str) -> list[dict]:
     return entries
 
 
+def _section_for(entry: dict) -> str | None:
+    """The PSIC section letter (A-U) an entry's code falls under.
+
+    A `section`-level row's own code is already the letter. Every other
+    level's code is numeric, and its first two digits are the division, so
+    the letter comes from `_SECTION_DIVISION_RANGES` instead. Returns None
+    for a code that carries no readable division.
+    """
+    code = entry["code"]
+    if entry["level"] == "section" and len(code) == 1 and code.isalpha():
+        return code.upper()
+    division_text = code[:2]
+    if not division_text.isdigit():
+        return None
+    division = int(division_text)
+    for letter, span in _SECTION_DIVISION_RANGES:
+        if division in span:
+            return letter
+    return None
+
+
+def _check_table_complete(entries: list[dict]) -> None:
+    """Raise PsicParseError when the parsed rows are a fragment of the table.
+
+    A row count below MIN_TABLE_ROWS, or a PSIC section with no row at all,
+    means the fetch caught a partial page rather than the full table. The
+    caller must treat this the same as a missing table: indeterminate, and
+    never cached.
+    """
+    sections_seen = {s for s in (_section_for(e) for e in entries) if s}
+    missing = sorted(_ALL_SECTION_LETTERS - sections_seen)
+    if len(entries) >= MIN_TABLE_ROWS and not missing:
+        return
+    missing_text = ", ".join(missing) if missing else "none"
+    raise PsicParseError(
+        f"PSIC table looks incomplete: {len(entries)} rows parsed (want at least "
+        f"{MIN_TABLE_ROWS}), missing section(s) {missing_text} (HTML drift or a "
+        "partial fetch?)"
+    )
+
+
 _FETCH_LOCK = asyncio.Lock()
 
 
@@ -146,6 +226,7 @@ async def _psic_table() -> list[dict]:
             raise PsicChallengeError("unavailable (Cloudflare challenge page, not the PSIC table)")
         response.raise_for_status()
         entries = _parse_psic_table(response.text)
+        _check_table_complete(entries)
         cache[key] = entries
         return entries
 
@@ -177,8 +258,8 @@ async def search_psic_codes(query: str, limit: int = 20) -> dict:
 
     Matches a query of only digits against the PSIC code prefix. Matches any
     other query by whole-word text against the class description,
-    case-insensitive. PSA publishes the full 1362-row table on one page, so
-    the first call fetches and caches it for 24 hours. Examples:
+    case-insensitive. PSA publishes the full table (roughly 1,360 rows) on
+    one page, so the first call fetches and caches it for 24 hours. Examples:
 
       search_psic_codes("rice")             every description with "rice" as a whole word
       search_psic_codes("0111")             every code that starts with "0111"
@@ -186,9 +267,9 @@ async def search_psic_codes(query: str, limit: int = 20) -> dict:
 
     On failure: data_status is "invalid_request" for an empty, over-long, or
     non-printable query, or for a limit outside 1-100. A Cloudflare
-    challenge in place of the table gives "unavailable". A missing or empty
-    PSIC table gives "indeterminate". Neither failure is cached, and the
-    real error sits in caveats.
+    challenge in place of the table gives "unavailable". A missing, empty, or
+    partial PSIC table gives "indeterminate". Neither failure is cached, and
+    the real error sits in caveats.
 
     Args:
         query: Digits for a code-prefix match, or text for a whole-word
