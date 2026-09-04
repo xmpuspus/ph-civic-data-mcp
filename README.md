@@ -118,7 +118,10 @@ per 100,000 residents.
 - "Give me a profile of Tacloban." `get_area_profile`
 - "What is the PSGC code for QC?" `resolve_ph_location`
 - "How many people live in Zamboanga City?" `get_population_stats`
+- "What is the poverty rate in Eastern Visayas?" `get_poverty_stats`
 - "Is it safe in Albay right now?" `assess_area_risk`
+- "List the cities in Cebu province." `list_admin_units`
+- "Show the full admin hierarchy above this barangay." `get_location_hierarchy`
 
 ### Compare two or more places
 
@@ -134,11 +137,14 @@ per 100,000 residents.
 - "Is a typhoon active in the Philippine area right now?" `get_active_typhoons`
 - "Cross-check that quake against the USGS global feed." `get_usgs_earthquakes_ph`
 - "What is the river flood outlook for Cagayan de Oro this week?" `get_flood_forecast`
+- "Which typhoons have passed near Samar since 1990?" `get_historical_typhoons_ph`
 
 ### Search procurement and spending
 
+- "Search every PhilGEPS notice for road repair." `search_procurement`
 - "Search PhilGEPS for flood control projects in Pampanga." `search_infra_projects`
 - "Summarize infra spending in Bicol for 2025." `summarize_infra_spending`
+- "How much procurement activity is there in Region VII?" `get_procurement_summary`
 - "Flag PhilGEPS notices in Cebu that warrant a closer look." `flag_infra_anomalies`
 - "Pull the full notice for one flagged project." `get_infra_project`
 
@@ -149,6 +155,8 @@ per 100,000 residents.
 - "What dimensions does this poverty table have?" `describe_psa_dataset`
 - "Pull poverty incidence by island group for 2023." `query_psa_dataset`
 - "What is the current inflation rate?" `get_inflation_stats`
+- "What is the national unemployment rate?" `get_labor_stats`
+- "Pull PSA health indicators for the latest year." `get_health_indicators`
 - "What PSIC code covers rice farming?" `search_psic_codes`
 
 `query_psa_dataset` needs an explicit value code for every dimension, refuses
@@ -163,6 +171,7 @@ request with an HTTP 403, so `describe_psa_dataset` first is the only way in.
 - "What is today's air quality in Manila?" `get_air_quality`
 - "How has Mindanao's vegetation changed this year?" `get_vegetation_index`
 - "List the latest PAGASA weather advisories." `list_pagasa_advisory_files`
+- "What is the Philippine GDP per capita trend?" `get_world_bank_indicator`
 
 ### Read the 2025 election results
 
@@ -178,6 +187,24 @@ The tools retrieve and never interpret.
 - "Find Philippine flood datasets on HDX." `search_hdx_datasets`
 
 Every HDX dataset carries its own license. Read `license_id` before reuse.
+
+### Start from a prompt instead of a tool
+
+Three MCP prompts pre-write the multi-step work, so a client can offer them
+as slash commands or starting points.
+
+- `area_briefing(location)` composes a full place briefing.
+- `infra_accountability_scan(area)` walks the procurement review path.
+- `psa_data_explorer(topic)` drives the search, describe, query loop.
+
+One tool answers questions about the server itself. `get_data_freshness`
+reports the running version, the tool count, every source with its cache
+window and license, per-host health, and cache ages.
+
+Two MCP resources carry context a client can read without a tool call.
+
+- `data://ph-civic/source-catalog` is the source, freshness, and license table.
+- `data://ph-civic/civic-framing` is the language rule for accountability output.
 
 Full signatures, arguments, and limits for all 41 tools:
 **[docs/tool-reference.md](docs/tool-reference.md)**.
