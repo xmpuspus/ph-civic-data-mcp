@@ -321,6 +321,39 @@ async def test_query_is_passed_as_a_param_never_concatenated_into_the_url(monkey
 
 
 @pytest.mark.asyncio
+async def test_results_with_a_string_count_return_the_datasets_with_a_caveat_and_no_cache(
+    monkeypatch,
+):
+    # Codex pass on v0.8.0: a bad count was only treated as drift beside
+    # empty results. A non-empty results list with count "12" is drift too.
+    payload = _payload([_dataset()], count=None)
+    payload["result"]["count"] = "12"
+    _install_fake_fetch(monkeypatch, payload)
+
+    result = await hdx_module.search_hdx_datasets("philippines")
+
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert len(result["datasets"]) == 1
+    assert result["datasets"][0]["name"] == "cod-ab-phl"
+    assert result["total_count"] == 1
+    assert "12" in result["caveats"][0]
+    assert not CACHES["hdx_search"]
+
+
+@pytest.mark.asyncio
+async def test_results_with_a_real_integer_count_still_cache(monkeypatch):
+    _install_fake_fetch(monkeypatch, _payload([_dataset()], count=1))
+
+    result = await hdx_module.search_hdx_datasets("philippines")
+
+    assert result["data_status"] == "success"
+    assert result["upstream_error"] is False
+    assert result["total_count"] == 1
+    assert len(CACHES["hdx_search"]) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("count_value", [None, "12", True, 3.0])
 async def test_empty_results_without_an_integer_count_are_indeterminate(monkeypatch, count_value):
     # Codex pass on v0.8.0: CKAN always sends an integer count, so empty

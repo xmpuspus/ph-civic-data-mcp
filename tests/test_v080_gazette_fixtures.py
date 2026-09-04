@@ -270,6 +270,54 @@ async def test_transport_failure_is_unavailable(monkeypatch):
     assert not CACHES["gazette_feed"]
 
 
+EMPTY_ITEM_XML = (
+    "<item><title></title><link></link><guid></guid>"
+    "<description><![CDATA[no title, no link]]></description></item>"
+)
+
+
+@pytest.mark.asyncio
+async def test_a_page_one_feed_of_only_empty_items_is_indeterminate_not_cached(monkeypatch):
+    feed = (
+        "<?xml version='1.0' encoding='UTF-8'?><rss version='2.0'>"
+        "<channel><title>Official Gazette</title><link>https://www.officialgazette.gov.ph</link>"
+        f"{EMPTY_ITEM_XML}{EMPTY_ITEM_XML}"
+        "</channel></rss>"
+    )
+    _install_fake_fetch(monkeypatch, body=feed)
+
+    result = await gazette_module.get_official_gazette_feed(page=1)
+
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert result["items"] == []
+    assert "2" in result["caveats"][0]
+    assert not CACHES["gazette_feed"], "a page of only empty items must never be cached"
+
+
+@pytest.mark.asyncio
+async def test_real_items_beside_one_empty_item_return_two_with_a_caveat(monkeypatch):
+    feed = (
+        "<?xml version='1.0' encoding='UTF-8'?><rss version='2.0'>"
+        "<channel><title>Official Gazette</title><link>https://www.officialgazette.gov.ph</link>"
+        "<item><title>Real One</title><link>https://example.test/1</link>"
+        "<guid>https://example.test/?p=1</guid></item>"
+        f"{EMPTY_ITEM_XML}"
+        "<item><title>Real Two</title><link>https://example.test/2</link>"
+        "<guid>https://example.test/?p=2</guid></item>"
+        "</channel></rss>"
+    )
+    _install_fake_fetch(monkeypatch, body=feed)
+
+    result = await gazette_module.get_official_gazette_feed(page=1)
+
+    assert result["data_status"] == "success"
+    assert result["item_count"] == 2
+    assert [item["title"] for item in result["items"]] == ["Real One", "Real Two"]
+    assert any("1" in c and "title" in c for c in result["caveats"]), result["caveats"]
+    assert CACHES["gazette_feed"], "a page with real items must still cache"
+
+
 @pytest.mark.asyncio
 async def test_zero_items_on_page_one_is_indeterminate_not_cached(monkeypatch):
     empty_feed = (

@@ -158,6 +158,56 @@ async def test_dates_without_a_discharge_series_are_indeterminate_not_null_succe
 
 
 @pytest.mark.asyncio
+async def test_an_empty_river_discharge_beside_three_dates_is_indeterminate_not_cached(
+    monkeypatch,
+):
+    payload = {
+        **FLOOD_PAYLOAD,
+        "daily": {
+            "time": ["2026-09-05", "2026-09-06", "2026-09-07"],
+            "river_discharge": [],
+        },
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        return _json_response(method, url, payload)
+
+    monkeypatch.setattr(flood_module, "fetch_with_retry", _fake)
+
+    result = await flood_module.get_flood_forecast("Marikina", forecast_days=3)
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert result["days"] == []
+    assert "river_discharge" in result["caveats"][0]
+    assert len(CACHES["open_meteo_flood"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_short_river_discharge_beside_three_dates_is_indeterminate_not_cached(
+    monkeypatch,
+):
+    payload = {
+        **FLOOD_PAYLOAD,
+        "daily": {
+            "time": ["2026-09-05", "2026-09-06", "2026-09-07"],
+            "river_discharge": [250.5, 260.1],
+        },
+    }
+
+    async def _fake(client, method, url, **kwargs):
+        return _json_response(method, url, payload)
+
+    monkeypatch.setattr(flood_module, "fetch_with_retry", _fake)
+
+    result = await flood_module.get_flood_forecast("Marikina", forecast_days=3)
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert result["days"] == []
+    assert "river_discharge" in result["caveats"][0]
+    assert len(CACHES["open_meteo_flood"]) == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("bad_number", ["NaN", "inf", "-Infinity"])
 async def test_a_non_finite_discharge_reads_as_null_not_as_a_number(monkeypatch, bad_number):
     payload = {

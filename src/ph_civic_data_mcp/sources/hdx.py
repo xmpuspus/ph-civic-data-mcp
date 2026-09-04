@@ -135,9 +135,13 @@ async def search_hdx_datasets(query: str, rows: int = 10) -> dict:
     HDX API gives upstream_error true and data_status "unavailable". A
     response whose success field is not true, or whose result.results field
     is not a list, gives upstream_error true and data_status
-    "indeterminate". Zero datasets on a clean query gives data_status
-    "empty", never a failure, and still caches. Every dataset carries its
-    own license_id: read it before you reuse a resource.
+    "indeterminate". Datasets sent beside a missing or non-integer count
+    also give data_status "indeterminate", with the parsed datasets kept
+    and never cached: CKAN always sends a real count, so a bad one is
+    drift even when the datasets read fine. Zero datasets on a clean query
+    with a real integer count gives data_status "empty", never a failure,
+    and still caches. Every dataset carries its own license_id: read it
+    before you reuse a resource.
 
     Args:
         query: Free-text search term, 1 to 200 printable characters, for
@@ -300,6 +304,22 @@ async def _search_uncached(query: str, rows: int, ckey: str) -> dict:
             query=query,
             total_count=0,
             datasets=[],
+        )
+
+    # CKAN always sends an integer count. A non-empty results list beside a
+    # missing or wrong-typed count is drift in the metadata, not in the
+    # datasets: keep what parsed, but a degraded count must never cache.
+    if raw_results and not count_is_int:
+        return failure_result(
+            SOURCE_NAME,
+            HDX_URL,
+            f"HDX sent {len(datasets)} dataset(s) but count was {count_field!r}, not an integer.",
+            license=HDX_LICENSE,
+            data_status=DATA_STATUS_INDETERMINATE,
+            query=query,
+            total_count=len(datasets),
+            datasets=datasets,
+            note=LICENSE_NOTE,
         )
 
     total_count = result.get("count")

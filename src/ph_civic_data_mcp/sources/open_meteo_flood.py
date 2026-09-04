@@ -96,9 +96,10 @@ async def get_flood_forecast(location: str, forecast_days: int = 7, past_days: i
     data_status "invalid_request", with validation_error true and days [].
     A PSGC outage during location resolution, or an Open-Meteo fetch
     failure, returns data_status "unavailable", with upstream_error true
-    and days []. A response with no readable daily.time entries returns
-    data_status "indeterminate", with upstream_error true, days [], and is
-    never cached.
+    and days []. A response with no readable daily.time entries, or a
+    river_discharge list shorter than daily.time (including an empty
+    list), returns data_status "indeterminate", with upstream_error true,
+    days [], and is never cached.
 
     Args:
         location: City, municipality, or province name.
@@ -212,6 +213,22 @@ async def get_flood_forecast(location: str, forecast_days: int = 7, past_days: i
             OPEN_METEO_FLOOD_SOURCE,
             OPEN_METEO_FLOOD_URL,
             f"Open-Meteo Flood sent daily.time but no river_discharge list: {discharge!r}.",
+            data_status=DATA_STATUS_INDETERMINATE,
+            location=location,
+            latitude=lat,
+            longitude=lng,
+            days=[],
+        )
+    if len(discharge) < len(times):
+        # An empty or short river_discharge list still passes isinstance(list),
+        # so without a length check it caches a forecast of trailing nulls.
+        # river_discharge_max and river_discharge_min may stay short or
+        # absent: the API omits them when the caller does not ask for them.
+        return failure_result(
+            OPEN_METEO_FLOOD_SOURCE,
+            OPEN_METEO_FLOOD_URL,
+            f"Open-Meteo Flood sent {len(times)} date(s) but only "
+            f"{len(discharge)} river_discharge value(s).",
             data_status=DATA_STATUS_INDETERMINATE,
             location=location,
             latitude=lat,
