@@ -85,6 +85,15 @@ def _clear_cache():
     comelec_module._TREE_LOCKS.clear()
     comelec_module._RETURN_LOCKS.clear()
     yield
+    # Clear again after the test. CACHES is a process-wide singleton, so
+    # whichever test runs last in this file would otherwise leave a fixture
+    # value (2 regions, not 20) sitting in comelec_tree for the live test
+    # module that runs next in the same pytest session.
+    CACHES["comelec_tree"].clear()
+    CACHES["comelec_return"].clear()
+    CACHES["comelec_meta"].clear()
+    comelec_module._TREE_LOCKS.clear()
+    comelec_module._RETURN_LOCKS.clear()
 
 
 @pytest.mark.asyncio
@@ -520,3 +529,132 @@ async def test_twenty_concurrent_calls_reach_the_fake_once(monkeypatch):
 
     assert calls == 1
     assert all(r["data_status"] == "success" for r in results)
+
+
+# --- 2026-09-04 review, finding 1: the tree fetch needs the same ---
+# --- AccessDenied-body rule get_election_return already applies ---
+
+
+@pytest.mark.asyncio
+async def test_browse_403_with_access_denied_body_is_invalid_request(monkeypatch):
+    code = "2801000"
+    _route(
+        monkeypatch,
+        {
+            _latest_time_url(): (200, LATEST_TIME),
+            _local_url(code): (403, {"Error": {"Code": "AccessDenied"}}),
+            _precinct_url(code): (403, {"Error": {"Code": "AccessDenied"}}),
+        },
+    )
+
+    result = await comelec_module.browse_election_results(code=code)
+
+    assert result["data_status"] == "invalid_request"
+    assert result["validation_error"] is True
+    assert result["upstream_error"] is False
+
+
+@pytest.mark.asyncio
+async def test_browse_403_with_html_body_is_unavailable_not_invalid_request(monkeypatch):
+    code = "2801000"
+
+    async def _fake(client, method, url, **kwargs):
+        if url == _latest_time_url():
+            return httpx.Response(200, json=LATEST_TIME, request=httpx.Request(method, url))
+        return httpx.Response(
+            403,
+            content=b"<html><body>Request blocked</body></html>",
+            request=httpx.Request(method, url),
+        )
+
+    monkeypatch.setattr(comelec_module, "fetch_with_retry", _fake)
+
+    result = await comelec_module.browse_election_results(code=code)
+
+    assert result["data_status"] == "unavailable"
+    assert result["upstream_error"] is True
+    assert "403" in result["caveats"][0]
+
+
+# --- 2026-09-04 review, findings 2 and 3: a wrong-typed 'candidates' ---
+# --- at either level is drift, not an empty ballot ---
+
+
+@pytest.mark.asyncio
+async def test_outer_candidates_not_a_dict_is_indeterminate_not_cached(monkeypatch):
+    payload = {
+        "totalErReceived": 1.0,
+        "information": ER_FIXTURE["information"],
+        "national": [{"contestCode": "00399000", "candidates": 5}],
+        "local": [],
+    }
+    _route(
+        monkeypatch,
+        {
+            _latest_time_url(): (200, LATEST_TIME),
+            _er_url("28010001"): (200, payload),
+        },
+    )
+
+    result = await comelec_module.get_election_return("28010001")
+
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert "00399000" in result["caveats"][0]
+    assert not CACHES["comelec_return"], "an outer non-dict candidates field must never be cached"
+
+
+@pytest.mark.asyncio
+async def test_contest_with_no_candidates_key_still_parses(monkeypatch):
+    """A contest missing 'candidates' entirely stays a genuine empty ballot."""
+    payload = {
+        "totalErReceived": 1.0,
+        "information": ER_FIXTURE["information"],
+        "national": [{"contestCode": "00399000", "contestName": "SENATOR"}],
+        "local": [],
+    }
+    _route(
+        monkeypatch,
+        {
+            _latest_time_url(): (200, LATEST_TIME),
+            _er_url("28010001"): (200, payload),
+        },
+    )
+
+    result = await comelec_module.get_election_return("28010001")
+
+    assert result["data_status"] == "success"
+    assert result["national_contests"][0]["candidates"] == []
+
+
+# --- 2026-09-04 review, finding 4: an explicit empty code is a caller ---
+# --- mistake, not a stand-in for the root default ---
+
+
+@pytest.mark.asyncio
+async def test_empty_string_code_is_invalid_request_not_the_root_default(monkeypatch):
+    async def _must_not_fetch(client, method, url, **kwargs):
+        raise AssertionError("an empty code must never reach the network")
+
+    monkeypatch.setattr(comelec_module, "fetch_with_retry", _must_not_fetch)
+
+    result = await comelec_module.browse_election_results(code="")
+
+    assert result["data_status"] == "invalid_request"
+    assert result["validation_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_explicit_none_code_still_defaults_to_root(monkeypatch):
+    _route(
+        monkeypatch,
+        {
+            _latest_time_url(): (200, LATEST_TIME),
+            _local_url("0"): (200, REGIONS),
+        },
+    )
+
+    result = await comelec_module.browse_election_results(code=None)
+
+    assert result["data_status"] == "success"
+    assert result["code"] == "0"
