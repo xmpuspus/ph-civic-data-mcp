@@ -28,6 +28,7 @@ WHAT_IT_GIVES: dict[str, str] = {
     "USGS FDSN": "Philippine-region earthquakes, cross-checked against PHIVOLCS",
     "NOAA IBTrACS": "Historical tropical cyclone tracks through the Philippine AOR",
     "World Bank Open Data": "Philippine macroeconomic indicators",
+    "PSIC": "Industrial classification code lookup, by code prefix or description",
 }
 
 

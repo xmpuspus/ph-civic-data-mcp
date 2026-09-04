@@ -226,6 +226,30 @@ discovery walks the catalog by title, because PSA moved that subtree from
 Read the vintage from each response's reference field. The OpenSTAT `updated`
 timestamp is server wall clock, not data vintage.
 
+## PSA classification (PSIC)
+
+### search_psic_codes
+
+Finds a PSIC code by description keyword or by code prefix. New in 0.8.0.
+
+```python
+search_psic_codes(query: str, limit: int = 20) -> dict
+```
+
+Returns: `query`, `matches` (each with `code`, `level`, `description`),
+`match_count`, `total_codes`, `truncated`, `data_status`. `limit` is 1 to
+100. A query of only digits matches a code prefix. Any other query matches
+a whole word in the description, case-insensitive.
+
+On failure: an empty, over-long, or non-printable `query`, or a `limit`
+outside 1-100, returns `validation_error: true`. A Cloudflare challenge in
+place of the table returns `data_status: "unavailable"`. A missing or empty
+PSIC table returns `data_status: "indeterminate"`.
+
+PSA publishes the full 1362-row table on one page, with no key needed. The
+first call fetches and caches it for 24 hours, so a later query answers
+from memory.
+
 ## Locations (PSGC)
 
 ### resolve_ph_location

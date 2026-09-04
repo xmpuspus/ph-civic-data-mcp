@@ -119,6 +119,13 @@ SOURCE_CATALOG: list[dict] = [
         "cache_ttl_seconds": 86400,
         "license": "World Bank Open Data CC-BY 4.0",
     },
+    {
+        "source": "PSIC",
+        "source_url": "https://psa.gov.ph/classification/psic/search-results",
+        "freshness": "PSIC revisions change on the order of years",
+        "cache_ttl_seconds": 86400,
+        "license": "PSA Philippine Standard Industrial Classification (PSIC), CC BY 4.0",
+    },
 ]
 
 
@@ -332,6 +339,7 @@ def _register_tools() -> None:
     from ph_civic_data_mcp.sources import world_bank  # noqa: F401
     from ph_civic_data_mcp.sources import psa_catalog  # noqa: F401
     from ph_civic_data_mcp.sources import compare  # noqa: F401
+    from ph_civic_data_mcp.sources import psic  # noqa: F401
 
 
 def main() -> None:

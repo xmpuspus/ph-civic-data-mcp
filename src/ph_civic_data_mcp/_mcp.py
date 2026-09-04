@@ -55,6 +55,9 @@ mcp = FastMCP(
       browse_psa_catalog(path) walks it level by level when a keyword is not
       enough. Always describe before you query: every dimension needs explicit value codes, "all" and "*"
       are rejected, and one query is capped at 1000 cells.
+    - search_psic_codes(query, limit) looks up the Philippine Standard
+      Industrial Classification by code prefix (digits) or by a whole-word
+      match on the class description.
 
     Accountability:
     - flag_infra_anomalies — heuristic indicators

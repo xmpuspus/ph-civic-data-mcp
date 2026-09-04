@@ -267,6 +267,7 @@ actually reports.
 | USGS FDSN | Philippine-region earthquakes, cross-checked against PHIVOLCS | Real-time global feed | 10 min | Public domain (USGS) |
 | NOAA IBTrACS | Historical tropical cyclone tracks through the Philippine AOR | Annual update | 24 h | Public domain (NOAA) |
 | World Bank Open Data | Philippine macroeconomic indicators | Annual; lag varies by indicator | 24 h | World Bank Open Data CC-BY 4.0 |
+| PSIC | Industrial classification code lookup, by code prefix or description | PSIC revisions change on the order of years | 24 h | PSA Philippine Standard Industrial Classification (PSIC), CC BY 4.0 |
 <!-- source-matrix:end -->
 
 `PAGASA_API_TOKEN` is the only environment variable, and it is optional.
