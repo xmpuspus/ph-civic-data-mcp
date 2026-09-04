@@ -149,6 +149,7 @@ per 100,000 residents.
 - "What dimensions does this poverty table have?" `describe_psa_dataset`
 - "Pull poverty incidence by island group for 2023." `query_psa_dataset`
 - "What is the current inflation rate?" `get_inflation_stats`
+- "What PSIC code covers rice farming?" `search_psic_codes`
 
 `query_psa_dataset` needs an explicit value code for every dimension, refuses
 `"all"` and `"*"`, and caps a query at 1000 cells. PSA answers a full-cube
@@ -161,6 +162,22 @@ request with an HTTP 403, so `describe_psa_dataset` first is the only way in.
 - "How much solar radiation does Palawan get?" `get_solar_and_climate`
 - "What is today's air quality in Manila?" `get_air_quality`
 - "How has Mindanao's vegetation changed this year?" `get_vegetation_index`
+- "List the latest PAGASA weather advisories." `list_pagasa_advisory_files`
+
+### Read the 2025 election results
+
+- "Walk the election tree down to precincts in Adams, Ilocos Norte." `browse_election_results`
+- "Show me the vote tally for precinct 28010001." `get_election_return`
+
+The archive froze on 2025-05-16, so these two read a fixed public record.
+The tools retrieve and never interpret.
+
+### Track new laws and find open datasets
+
+- "What did the Official Gazette publish this week?" `get_official_gazette_feed`
+- "Find Philippine flood datasets on HDX." `search_hdx_datasets`
+
+Every HDX dataset carries its own license. Read `license_id` before reuse.
 
 Full signatures, arguments, and limits for all 41 tools:
 **[docs/tool-reference.md](docs/tool-reference.md)**.
