@@ -42,6 +42,14 @@ STORMSURGE_STALE_CAVEAT = (
     "Nothing in it is a live storm surge warning."
 )
 
+# nginx rounds a listed size to the nearest K, M, or G once a file passes
+# roughly 1000 bytes. The real Advisory#50.pdf is 288,709 bytes, and the
+# index shows it as "282K". size_bytes then reads 288,768: close, not exact.
+SIZE_APPROXIMATE_CAVEAT = (
+    "This index rounds file sizes to the nearest K, M, or G. size_bytes is "
+    "an approximate value here, not the exact file size."
+)
+
 _SIZE_MULTIPLIER = {"K": 1024, "M": 1024**2, "G": 1024**3}
 
 # The tail text after each <a> in an nginx autoindex row holds a
@@ -67,24 +75,29 @@ def _folder_url(kind: str) -> str:
     return f"{PAGASA_FILES_BASE}/{kind}/"
 
 
-def _parse_size(token: str) -> int | None:
+def _parse_size(token: str) -> tuple[int | None, bool]:
+    """Read one size token. The bool is True when nginx rounded it to a
+    K/M/G unit, so the caller knows size_bytes is then an estimate."""
     token = token.strip()
     if not token or token == "-":
-        return None
+        return None, False
     match = re.match(r"^([\d.]+)([KMG])?$", token)
     if not match:
-        return None
+        return None, False
     value = float(match.group(1))
-    multiplier = _SIZE_MULTIPLIER.get(match.group(2) or "", 1)
-    return int(value * multiplier)
+    suffix = match.group(2)
+    multiplier = _SIZE_MULTIPLIER.get(suffix or "", 1)
+    return int(value * multiplier), suffix is not None
 
 
-def _parse_autoindex(html: str, folder_url: str) -> list[dict] | None:
+def _parse_autoindex(html: str, folder_url: str) -> tuple[list[dict], bool] | None:
     """Parse an nginx autoindex page into file rows, newest first.
 
     Returns None when the body carries no "Index of" heading. That means an
     error page, a redirect target, or another unrelated 200 response, not a
-    real directory listing. A caller treats None the same as a 404.
+    real directory listing. A caller treats None the same as a 404. The
+    second value in the tuple is True when any row's size was rounded to a
+    K/M/G unit, so its size_bytes is an estimate, not an exact byte count.
     """
     soup = BeautifulSoup(html, "lxml")
     heading = soup.find("h1")
@@ -95,6 +108,7 @@ def _parse_autoindex(html: str, folder_url: str) -> list[dict] | None:
     anchors = pre.find_all("a", href=True) if pre else soup.find_all("a", href=True)
 
     files: list[dict] = []
+    size_is_approximate = False
     for anchor in anchors:
         href = anchor["href"]
         if href in ("../", "./") or href.endswith("/"):
@@ -112,21 +126,23 @@ def _parse_autoindex(html: str, folder_url: str) -> list[dict] | None:
         except (ValueError, OverflowError):
             continue
         last_modified = local_dt.replace(tzinfo=MANILA_TZ).isoformat()
+        size_bytes, size_rounded = _parse_size(size_text)
+        size_is_approximate = size_is_approximate or size_rounded
 
         files.append(
             {
                 "name": anchor.get_text(strip=True),
                 "url": urljoin(folder_url, href),
                 "last_modified": last_modified,
-                "size_bytes": _parse_size(size_text),
+                "size_bytes": size_bytes,
             }
         )
 
     files.sort(key=lambda entry: entry["last_modified"], reverse=True)
-    return files
+    return files, size_is_approximate
 
 
-async def _fetch_files(kind: str) -> list[dict]:
+async def _fetch_files(kind: str) -> tuple[list[dict], bool]:
     """Fetch and parse one folder's file list, cached 900s on success only.
 
     Raises PagasaFilesIndeterminateError for a 404 or an unparsable body.
@@ -144,18 +160,19 @@ async def _fetch_files(kind: str) -> list[dict]:
         raise PagasaFilesIndeterminateError(f"{folder_url} returned 404")
     response.raise_for_status()
 
-    files = _parse_autoindex(response.text, folder_url)
-    if files is None:
+    parsed = _parse_autoindex(response.text, folder_url)
+    if parsed is None:
         raise PagasaFilesIndeterminateError(
             f"{folder_url} body carries no 'Index of' heading, not a directory listing"
         )
+    files, size_is_approximate = parsed
     if not files:
         raise PagasaFilesIndeterminateError(
             f"{folder_url} parsed zero files. This folder always has some."
         )
 
-    cache[key] = files
-    return files
+    cache[key] = (files, size_is_approximate)
+    return files, size_is_approximate
 
 
 @mcp.tool(
@@ -196,7 +213,9 @@ async def list_pagasa_advisory_files(kind: str = "weather_advisory", limit: int 
     size_bytes), file_count (before the limit cut), latest_name, latest_url,
     latest_modified, data_status, caveats, source, source_url,
     data_retrieved_at. The stormsurge kind always adds a warning to caveats
-    that the folder has not published since 2019-12-02.
+    that the folder has not published since 2019-12-02. When the index
+    rounds a size to K, M, or G, caveats also warns that size_bytes is then
+    an estimate, not an exact byte count.
     """
     folder_url = _folder_url(kind)
     if kind not in KIND_FOLDERS:
@@ -223,7 +242,7 @@ async def list_pagasa_advisory_files(kind: str = "weather_advisory", limit: int 
         )
 
     try:
-        files = await _fetch_files(kind)
+        files, size_is_approximate = await _fetch_files(kind)
     except PagasaFilesIndeterminateError as exc:
         return failure_result(
             "PAGASA public files",
@@ -253,6 +272,8 @@ async def list_pagasa_advisory_files(kind: str = "weather_advisory", limit: int 
     caveats: list[str] = []
     if kind == "stormsurge":
         caveats.append(STORMSURGE_STALE_CAVEAT)
+    if size_is_approximate:
+        caveats.append(SIZE_APPROXIMATE_CAVEAT)
 
     return {
         "kind": kind,

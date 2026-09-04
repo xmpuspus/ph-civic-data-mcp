@@ -39,7 +39,9 @@ async def test_bulletin_folder_lists_files_with_no_forced_tcb_prefix():
     skip_if_outage(result, "PAGASA bulletin files")
 
     assert result["data_status"] == "success"
-    assert result["file_count"] > 0
+    # 130 entries on 2026-09-04. A regex that stops matching most rows
+    # would still pass a bare `> 0` check, so this floor catches that drift.
+    assert result["file_count"] >= 50, result["file_count"]
     assert all(f["name"].endswith(".pdf") for f in result["files"])
 
 

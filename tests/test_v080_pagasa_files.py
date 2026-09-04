@@ -44,6 +44,17 @@ ZERO_ROWS_HTML = """<html>
 </html>
 """
 
+# A server with `autoindex_exact_size on` prints raw byte counts instead of
+# rounding to K/M/G, so size_bytes must then read as exact, no warning added.
+EXACT_SIZE_HTML = """<html>
+<head><title>Index of /tamss/weather/weather_advisory/</title></head>
+<body bgcolor="white">
+<h1>Index of /tamss/weather/weather_advisory/</h1><hr><pre><a href="../">../</a>
+<a href="Advisory%2350.pdf">Advisory#50.pdf</a>                                    03-Sep-2026 20:41    288709
+</pre><hr></body>
+</html>
+"""
+
 
 def _response(
     status: int, text: str, url: str = pagasa_files_module._folder_url("weather_advisory")
@@ -74,7 +85,7 @@ async def test_success_path_sorts_newest_file_first(monkeypatch):
     assert result["files"][0]["url"].endswith("Advisory%2350.pdf")
     assert result["files"][0]["size_bytes"] == 282 * 1024
     assert result["latest_name"] == "Advisory#50.pdf"
-    assert result["caveats"] == []
+    assert any("approximate" in c for c in result["caveats"]), result["caveats"]
 
 
 @pytest.mark.asyncio
@@ -104,6 +115,23 @@ async def test_stormsurge_always_carries_the_stale_warning(monkeypatch):
     assert result["data_status"] == "success"
     assert result["upstream_error"] is False
     assert any("2019-12-02" in c for c in result["caveats"]), result["caveats"]
+
+
+@pytest.mark.asyncio
+async def test_exact_byte_sizes_do_not_trigger_the_approximate_warning(monkeypatch):
+    """A server that prints raw byte counts, not K/M/G, gives an exact
+    size_bytes, so no rounding warning belongs in caveats."""
+
+    async def _fake(client, method, url, **kwargs):
+        return _response(200, EXACT_SIZE_HTML)
+
+    monkeypatch.setattr(pagasa_files_module, "fetch_with_retry", _fake)
+
+    result = await pagasa_files_module.list_pagasa_advisory_files()
+
+    assert result["data_status"] == "success"
+    assert result["files"][0]["size_bytes"] == 288709
+    assert not any("approximate" in c for c in result["caveats"]), result["caveats"]
 
 
 @pytest.mark.asyncio
