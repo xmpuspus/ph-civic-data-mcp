@@ -348,6 +348,26 @@ async def test_untrusted_hrefs_are_dropped_and_counted_in_one_caveat(monkeypatch
     ), result["caveats"]
 
 
+@pytest.mark.parametrize(
+    "href, trusted",
+    [
+        ("TCB%231_good.pdf", True),  # a real name: "#" arrives percent-encoded
+        ("%2e%2e/evil.pdf", False),  # ".." hidden behind percent encoding
+        ("..%2Fevil.pdf", False),
+        ("sub%2F..%2F..%2Fevil.pdf", False),
+        ("Advisory%2350.PDF", True),
+        ("payload.exe", False),
+    ],
+)
+def test_the_trusted_pdf_check_decodes_before_it_tests_for_traversal(href, trusted):
+    # Receipt pass on v0.8.0: "%2e%2e" passed a plain ".." test, so a
+    # crafted index row could point outside the PAGASA folder.
+    from urllib.parse import urljoin
+
+    folder = pagasa_files_module._folder_url("bulletin")
+    assert pagasa_files_module._is_trusted_pdf_url(urljoin(folder, href), folder) is trusted
+
+
 # --- Finding 4: the stale warning is derived from the newest file's real
 # age, for every kind, not hardcoded to stormsurge. -----------------------
 

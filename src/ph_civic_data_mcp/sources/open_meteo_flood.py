@@ -200,16 +200,25 @@ async def _forecast_uncached(location: str, forecast_days: int, past_days: int, 
         response = await fetch_with_retry(CLIENT, "GET", OPEN_METEO_FLOOD_URL, params=params)
         response.raise_for_status()
         payload = response.json()
-        if not isinstance(payload, dict):
-            raise ValueError(
-                f"Open-Meteo Flood returned a non-object body: {type(payload).__name__}"
-            )
     except Exception as exc:
         log_stderr(f"Open-Meteo Flood error: {exc}")
         return failure_result(
             OPEN_METEO_FLOOD_SOURCE,
             OPEN_METEO_FLOOD_URL,
             f"Open-Meteo Flood fetch failed: {type(exc).__name__}: {exc}",
+            location=location,
+            latitude=lat,
+            longitude=lng,
+            days=[],
+        )
+
+    if not isinstance(payload, dict):
+        # A 200 that is not an object is drift in the API, not an outage.
+        return failure_result(
+            OPEN_METEO_FLOOD_SOURCE,
+            OPEN_METEO_FLOOD_URL,
+            f"Open-Meteo Flood returned a non-object body: {type(payload).__name__}.",
+            data_status=DATA_STATUS_INDETERMINATE,
             location=location,
             latitude=lat,
             longitude=lng,

@@ -292,6 +292,20 @@ cause is a CPU feature the old Docker Desktop VM does not expose. Next
 step: retest after a Docker Desktop upgrade, then decide whether the
 Dockerfile needs a platform note.
 
+## 31. `get_flood_forecast` accepts any non-empty string as a date
+
+Codex receipt pass on the v0.8.0 head, 2026-09-04. A `daily.time` entry
+that is a non-empty string but not an ISO date passes into `days[].date`
+and caches. Parse each entry as a date and treat an unparseable one the way
+`_open_meteo_forecast` should per item 24.
+
+## 32. `search_hdx_datasets` does not check `count` against the datasets
+
+Codex receipt pass on the v0.8.0 head. The tool checks that `count` is an
+integer but not that it is at least the number of datasets returned. A
+`count` of 1 beside 5 datasets reads as consistent. Reject a count below
+`len(datasets)` as `indeterminate`.
+
 ## Suggested order
 
 1, then 10, then 2, then 6 and 7 together, then 3 and 5, then 4, 8, 9 and 11.

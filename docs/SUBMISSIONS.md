@@ -69,7 +69,7 @@ State after the v0.7.0 release on 2026-09-04.
 | [PyPI](https://pypi.org/project/ph-civic-data-mcp/0.7.0/) | active, checked live | `twine upload` | Nothing |
 | [GitHub Release](https://github.com/xmpuspus/ph-civic-data-mcp/releases/tag/v0.7.0) | active, checked live, release-smoke green | `gh release create` on the merge SHA | Nothing |
 | Repository description and topics | active, description says 34 tools | `gh repo edit` | Nothing |
-| [MCP Registry](https://registry.modelcontextprotocol.io) | 0.6.1 still latest. The publish returned 401 on an expired JWT, and the device login waits on a human | `mcp-publisher publish server.json` | Complete `mcp-publisher login github`, then publish and read back the versions list |
+| [MCP Registry](https://registry.modelcontextprotocol.io) | 0.7.0 active and isLatest, read back from the versions endpoint on 2026-09-04 after a fresh device login | `mcp-publisher publish server.json` | Nothing. The JWT expires between releases, so run `mcp-publisher login github` on a 401 |
 | [Glama](https://glama.ai/mcp/servers/xmpuspus/ph-civic-data-mcp) | showed 0.6.0 and 32 tools on 2026-09-04, two releases behind | Auto-crawls GitHub and PyPI | Check the page again in a week. Claiming the server is a separate one-time step |
 | [PulseMCP](https://www.pulsemcp.com/servers/xmpuspus-ph-civic-data) | auto-indexed. The page showed no version string on 2026-09-04 | Tracks the registry record | Nothing to do by hand |
 | [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers/pull/6824) | submitted, still open, last activity 2026-08-07, checked live 2026-09-04 | Pull request | Their merge |

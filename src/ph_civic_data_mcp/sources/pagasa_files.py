@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin
 
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
@@ -111,9 +111,13 @@ def _is_trusted_pdf_url(url: str, folder_url: str) -> bool:
     segment, and ends in ".pdf". See CLAUDE.md: allowlist an agent-facing
     URL before any use.
     """
-    if ".." in url or not url.startswith(folder_url):
-        return False
-    return url.lower().endswith(".pdf")
+    # Real names arrive percent-encoded ("TCB%231_x.pdf" for "TCB#1_x.pdf"),
+    # so decode before the traversal test: "%2e%2e" is ".." to the server.
+    decoded = unquote(url)
+    for form in (url, decoded):
+        if ".." in form or "\\" in form or not form.startswith(folder_url):
+            return False
+    return decoded.lower().endswith(".pdf")
 
 
 def _parse_autoindex(html: str, folder_url: str) -> tuple[list[dict], bool, int] | None:

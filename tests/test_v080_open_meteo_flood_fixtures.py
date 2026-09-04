@@ -116,7 +116,9 @@ async def test_a_schema_drift_body_is_reported_not_a_crash(monkeypatch):
     monkeypatch.setattr(flood_module, "fetch_with_retry", _drifted)
 
     result = await flood_module.get_flood_forecast("Davao")
-    assert result["data_status"] == "unavailable"
+    # A 200 that is not an object is drift, so it reads as indeterminate,
+    # never as an outage the live drift test would skip.
+    assert result["data_status"] == "indeterminate"
     assert result["upstream_error"] is True
     assert result["days"] == []
     assert len(CACHES["open_meteo_flood"]) == 0
