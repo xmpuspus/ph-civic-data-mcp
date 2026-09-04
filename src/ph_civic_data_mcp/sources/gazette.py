@@ -9,6 +9,7 @@ those two URL shapes and nothing else, ever.
 from __future__ import annotations
 
 import re
+import asyncio
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from xml.etree import ElementTree as ET
@@ -45,6 +46,24 @@ class GazetteBlockedError(RuntimeError):
         self.status_code = status_code
         self.content_type = content_type
         super().__init__(f"Cloudflare block (status {status_code}, content-type {content_type!r})")
+
+
+# Single-flight per page, the hdx._search_lock shape: twenty cold calls for
+# page 1 must not become twenty GETs against a Cloudflare-fronted host.
+_MAX_PAGE_LOCKS = 64
+_PAGE_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _page_lock(key: str) -> asyncio.Lock:
+    lock = _PAGE_LOCKS.get(key)
+    if lock is not None:
+        return lock
+    if len(_PAGE_LOCKS) >= _MAX_PAGE_LOCKS:
+        for stale in [k for k, held in _PAGE_LOCKS.items() if not held.locked()]:
+            del _PAGE_LOCKS[stale]
+        if len(_PAGE_LOCKS) >= _MAX_PAGE_LOCKS:
+            return asyncio.Lock()
+    return _PAGE_LOCKS.setdefault(key, asyncio.Lock())
 
 
 def _now() -> datetime:
@@ -196,7 +215,14 @@ async def get_official_gazette_feed(page: int = 1) -> dict:
     cache = CACHES["gazette_feed"]
     if ckey in cache:
         return cache[ckey]
+    async with _page_lock(ckey):
+        if ckey in cache:
+            return cache[ckey]
+        return await _feed_uncached(page, ckey)
 
+
+async def _feed_uncached(page: int, ckey: str) -> dict:
+    cache = CACHES["gazette_feed"]
     url = _feed_url(page)
 
     try:
@@ -210,6 +236,22 @@ async def get_official_gazette_feed(page: int = 1) -> dict:
             f"content-type {exc.content_type!r}). This is an upstream block, "
             "not a feed with zero issuances.",
             license=GAZETTE_LICENSE,
+            page=page,
+            items=[],
+            item_count=0,
+            feed_title=None,
+            feed_link=None,
+        )
+    except (ET.ParseError, ValueError) as exc:
+        # A 200 that is not RSS is drift in the feed, not an outage. Labelling
+        # it unavailable would let the live drift test skip a schema break.
+        log_stderr(f"Official Gazette parse error: {exc}")
+        return failure_result(
+            GAZETTE_SOURCE,
+            url,
+            f"Official Gazette body did not parse as RSS ({type(exc).__name__}: {exc}).",
+            license=GAZETTE_LICENSE,
+            data_status=DATA_STATUS_INDETERMINATE,
             page=page,
             items=[],
             item_count=0,

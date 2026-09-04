@@ -9,6 +9,8 @@ send only a GET to `/feed/` or `/feed/?paged=<page>`.
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -155,6 +157,44 @@ def _install_fake_fetch(
 
     monkeypatch.setattr(gazette_module, "fetch_with_retry", _fake_raise if exc else _fake)
     return seen_methods
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", ["<rss><channel>", '<rss version="2.0"></rss>', "not xml at all"])
+async def test_a_200_that_is_not_rss_is_indeterminate_not_an_outage(monkeypatch, body):
+    # Codex pass on v0.8.0: a malformed 200 read as unavailable, so the live
+    # drift test skipped a schema break as if the host were down.
+    _install_fake_fetch(monkeypatch, body=body)
+
+    result = await gazette_module.get_official_gazette_feed()
+
+    assert result["data_status"] == "indeterminate", result
+    assert result["upstream_error"] is True
+    assert result["items"] == []
+    assert len(CACHES["gazette_feed"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_twenty_concurrent_cold_calls_fetch_page_one_once(monkeypatch):
+    calls = {"n": 0}
+
+    async def _fake(client, method, url, **kwargs):
+        calls["n"] += 1
+        await asyncio.sleep(0.02)
+        return httpx.Response(
+            200,
+            content=FEED_XML.encode("utf-8"),
+            headers={"content-type": "application/rss+xml"},
+            request=httpx.Request(method, url),
+        )
+
+    monkeypatch.setattr(gazette_module, "fetch_with_retry", _fake)
+
+    results = await asyncio.gather(*(gazette_module.get_official_gazette_feed() for _ in range(20)))
+
+    assert calls["n"] == 1
+    assert all(r["data_status"] == "success" for r in results)
+    assert len(CACHES["gazette_feed"]) == 1
 
 
 @pytest.fixture(autouse=True)
