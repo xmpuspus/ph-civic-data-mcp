@@ -31,6 +31,7 @@ WHAT_IT_GIVES: dict[str, str] = {
     "World Bank Open Data": "Philippine macroeconomic indicators",
     "HDX": "Humanitarian dataset search, with a per-dataset license",
     "Official Gazette RSS": "Proclamations, memorandum circulars, and other government issuances",
+    "PAGASA public files": "Raw advisory, bulletin, and storm surge PDF file listing",
 }
 
 

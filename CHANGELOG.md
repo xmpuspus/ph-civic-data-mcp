@@ -17,6 +17,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`get_official_gazette_feed(page)`** reads the Official Gazette's own RSS
   feed of proclamations, memorandum circulars, and other issuances, ten
   items per page. This is the government's primary record of new laws.
+- **`list_pagasa_advisory_files(kind, limit)`** lists PAGASA public advisory,
+  bulletin, and storm surge PDF files from the live pubfiles directory
+  listing, newest first. The stormsurge kind always carries a warning that
+  the folder has not published since 2019-12-02.
 
 ## [0.7.0] - 2026-09-04
 

@@ -443,6 +443,29 @@ reachable but its state is unclear, and `[]` with an explicit
 
 On failure: an unreachable page returns `upstream_error: true`.
 
+### list_pagasa_advisory_files
+
+Lists PAGASA public advisory, bulletin, or storm surge PDF files, newest first.
+
+```python
+list_pagasa_advisory_files(kind: str = "weather_advisory", limit: int = 20) -> dict
+```
+
+Reads the nginx directory listing at
+`pubfiles.pagasa.dost.gov.ph/tamss/weather/<kind>/` and returns each PDF's
+name, URL, last-modified time, and size. `kind` is `weather_advisory`,
+`bulletin`, or `stormsurge`. Returns file URLs only, never PDF bytes.
+
+Returns: `kind`, `folder_url`, `files` (name, url, last_modified,
+size_bytes), `file_count` (before the `limit` cut), `latest_name`,
+`latest_url`, `latest_modified`. The `stormsurge` kind always adds a warning
+to `caveats` that the folder has not published since 2019-12-02.
+
+On failure: an unknown `kind`, or a `limit` outside 1 to 100, returns
+`validation_error: true`. A 404 or a page with zero files returns
+`data_status: "indeterminate"`. An unreachable host returns
+`data_status: "unavailable"`.
+
 ## Procurement and infrastructure
 
 ### search_procurement

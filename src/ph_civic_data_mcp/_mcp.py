@@ -40,7 +40,9 @@ mcp = FastMCP(
     - PSGC: place-name resolution, admin-unit browsing (list_admin_units
       supports offset pagination), full hierarchies
     - PHIVOLCS: real-time earthquakes (5-min updates), bulletins, volcano alerts
-    - PAGASA: 10-day weather forecast, active typhoons, weather alerts
+    - PAGASA: 10-day weather forecast, active typhoons, weather alerts,
+      list_pagasa_advisory_files for the raw advisory/bulletin/stormsurge
+      PDF listing
     - PhilGEPS: procurement notices. search_procurement covers ALL notices;
       search_infra_projects is the infra-only subset (construction, roads,
       flood control) with get_infra_project / summarize_infra_spending on top

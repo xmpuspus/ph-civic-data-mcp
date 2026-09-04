@@ -271,6 +271,7 @@ actually reports.
 | World Bank Open Data | Philippine macroeconomic indicators | Annual; lag varies by indicator | 24 h | World Bank Open Data CC-BY 4.0 |
 | HDX | Humanitarian dataset search, with a per-dataset license | Per-dataset metadata_modified; the catalog is searched fresh each query | 6 h | HDX (Humanitarian Data Exchange) CKAN API, per-dataset license |
 | Official Gazette RSS | Proclamations, memorandum circulars, and other government issuances | New issuances posted the same day; feed rebuilds on every request | 20 min | Public, Official Gazette government record, RA 8293 section 176 default |
+| PAGASA public files | Raw advisory, bulletin, and storm surge PDF file listing | weather_advisory updates about every 6 hours; bulletin only while a cyclone is active; stormsurge has not published since 2019-12-02 | 15 min | PAGASA public files (pubfiles.pagasa.dost.gov.ph), government record |
 <!-- source-matrix:end -->
 
 `PAGASA_API_TOKEN` is the only environment variable, and it is optional.
