@@ -605,6 +605,33 @@ async def test_outer_candidates_not_a_dict_is_indeterminate_not_cached(monkeypat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bad_rows", [["oops"], [5, None], [["nested", "list"]]])
+async def test_a_non_object_contest_row_is_indeterminate_not_an_empty_ballot(monkeypatch, bad_rows):
+    # Last receipt pass on v0.8.0: non-dict contest rows were skipped, so a
+    # ballot made only of them cached as a success with zero contests.
+    payload = {
+        "totalErReceived": 1.0,
+        "information": ER_FIXTURE["information"],
+        "national": bad_rows,
+        "local": [],
+    }
+    _route(
+        monkeypatch,
+        {
+            _latest_time_url(): (200, LATEST_TIME),
+            _er_url("28010001"): (200, payload),
+        },
+    )
+
+    result = await comelec_module.get_election_return("28010001")
+
+    assert result["data_status"] == "indeterminate"
+    assert result["upstream_error"] is True
+    assert "not objects" in result["caveats"][0]
+    assert not CACHES["comelec_return"], "a malformed contest row must never cache"
+
+
+@pytest.mark.asyncio
 async def test_contest_with_no_candidates_key_still_parses(monkeypatch):
     """A contest missing 'candidates' entirely stays a genuine empty ballot."""
     payload = {

@@ -208,6 +208,30 @@ async def test_a_short_river_discharge_beside_three_dates_is_indeterminate_not_c
 
 
 @pytest.mark.asyncio
+async def test_twenty_concurrent_cold_calls_fetch_once(monkeypatch):
+    # Last receipt pass on v0.8.0: every sibling source single-flights its
+    # cold cache miss, and flood did not, so twenty callers sent twenty GETs.
+    import asyncio
+
+    calls = {"n": 0}
+
+    async def _fake(client, method, url, **kwargs):
+        calls["n"] += 1
+        await asyncio.sleep(0.02)
+        return _json_response(method, url, FLOOD_PAYLOAD)
+
+    monkeypatch.setattr(flood_module, "fetch_with_retry", _fake)
+
+    results = await asyncio.gather(
+        *(flood_module.get_flood_forecast("Marikina") for _ in range(20))
+    )
+
+    assert calls["n"] == 1
+    assert all(r["data_status"] == "success" for r in results)
+    assert len(CACHES["open_meteo_flood"]) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("bad_number", ["NaN", "inf", "-Infinity"])
 async def test_a_non_finite_discharge_reads_as_null_not_as_a_number(monkeypatch, bad_number):
     payload = {

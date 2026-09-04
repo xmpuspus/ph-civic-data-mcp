@@ -8,6 +8,7 @@ https://open-meteo.com/en/docs/flood-api
 
 from __future__ import annotations
 
+import asyncio
 import math
 from datetime import datetime, timezone
 
@@ -36,6 +37,24 @@ RIVER_DISCHARGE_NOTE = (
     "River discharge is a GloFAS model value for the nearest river cell, "
     "not a gauge reading. Treat it as one signal among many for flood risk."
 )
+
+
+# Single-flight per cache key, the hdx._search_lock shape: twenty cold calls
+# for one place must not become twenty GETs against Open-Meteo.
+_MAX_FORECAST_LOCKS = 256
+_FORECAST_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _forecast_lock(key: str) -> asyncio.Lock:
+    lock = _FORECAST_LOCKS.get(key)
+    if lock is not None:
+        return lock
+    if len(_FORECAST_LOCKS) >= _MAX_FORECAST_LOCKS:
+        for stale in [k for k, held in _FORECAST_LOCKS.items() if not held.locked()]:
+            del _FORECAST_LOCKS[stale]
+        if len(_FORECAST_LOCKS) >= _MAX_FORECAST_LOCKS:
+            return asyncio.Lock()
+    return _FORECAST_LOCKS.setdefault(key, asyncio.Lock())
 
 
 def _now() -> datetime:
@@ -138,7 +157,14 @@ async def get_flood_forecast(location: str, forecast_days: int = 7, past_days: i
     cache = CACHES["open_meteo_flood"]
     if ckey in cache:
         return cache[ckey]
+    async with _forecast_lock(ckey):
+        if ckey in cache:
+            return cache[ckey]
+        return await _forecast_uncached(location, forecast_days, past_days, ckey)
 
+
+async def _forecast_uncached(location: str, forecast_days: int, past_days: int, ckey: str) -> dict:
+    cache = CACHES["open_meteo_flood"]
     try:
         coords = await resolve_to_coords(location)
     except GeoResolveError as exc:

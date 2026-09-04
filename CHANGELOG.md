@@ -77,9 +77,12 @@ merge, and each carries a regression test.
   empty browse code is `invalid_request`, a `river_discharge` list shorter
   than the date list is `indeterminate`, an RSS item with no title and no
   link is skipped and counted, a wrong-typed HDX `count` beside results is
-  disclosed and not cached, and the README names FastMCP 4.0.2. A last
-  pass on the merged head added one: a wrong-typed `limit` in
-  `list_pagasa_advisory_files` is `invalid_request`, not a TypeError.
+  disclosed and not cached, and the README names FastMCP 4.0.2. Two last
+  passes on the merged head added three: a wrong-typed `limit` in
+  `list_pagasa_advisory_files` is `invalid_request`, not a TypeError, the
+  flood tool single-flights a cold cache miss like every sibling, and a
+  COMELEC contest row that is not an object is `indeterminate`, never a
+  cached empty ballot.
 
 ## [0.7.0] - 2026-09-04
 

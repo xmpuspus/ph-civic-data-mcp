@@ -581,9 +581,20 @@ async def _get_election_return_uncached(code: str, ckey: str) -> dict:
         )
     local_list = local_raw or []
 
+    # A contest row is always an object in the archive. A scalar or a list in
+    # its place is drift, and skipping it would cache an empty ballot as a
+    # real result, so the whole return is indeterminate instead.
+    bad_rows = [c for c in [*national_raw, *local_list] if not isinstance(c, dict)]
+    if bad_rows:
+        return _fail(
+            f"COMELEC election return for precinct {code!r} has {len(bad_rows)} contest "
+            f"row(s) that are not objects, for example {bad_rows[0]!r}.",
+            data_status=DATA_STATUS_INDETERMINATE,
+        )
+
     try:
-        national_contests = [_parse_contest(c) for c in national_raw if isinstance(c, dict)]
-        local_contests = [_parse_contest(c) for c in local_list if isinstance(c, dict)]
+        national_contests = [_parse_contest(c) for c in national_raw]
+        local_contests = [_parse_contest(c) for c in local_list]
     except _ContestParseError as exc:
         return _fail(
             f"COMELEC election return for precinct {code!r} has a non-list "
