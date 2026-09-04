@@ -64,6 +64,8 @@ merge, and each carries a regression test.
   outage. Only PDF links under the PAGASA folder come back, and skipped rows
   are counted in `caveats`. The stale-folder warning comes from the newest
   file's age, not a hard-coded date. The fetch is single-flight per kind.
+- PSIC: a table with fewer than 1000 rows or a missing section letter is
+  `indeterminate`, never a cached "no match".
 
 ## [0.7.0] - 2026-09-04
 
